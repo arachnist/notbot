@@ -1,0 +1,55 @@
+["github.com/davecgh/go-spew"]
+  sumVersion = "v1.1.0"
+  ["github.com/davecgh/go-spew".fetch]
+    type = "git"
+    url = "https://github.com/davecgh/go-spew"
+    rev = "346938d642f2ec3594ed81d874461961cd0faa76"
+    sha256 = "0d4jfmak5p6lb7n2r6yvf5p1zcw0l8j74kn55ghvr7zr7b7axm6c"
+
+["github.com/pmezard/go-difflib"]
+  sumVersion = "v1.0.0"
+  ["github.com/pmezard/go-difflib".fetch]
+    type = "git"
+    url = "https://github.com/pmezard/go-difflib"
+    rev = "792786c7400a136282c1664665ae0a8db921c6c2"
+    sha256 = "0c1cn55m4rypmscgf0rrb88pn58j3ysvc2d0432dp3c6fqg6cnzw"
+
+["github.com/stretchr/objx"]
+  sumVersion = "v0.1.0"
+  ["github.com/stretchr/objx".fetch]
+    type = "git"
+    url = "https://github.com/stretchr/objx"
+    rev = "facf9a85c22f48d2f52f2380e4efce1768749a89"
+    sha256 = "19ynspzjdynbi85xw06mh8ad5j0qa1vryvxjgvbnyrr8rbm4vd8w"
+
+["github.com/stretchr/testify"]
+  sumVersion = "v1.4.0"
+  ["github.com/stretchr/testify".fetch]
+    type = "git"
+    url = "https://github.com/stretchr/testify"
+    rev = "221dbe5ed46703ee255b1da0dec05086f5035f62"
+    sha256 = "187i5g88sxfy4vxpm7dw1gwv29pa2qaq475lxrdh5livh69wqfjb"
+
+["gopkg.in/check.v1"]
+  sumVersion = "v0.0.0-20161208181325-20d25e280405"
+  ["gopkg.in/check.v1".fetch]
+    type = "git"
+    url = "https://gopkg.in/check.v1"
+    rev = "20d25e2804050c1cd24a7eea1e7a6447dd0e74ec"
+    sha256 = "0k1m83ji9l1a7ng8a7v40psbymxasmssbrrhpdv2wl4rhs0nc3np"
+
+["gopkg.in/irc.v3"]
+  sumVersion = "v3.1.4"
+  ["gopkg.in/irc.v3".fetch]
+    type = "git"
+    url = "https://gopkg.in/irc.v3"
+    rev = "81824d727e960fc22fa1c8a5aea4acaf6e957e19"
+    sha256 = "1aibx9p6i004j0bby8257hbz5xh6ikywcgf5knaf4acnb8y9y155"
+
+["gopkg.in/yaml.v2"]
+  sumVersion = "v2.2.8"
+  ["gopkg.in/yaml.v2".fetch]
+    type = "git"
+    url = "https://gopkg.in/yaml.v2"
+    rev = "53403b58ad1b561927d19068c655246f2db79d48"
+    sha256 = "1inf7svydzscwv9fcjd2rm61a4xjk6jkswknybmns2n58shimapw"
