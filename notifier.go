@@ -95,7 +95,7 @@ func (a *atMonitor) Run(c *irc.Client, done chan bool) {
 			}
 
 			if len(diffText) > 0 {
-				msg := fmt.Sprintf("NOTICE #hswaw-bottest :%s\n", diffText)
+				msg := fmt.Sprintf("NOTICE #hswaw-members :%s\n", diffText)
 				log.Println(diffText)
 				c.Write(msg)
 				a.previousUserList = current
@@ -107,7 +107,7 @@ func (a *atMonitor) Run(c *irc.Client, done chan bool) {
 func genericHandler(c *irc.Client, m *irc.Message) {
 	log.Println(m)
 	if m.Command == "001" {
-		c.Write("JOIN #hswaw-bottest")
+		c.Write("JOIN #hswaw-members")
 	}
 }
 
