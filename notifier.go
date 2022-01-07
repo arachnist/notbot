@@ -81,7 +81,7 @@ func (a *atMonitor) Run(c *irc.Client, done chan bool) {
 				break
 			}
 
-			current := atHS.UserList()
+			current := atHS.UserListZWS()
 
 			arrived := listSubstract(current, a.previousUserList)
 			left := listSubstract(a.previousUserList, current)
