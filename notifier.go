@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"time"
 
 	"gopkg.in/irc.v3"
@@ -33,6 +34,16 @@ type atResponse struct {
 func (a *atResponse) UserList() (ret []string) {
 	for _, user := range a.Users {
 		ret = append(ret, user.Login)
+	}
+
+	return ret
+}
+
+func (a *atResponse) UserListZWS() (ret []string) {
+	x, _ := strconv.Unquote("`\u200B`")
+	for _, user := range a.Users {
+		login := user.Login[:1] + x + user.Login[1:]
+		ret = append(ret, login)
 	}
 
 	return ret
@@ -85,7 +96,7 @@ func (a *atMonitor) Run(c *irc.Client, done chan bool) {
 
 			if len(diffText) > 0 {
 				msg := fmt.Sprintf("NOTICE #hswaw-bottest :%s\n", diffText)
-				log.println(diffText)
+				log.Println(diffText)
 				c.Write(msg)
 				a.previousUserList = current
 			}
