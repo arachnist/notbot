@@ -1,63 +1,60 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"net"
 
 	"gopkg.in/irc.v3"
 )
 
-type dispatchFunc func(*irc.Client, *irc.Message)
+var (
+	channels arrayFlags
+	server   string
+	nickname string
+	password string
+	user     string
+	name     string
+)
 
-func handlerFactory(dispatchers []dispatchFunc) func(*irc.Client, *irc.Message) {
-	return func(c *irc.Client, m *irc.Message) {
-		for _, f := range dispatchers {
-			go f(c, m.Copy())
-		}
-	}
-}
-
-func logger(_ *irc.Client, m *irc.Message) {
-	log.Println(m)
-}
-
-func joinerFactory(channels []string) func(*irc.Client, *irc.Message) {
-	return func(c *irc.Client, m *irc.Message) {
-		if m.Command == "001" {
-			for _, ch := range channels {
-				c.Write("JOIN " + ch)
-			}
-		}
-	}
+func init() {
+	flag.StringVar(&server, "server", "irc.libera.chat:6667", "Server to connect to")
+	flag.StringVar(&nickname, "nickname", "notbot", "Bot nickname")
+	flag.StringVar(&password, "password", "", "Bot nickserv password")
+	flag.StringVar(&user, "user", "bot", "Bot user parameter")
+	flag.StringVar(&name, "name", "bot notbot", "Bot real name parameter")
+	flag.Var(&channels, "channels", "Channel to join; may be specified multiple times")
 }
 
 func main() {
-	done := make(chan bool)
-	var a atMonitor
-	var dispatchers = []dispatchFunc{
-		logger,
-		joinerFactory([]string{"#hswaw-members"}),
-	}
+	done := make([]chan bool, len(Runners.list))
 
-	conn, err := net.Dial("tcp", "irc.libera.chat:6667")
+	flag.Parse()
+
+	conn, err := net.Dial("tcp", server)
 	if err != nil {
 		log.Fatalln(err)
 	}
 
 	config := irc.ClientConfig{
-		Nick:    "notbot",
-		Pass:    "***",
-		User:    "bot",
-		Name:    "notbot",
-		Handler: irc.HandlerFunc(handlerFactory(dispatchers)),
+		Nick:    nickname,
+		Pass:    password,
+		User:    user,
+		Name:    name,
+		Handler: irc.HandlerFunc(handlerFactory(Dispatchers.list)),
 	}
 
 	client := irc.NewClient(conn, config)
-	go a.Run(client, done)
+
+	for i, runner := range Runners.list {
+		go runner(client, done[i])
+	}
 
 	err = client.Run()
 	if err != nil {
-		done <- true
+		for _, ch := range done {
+			ch <- true
+		}
 		log.Fatalln(err)
 	}
 }

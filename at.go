@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"time"
@@ -11,6 +12,8 @@ import (
 
 type atMonitor struct {
 	previousUserList []string
+	channel          string
+	apiAddress       string
 }
 
 type atUsers struct {
@@ -53,7 +56,7 @@ func (a *atMonitor) Run(c *irc.Client, done chan bool) {
 			return
 		case <-ticker.C:
 			var diffText string
-			atHS, err := at()
+			atHS, err := a.at()
 
 			if err != nil {
 				log.Println(err)
@@ -74,7 +77,7 @@ func (a *atMonitor) Run(c *irc.Client, done chan bool) {
 			}
 
 			if len(diffText) > 0 {
-				msg := fmt.Sprintf("NOTICE #hswaw-members :%s\n", diffText)
+				msg := fmt.Sprintf("NOTICE %s :%s\n", a.channel, diffText)
 				log.Println(diffText)
 				c.Write(msg)
 				a.previousUserList = current
@@ -83,10 +86,10 @@ func (a *atMonitor) Run(c *irc.Client, done chan bool) {
 	}
 }
 
-func at() (at atResponse, err error) {
+func (a *atMonitor) at() (at atResponse, err error) {
 	var values atResponse = atResponse{}
 
-	data, err := httpGet("https://at.hackerspace.pl/api")
+	data, err := httpGet(a.apiAddress)
 	if err != nil {
 		return values, fmt.Errorf("Unable to access checkinator api:", err)
 	}
@@ -97,4 +100,15 @@ func at() (at atResponse, err error) {
 	}
 
 	return values, nil
+}
+
+var (
+	atMonitorInstance atMonitor
+)
+
+func init() {
+	flag.StringVar(&atMonitorInstance.channel, "at.channel", "#hswaw-members", "Channel to send entrance/exit notices")
+	flag.StringVar(&atMonitorInstance.apiAddress, "at.api", "https://at.hackerspace.pl/api", "Checkinator API address")
+
+	Runners.Add(atMonitorInstance.Run)
 }
