@@ -1,9 +1,9 @@
 package main
 
 import (
-    "time"
 	"io"
 	"net/http"
+	"time"
 )
 
 func listSubstract(a, b []string) (ret []string) {

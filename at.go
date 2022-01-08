@@ -3,8 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
-    "log"
 
 	"gopkg.in/irc.v3"
 )
