@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func listSubstract(a, b []string) (ret []string) {
+func listSubtract(a, b []string) (ret []string) {
 	mb := make(map[string]bool, len(b))
 
 	for _, x := range b {

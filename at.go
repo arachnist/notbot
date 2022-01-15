@@ -65,8 +65,8 @@ func (a *atMonitor) Run(c *irc.Client, done chan bool) {
 
 			current := atHS.UserListZWS()
 
-			arrived := listSubstract(current, a.previousUserList)
-			left := listSubstract(a.previousUserList, current)
+			arrived := listSubtract(current, a.previousUserList)
+			left := listSubtract(a.previousUserList, current)
 
 			if len(arrived) > 0 {
 				diffText = fmt.Sprint(" +", arrived)
