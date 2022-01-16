@@ -77,6 +77,14 @@ type JitsiClient struct {
 	users      map[string]string // map[jid]nick
 }
 
+func (j *JitsiClient) UserListZWS() (ret []string) {
+	for _, user := range j.users {
+		u := user[:1] + "\u200B" + user[1:]
+		ret = append(ret, u)
+	}
+	return ret
+}
+
 func (j *JitsiClient) KeepAlive(ws *websocket.Conn) {
 	ticker := time.NewTicker(5 * time.Second)
 
@@ -109,7 +117,7 @@ func (j *JitsiClient) Run(c *irc.Client, done chan bool) {
 			"<jitsi_participant_region>ffmuc-de1</jitsi_participant_region><videomuted>true</videomuted><audiomuted>true</audiomuted>" +
 			"<jitsi_participant_codecType></jitsi_participant_codecType><nick xmlns=\"http://jabber.org/protocol/nick\">" + j.nick + "</nick></presence>",
 	}
-	
+
 	j.users = make(map[string]string)
 
 	for {
@@ -136,6 +144,7 @@ func (j *JitsiClient) Run(c *irc.Client, done chan bool) {
 				log.Println("JitsiClient", j.server, j.room, "Shutting down")
 				return
 			default:
+				var alsoThere string
 				_, err := ws.Read(msg)
 				v := JitsiPresence{}
 
@@ -150,19 +159,27 @@ func (j *JitsiClient) Run(c *irc.Client, done chan bool) {
 					continue
 				}
 
+				if v.Nick.Text == j.nick {
+					continue
+				}
+
 				if v.Nick.Text != "" { // if presence event has Nick present, it *shouldn't* mean that user has left the chat
 					if v.X.Item.Jid != "" {
 						if knownNick, ok := j.users[v.X.Item.Jid]; ok {
 							if knownNick != v.Nick.Text { // user changed nickname, we don't care about that enough
-                                log.Println("JitsiClient", j.server, j.room, "User changed nickname:", knownNick, v.Nick.Text)
+								log.Println("JitsiClient", j.server, j.room, "User changed nickname:", knownNick, v.Nick.Text)
 								j.users[v.X.Item.Jid] = v.Nick.Text
 								continue
 							}
 						} else { // new user
+							previousList := j.UserListZWS()
+							if len(previousList) > 0 {
+								alsoThere = fmt.Sprint(", also there:", previousList)
+							}
 							j.users[v.X.Item.Jid] = v.Nick.Text
 							nickZws := v.Nick.Text[:1] + "\u200B" + v.Nick.Text[1:]
-							ircMsg := fmt.Sprintf("NOTICE %s :jitsi: +%s\n", j.ircChannel, nickZws)
-                            log.Println("JitsiClient", j.server, j.room, "User joined:", j.users[v.X.Item.Jid])
+							ircMsg := fmt.Sprintf("NOTICE %s :jitsi: +%s%s\n", j.ircChannel, nickZws, alsoThere)
+							log.Println("JitsiClient", j.server, j.room, "User joined:", j.users[v.X.Item.Jid])
 							c.Write(ircMsg)
 							continue
 						}
@@ -172,9 +189,13 @@ func (j *JitsiClient) Run(c *irc.Client, done chan bool) {
 					if v.X.Item.Jid != "" {
 						if knownNick, ok := j.users[v.X.Item.Jid]; ok {
 							delete(j.users, v.X.Item.Jid)
+							userList := j.UserListZWS()
+							if len(userList) > 0 {
+								alsoThere = fmt.Sprint(", still there:", userList)
+							}
 							nickZws := knownNick[:1] + "\u200B" + knownNick[1:]
-							ircMsg := fmt.Sprintf("NOTICE %s :jitsi: -%s\n", j.ircChannel, nickZws)
-                            log.Println("JitsiClient", j.server, j.room, "User left:", knownNick)
+							ircMsg := fmt.Sprintf("NOTICE %s :jitsi: -%s%s\n", j.ircChannel, nickZws, alsoThere)
+							log.Println("JitsiClient", j.server, j.room, "User left:", knownNick)
 							c.Write(ircMsg)
 							continue
 						}
@@ -198,11 +219,11 @@ func JitsiRunWrapper(c *irc.Client, done chan bool) {
 		}
 
 		j := JitsiClient{
-            nick: nickname,
-            ircChannel: args[0],
-            server: args[1],
-            room: args[2],
-        }
+			nick:       nickname,
+			ircChannel: args[0],
+			server:     args[1],
+			room:       args[2],
+		}
 
 		go j.Run(c, jitsiDone[i])
 	}

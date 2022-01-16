@@ -67,16 +67,21 @@ func (a *atMonitor) Run(c *irc.Client, done chan bool) {
 
 			arrived := listSubtract(current, a.previousUserList)
 			left := listSubtract(a.previousUserList, current)
+			alsoThere := listSubtract(a.previousUserList, left)
 
 			if len(arrived) > 0 {
-				diffText = fmt.Sprint(" +", arrived)
+				diffText = fmt.Sprint(" arrived: ", arrived)
 			}
 
 			if len(left) > 0 {
-				diffText = fmt.Sprint(" -", left)
+				diffText += fmt.Sprint(" left: ", left)
 			}
 
 			if len(diffText) > 0 {
+				if len(alsoThere) > 0 {
+					diffText += fmt.Sprint(" also there: ", alsoThere)
+				}
+
 				msg := fmt.Sprintf("NOTICE %s :%s\n", a.channel, diffText)
 				log.Println(diffText)
 				c.Write(msg)
