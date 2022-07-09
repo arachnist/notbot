@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -101,6 +102,7 @@ func (s *spaceApiClient) Run(c *irc.Client, done chan bool) {
 			arrived := listSubtract(current, s.users)
 			left := listSubtract(s.users, current)
 			alsoThere := listSubtract(s.users, left)
+			sort.Strings(alsoThere)
 
 			if len(arrived) > 0 {
 				diffText = fmt.Sprint(" arrived: ", arrived)
