@@ -1,4 +1,4 @@
-mod spaceapi;
+mod autojoiner;
 
 use anyhow::{Context, anyhow};
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,7 @@ use matrix_sdk::{
     LoopCtrl,
     Room,
     ruma::events::room::{
-        message::{MessageType, OriginalSyncRoomMessageEvent},
+        message::{MessageType, SyncRoomMessageEvent, OriginalSyncRoomMessageEvent},
         member::StrippedRoomMemberEvent,
     },
 };
@@ -21,7 +21,20 @@ use std::{
     path::Path,
 };
 
+use toml::Table;
+
 use tokio::time::{sleep, Duration};
+
+use linkme::distributed_slice;
+
+pub struct BotCallback {
+    pub name: &str,
+    pub fun: fn(&Client, &Room, &SyncRoomMessageEvent),
+}
+
+/// Registry for callbacks from modules
+#[distributed_slice]
+pub static CALLBACKS: [BotCallback];
 
 /// The full session to persist.
 #[derive(Debug, Serialize, Deserialize)]
@@ -30,21 +43,18 @@ struct Session {
     user_session: MatrixSession,
 
     /// The latest sync token.
-    ///
-    /// It is only needed to persist it when using `Client::sync_once()` and we
-    /// want to make our syncs faster by not receiving all the initial sync
-    /// again.
     #[serde(skip_serializing_if = "Option::is_none")]
     sync_token: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct Config {
     pub homeserver: String,
     pub user_id: String,
     pub password: String,
     pub data_dir: String,
     pub device_id: String,
+    pub module: Option<Table>,
 }
 
 impl Config {
@@ -85,6 +95,7 @@ pub async fn run(config: Config) ->anyhow::Result<()> {
 
     client.add_event_handler(on_room_message);
     client.add_event_handler(autojoin_on_invites);
+    client.add_event_handler(on_message);
 
     tracing::info!("finished initializing");
     client
@@ -160,6 +171,18 @@ async fn login(config: Config) -> anyhow::Result<Client> {
     fs::write(session_file, serialized_session)?;
 
     Ok(client)
+}
+
+async fn on_message(
+    ev: SyncRoomMessageEvent,
+    client: Client,
+    room: Room
+) -> anyhow::Result<()> {
+    tracing::debug!("received event: {:#?}", ev);
+    for callback in CALLBACKS {
+        (callback.fun)(&client, &room, &ev);
+    };
+    Ok(())
 }
 
 ///// handlers copypasted from examples
