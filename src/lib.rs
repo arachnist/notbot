@@ -1,19 +1,13 @@
-mod spaceapi;
+mod autojoiner;
 
 use anyhow::{Context, anyhow};
 use serde::{Deserialize, Serialize};
 
 use matrix_sdk::{
-    matrix_auth::MatrixSession,
     config::SyncSettings,
-    Client,
-    Error,
-    LoopCtrl,
-    Room,
-    ruma::events::room::{
-        message::{MessageType, OriginalSyncRoomMessageEvent},
-        member::StrippedRoomMemberEvent,
-    },
+    matrix_auth::MatrixSession,
+    ruma::events::room::message::{MessageType, OriginalSyncRoomMessageEvent},
+    Client, Error, LoopCtrl, Room,
 };
 
 use std::{
@@ -21,7 +15,13 @@ use std::{
     path::Path,
 };
 
-use tokio::time::{sleep, Duration};
+use toml::Table;
+
+use linkme::distributed_slice;
+
+/// Registry for callbacks from modules
+#[distributed_slice]
+pub static CALLBACKS: [fn(&Client)];
 
 /// The full session to persist.
 #[derive(Debug, Serialize, Deserialize)]
@@ -30,21 +30,18 @@ struct Session {
     user_session: MatrixSession,
 
     /// The latest sync token.
-    ///
-    /// It is only needed to persist it when using `Client::sync_once()` and we
-    /// want to make our syncs faster by not receiving all the initial sync
-    /// again.
     #[serde(skip_serializing_if = "Option::is_none")]
     sync_token: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct Config {
     pub homeserver: String,
     pub user_id: String,
     pub password: String,
     pub data_dir: String,
     pub device_id: String,
+    pub module: Table,
 }
 
 impl Config {
@@ -69,10 +66,10 @@ pub async fn run(config: Config) ->anyhow::Result<()> {
     let session_file = data_dir.join("session.json");
     let (client, initial_sync_token) = if session_file.exists() {
         tracing::info!("previous session found, attempting restore");
-        restore_session(config).await?
+        restore_session(config.clone()).await?
     } else {
         tracing::info!("no previous session found, attempting login");
-        (login(config).await?, None)
+        (login(config.clone()).await?, None)
     };
 
     let mut sync_settings = SyncSettings::default();
@@ -80,11 +77,17 @@ pub async fn run(config: Config) ->anyhow::Result<()> {
         sync_settings = sync_settings.token(sync_token);
     }
 
+    tracing::debug!("adding config as extra context for callbacks");
+    client.add_event_handler_context(config.clone());
+
     tracing::info!("performing initial sync to ignore old messages...");
     client.sync_once(sync_settings).await.unwrap();
 
     client.add_event_handler(on_room_message);
-    client.add_event_handler(autojoin_on_invites);
+
+    for callback in CALLBACKS {
+        callback(&client)
+    }
 
     tracing::info!("finished initializing");
     client
@@ -181,35 +184,4 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room) {
     };
 
     tracing::info!("[{room_name}] {}: {}", event.sender, text_content.body)
-}
-
-async fn autojoin_on_invites(
-    room_member: StrippedRoomMemberEvent,
-    client: Client,
-    room: Room,
-) {
-    if room_member.state_key != client.user_id().unwrap() {
-        return;
-    }
-
-    tokio::spawn(async move {
-        tracing::info!("Autojoining room {}", room.room_id());
-        let mut delay = 2;
-
-        while let Err(err) = room.join().await {
-            // retry autojoin due to synapse sending invites, before the
-            // invited user can join for more information see
-            // https://github.com/matrix-org/synapse/issues/4345
-            tracing::error!("Failed to join room {} ({err:?}), retrying in {delay}s", room.room_id());
-
-            sleep(Duration::from_secs(delay)).await;
-            delay *= 2;
-
-            if delay > 3600 {
-                tracing::error!("Can't join room {} ({err:?})", room.room_id());
-                break;
-            }
-        }
-        tracing::info!("Successfully joined room {}", room.room_id());
-    });
 }
