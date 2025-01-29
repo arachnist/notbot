@@ -2,7 +2,7 @@ mod autojoiner;
 mod spaceapi;
 
 use anyhow::{anyhow, Context};
-use tracing::{debug, info};
+use tracing::{debug, info, trace};
 
 use serde::{Deserialize, Serialize};
 
@@ -71,7 +71,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         (login(config.clone()).await?, None)
     };
 
-    let mut sync_settings = SyncSettings::default();
+    let mut sync_settings = SyncSettings::default().full_state(false);
     if let Some(sync_token) = initial_sync_token {
         debug!("initial sync token: {:#?}", &sync_token);
         sync_settings = sync_settings.token(sync_token);
@@ -96,7 +96,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
             async move {
                 let response = sync_result?;
 
-                debug!("sync response: {:#?}", &response);
+                trace!("sync response: {:#?}", &response);
 
                 persist_sync_token(&session_path, response.next_batch)
                     .await

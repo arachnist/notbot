@@ -1,19 +1,23 @@
 use crate::{Config, MODULES};
 
-use tracing::{debug, info};
+use tracing::{debug, info, trace};
 
 use linkme::distributed_slice;
 use matrix_sdk::{
-    ruma::events::room::message::{
-        MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
+    ruma::{
+        events::room::message::{
+            MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
+        },
+        OwnedRoomId,
     },
     Client, Room, RoomState,
 };
 
-use reqwest::Client as RClient;
+use reqwest::{Client as RClient, Url};
 
 use serde::Deserialize;
 use std::collections::HashMap;
+use tokio::time::{interval, Duration};
 
 #[distributed_slice(MODULES)]
 static SPACEAPI: fn(&Client, &Config) = callback_registrar;
@@ -21,11 +25,88 @@ static SPACEAPI: fn(&Client, &Config) = callback_registrar;
 fn callback_registrar(c: &Client, config: &Config) {
     info!("registering spaceapi");
 
-    let channel_map: HashMap<String, String> = config.module["checkinator"]["Channels"]
+    let at_channel_map: HashMap<String, String> = config.module["checkinator"]["Channels"]
         .clone()
         .try_into()
-        .expect("spaceapi channel map needs to be defined");
-    c.add_event_handler(move |ev, room| at_response(ev, room, channel_map));
+        .expect("checkinator channel map needs to be defined");
+    c.add_event_handler(move |ev, room| at_response(ev, room, at_channel_map));
+
+    let presence_channel_map: HashMap<String, String> = config.module["presence"]["Channels"]
+        .clone()
+        .try_into()
+        .expect("presence channel map needs to be defined");
+
+    for (channel, url) in presence_channel_map.into_iter() {
+        let Ok(room_id) = OwnedRoomId::try_from(channel) else {
+            todo!()
+        };
+
+        let room = match c.get_room(&room_id) {
+            Some(r) => r,
+            None => break,
+        };
+        presence_observer(room, Url::parse(&url).unwrap());
+    }
+}
+
+fn presence_observer(room: Room, url: Url) {
+    let _ = tokio::task::spawn(async move {
+        let client = RClient::new();
+        let mut interval = interval(Duration::from_secs(30));
+        let mut present: Vec<String> = vec![];
+
+        loop {
+            interval.tick().await;
+
+            let json = client.get(url.clone()).send().await.unwrap();
+            let spaceapi = json.json::<SpaceAPI>().await.unwrap();
+
+            let current: Vec<String> = names_dehighlighted(spaceapi.sensors.people_now_present);
+            let mut arrived: Vec<String> = vec![];
+            let mut left: Vec<String> = vec![];
+            let mut also_there: Vec<String> = vec![];
+
+            for name in &current {
+                if !present.contains(&name) {
+                    arrived.push(name.clone());
+                };
+            }
+
+            for name in &present {
+                if current.contains(&name) {
+                    also_there.push(name.clone());
+                } else {
+                    left.push(name.clone());
+                };
+            }
+
+            present = current;
+
+            let mut response_parts: Vec<String> = vec![];
+
+            if arrived.len() > 0 {
+                response_parts.push(["arrived: ", &arrived.join(", ")].concat());
+            };
+
+            if left.len() > 0 {
+                response_parts.push(["left: ", &left.join(", ")].concat());
+            };
+
+            if also_there.len() > 0 {
+                response_parts.push(["also there: ", &also_there.join(", ")].concat());
+            };
+
+            if arrived.len() == 0 && left.len() == 0 {
+                continue;
+            };
+
+            room.send(RoomMessageEventContent::notice_plain(
+                response_parts.join(", "),
+            ))
+            .await
+            .unwrap();
+        }
+    });
 }
 
 async fn at_response(
@@ -33,17 +114,17 @@ async fn at_response(
     room: Room,
     channel_map: HashMap<String, String>,
 ) {
-    debug!("in at_response");
+    trace!("in at_response");
     if room.state() != RoomState::Joined {
         return;
     }
 
-    debug!("checking message type");
+    trace!("checking message type");
     let MessageType::Text(text) = ev.content.msgtype else {
         return;
     };
 
-    debug!("checking if message starts with .at: {:#?}", text.body);
+    trace!("checking if message starts with .at: {:#?}", text.body);
     if text.body.trim().starts_with(".at") {
         debug!("channel_map: {:#?}", channel_map);
 
