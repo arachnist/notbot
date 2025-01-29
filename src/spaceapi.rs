@@ -2,7 +2,6 @@ use crate::{Config, MODULES};
 
 use linkme::distributed_slice;
 use matrix_sdk::{
-    event_handler::Ctx,
     ruma::events::room::message::{
         MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
     },
@@ -15,17 +14,22 @@ use serde_derive::Deserialize;
 use std::collections::HashMap;
 
 #[distributed_slice(MODULES)]
-static SPACEAPI: fn(&Client) = callback_registrar;
+static SPACEAPI: fn(&Client, &Config) = callback_registrar;
 
-fn callback_registrar(c: &Client) {
+fn callback_registrar(c: &Client, config: &Config) {
     tracing::info!("registering spaceapi");
-    c.add_event_handler(at_response);
+
+    let channel_map: HashMap<String, String> = config.module["checkinator"]["Channels"]
+        .clone()
+        .try_into()
+        .expect("spaceapi channel map needs to be defined");
+    c.add_event_handler(move |ev, room| at_response(ev, room, channel_map));
 }
 
 async fn at_response(
     ev: OriginalSyncRoomMessageEvent,
     room: Room,
-    Ctx(config): Ctx<Config>,
+    channel_map: HashMap<String, String>,
 ) {
     tracing::debug!("in at_response");
     if room.state() != RoomState::Joined {
@@ -39,7 +43,6 @@ async fn at_response(
 
     tracing::debug!("checking if message starts with .at: {:#?}", text.body);
     if text.body.trim().starts_with(".at") {
-        let channel_map: HashMap<String, String> = config.module["checkinator"]["Channels"].clone();
         tracing::debug!("channel_map: {:#?}", channel_map);
 
         let room_name = match room.compute_display_name().await {
@@ -57,8 +60,9 @@ async fn at_response(
             None => {
                 tracing::debug!("no spaceapi url found, using default");
                 channel_map.get("default").unwrap()
-            },
-        }.clone();
+            }
+        }
+        .clone();
 
         tracing::debug!("spaceapi url: {:#?}", spaceapi_url);
 
@@ -81,9 +85,7 @@ async fn at_response(
                 RoomMessageEventContent::text_plain("Nikdo není doma...")
             };
 
-            room.send(response)
-                .await
-                .unwrap();
+            room.send(response).await.unwrap();
         });
     };
 }

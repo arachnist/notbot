@@ -11,13 +11,14 @@ use matrix_sdk::{
     Client, Error, LoopCtrl, Room,
 };
 
-use std::{collections::HashMap, fs, path::Path};
+use std::{fs, path::Path};
+use toml::Table;
 
 use linkme::distributed_slice;
 
 /// Modules registry
 #[distributed_slice]
-pub static MODULES: [fn(&Client)];
+pub static MODULES: [fn(&Client, &Config)];
 
 /// The full session to persist.
 #[derive(Debug, Serialize, Deserialize)]
@@ -37,7 +38,7 @@ pub struct Config {
     pub password: String,
     pub data_dir: String,
     pub device_id: String,
-    pub module: HashMap<String, HashMap<String, HashMap<String, String>>>,
+    pub module: Table,
 }
 
 impl Config {
@@ -82,7 +83,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     client.add_event_handler(on_room_message);
 
     for initializer in MODULES {
-        initializer(&client)
+        initializer(&client, &config);
     }
 
     tracing::info!("finished initializing");
