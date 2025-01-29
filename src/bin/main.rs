@@ -9,6 +9,7 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::from_path(config_path)?;
 
     tracing::debug!("parsed config as:\n{:#?}", config);
+
     tracing::info!("creating bot for {0}", config.user_id);
     notbot::run(config).await
 }

@@ -1,6 +1,7 @@
 mod autojoiner;
+mod spaceapi;
 
-use anyhow::{Context, anyhow};
+use anyhow::{anyhow, Context};
 use serde::{Deserialize, Serialize};
 
 use matrix_sdk::{
@@ -10,18 +11,13 @@ use matrix_sdk::{
     Client, Error, LoopCtrl, Room,
 };
 
-use std::{
-    fs,
-    path::Path,
-};
-
-use toml::Table;
+use std::{collections::HashMap, fs, path::Path};
 
 use linkme::distributed_slice;
 
-/// Registry for callbacks from modules
+/// Modules registry
 #[distributed_slice]
-pub static CALLBACKS: [fn(&Client)];
+pub static MODULES: [fn(&Client)];
 
 /// The full session to persist.
 #[derive(Debug, Serialize, Deserialize)]
@@ -41,27 +37,27 @@ pub struct Config {
     pub password: String,
     pub data_dir: String,
     pub device_id: String,
-    pub module: Table,
+    pub module: HashMap<String, HashMap<String, HashMap<String, String>>>,
 }
 
 impl Config {
-    pub fn from_path(path: Option<String>) ->anyhow::Result<Self, anyhow::Error> {
+    pub fn from_path(path: Option<String>) -> anyhow::Result<Self, anyhow::Error> {
         let config_path = match path {
             Some(s) => s,
             None => return Err(anyhow!("configuration path not provided")),
         };
 
-        let config_content = fs::read_to_string(&config_path)
-            .context("couldn't read config file")?;
-        let config: Config = toml::from_str(&config_content)
-            .context("couldn't parse config file")?;
+        let config_content =
+            fs::read_to_string(&config_path).context("couldn't read config file")?;
+        let config: Config =
+            toml::from_str(&config_content).context("couldn't parse config file")?;
 
         tracing::info!("using config: {config_path}");
         Ok(config)
     }
 }
 
-pub async fn run(config: Config) ->anyhow::Result<()> {
+pub async fn run(config: Config) -> anyhow::Result<()> {
     let data_dir = Path::new(&config.data_dir);
     let session_file = data_dir.join("session.json");
     let (client, initial_sync_token) = if session_file.exists() {
@@ -80,27 +76,28 @@ pub async fn run(config: Config) ->anyhow::Result<()> {
     tracing::debug!("adding config as extra context for callbacks");
     client.add_event_handler_context(config.clone());
 
-    tracing::info!("performing initial sync to ignore old messages...");
-    client.sync_once(sync_settings).await.unwrap();
+    tracing::info!("performing initial sync");
+    client.sync_once(SyncSettings::default()).await.unwrap();
 
     client.add_event_handler(on_room_message);
 
-    for callback in CALLBACKS {
-        callback(&client)
+    for initializer in MODULES {
+        initializer(&client)
     }
 
     tracing::info!("finished initializing");
     client
-        .sync_with_result_callback(SyncSettings::default(), |sync_result| {
+        .sync_with_result_callback(sync_settings, |sync_result| {
             let session_path = session_file.clone();
             async move {
-            let response = sync_result?;
+                let response = sync_result?;
 
-            persist_sync_token(&session_path, response.next_batch)
-                .await
-                .map_err(|err| Error::UnknownError(err.into()))?;
-            Ok(LoopCtrl::Continue)
-        }})
+                persist_sync_token(&session_path, response.next_batch)
+                    .await
+                    .map_err(|err| Error::UnknownError(err.into()))?;
+                Ok(LoopCtrl::Continue)
+            }
+        })
         .await?;
     Ok(())
 }
@@ -116,7 +113,7 @@ async fn persist_sync_token(session_file: &Path, sync_token: String) -> anyhow::
     Ok(())
 }
 
-async fn restore_session(config: Config) ->anyhow::Result<(Client, Option<String>)> {
+async fn restore_session(config: Config) -> anyhow::Result<(Client, Option<String>)> {
     let data_dir = Path::new(&config.data_dir);
     let session_file = data_dir.join("session.json");
     let db_path = data_dir.join("store.db");
@@ -131,7 +128,6 @@ async fn restore_session(config: Config) ->anyhow::Result<(Client, Option<String
         .sqlite_store(db_path, None)
         .build()
         .await?;
-
 
     tracing::info!("restoring session");
     client.restore_session(session.user_session).await?;
@@ -152,13 +148,17 @@ async fn login(config: Config) -> anyhow::Result<Client> {
         .await?;
     let auth = client.matrix_auth();
     tracing::info!("logging in");
-    auth
-        .login_username(&config.user_id, &config.password)
+    auth.login_username(&config.user_id, &config.password)
         .initial_device_display_name(&config.device_id)
         .await?;
-    let user_session = auth.session().expect("A logged-in client should have a session");
+    let user_session = auth
+        .session()
+        .expect("A logged-in client should have a session");
     tracing::debug!("serializing session");
-    let serialized_session = serde_json::to_string(&Session{user_session, sync_token: None})?;
+    let serialized_session = serde_json::to_string(&Session {
+        user_session,
+        sync_token: None,
+    })?;
     tracing::debug!("storing session");
     fs::write(session_file, serialized_session)?;
 
@@ -172,7 +172,9 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room) {
     // if room.state() != RoomState::Joined {
     //    return;
     // }
-    let MessageType::Text(text_content) = &event.content.msgtype else { return };
+    let MessageType::Text(text_content) = &event.content.msgtype else {
+        return;
+    };
 
     let room_name = match room.compute_display_name().await {
         Ok(room_name) => room_name.to_string(),
