@@ -46,6 +46,7 @@ fn presence_observer(c: Client, channel: String, url: Url) {
         let client = RClient::new();
         let mut interval = interval(Duration::from_secs(30));
         let mut present: Vec<String> = vec![];
+        let mut first_loop: bool = true;
 
         let alias_id = match RoomAliasId::parse(channel.clone()) {
             Ok(a) => a,
@@ -110,6 +111,11 @@ fn presence_observer(c: Client, channel: String, url: Url) {
 
             present = current;
 
+            if first_loop {
+                first_loop = false;
+                continue;
+            }
+
             let mut response_parts: Vec<String> = vec![];
 
             if arrived.len() > 0 {
@@ -128,11 +134,15 @@ fn presence_observer(c: Client, channel: String, url: Url) {
                 continue;
             };
 
-            room.send(RoomMessageEventContent::notice_plain(
-                response_parts.join(", "),
-            ))
-            .await
-            .unwrap();
+            if let Err(e) = room
+                .send(RoomMessageEventContent::notice_plain(
+                    response_parts.join(", "),
+                ))
+                .await
+            {
+                info!("couldn't send presence status to room: {} {}", channel, e);
+                continue;
+            };
         }
     });
 }
