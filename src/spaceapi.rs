@@ -8,7 +8,6 @@ use matrix_sdk::{
         events::room::message::{
             MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
         },
-        OwnedRoomId,
         RoomAliasId,
     },
     Client, Room, RoomState,
@@ -38,48 +37,56 @@ fn callback_registrar(c: &Client, config: &Config) {
         .expect("presence channel map needs to be defined");
 
     for (channel, url) in presence_channel_map.into_iter() {
-        let room_id = match OwnedRoomId::try_from(channel.clone()) {
-            Ok(r) => r,
-            Err(e) => {
-                info!("channel {} didn't directly map to room id: {}", channel, e);
-                continue;
-            }
-        };
-
-        /* let Ok(room_id) = OwnedRoomId::try_from(channel) else {
-            c.resolve_room_alias(&RoomAliasId::parse(channel))
-        }; */
-
-        let room = match c.get_room(&room_id) {
-            Some(r) => r,
-            None => continue,
-        };
-        presence_observer(room, Url::parse(&url).unwrap());
+        presence_observer(c.clone(), channel, Url::parse(&url).unwrap());
     }
 }
 
-fn presence_observer(room: Room, url: Url) {
+fn presence_observer(c: Client, channel: String, url: Url) {
     let _ = tokio::task::spawn(async move {
         let client = RClient::new();
         let mut interval = interval(Duration::from_secs(30));
         let mut present: Vec<String> = vec![];
 
+        let alias_id = match RoomAliasId::parse(channel.clone()) {
+            Ok(a) => a,
+            Err(e) => {
+                info!("couldn't parse room alias: {} {}", channel, e);
+                return;
+            }
+        };
+
         loop {
             interval.tick().await;
+
+            let alias_response = match c.resolve_room_alias(&alias_id).await {
+                Ok(r) => r,
+                Err(e) => {
+                    info!("couldn't resolve alias: {} {}", alias_id, e);
+                    continue;
+                }
+            };
+
+            let room = match c.get_room(&alias_response.room_id) {
+                Some(r) => r,
+                None => {
+                    info!("couldn't get room from room id: {}", alias_response.room_id);
+                    continue;
+                }
+            };
 
             let json = match client.get(url.clone()).send().await {
                 Ok(r) => r,
                 Err(_) => {
                     info!("failed to fetch spaceapi data");
                     continue;
-                },
+                }
             };
             let spaceapi = match json.json::<SpaceAPI>().await {
                 Ok(d) => d,
                 Err(_) => {
                     info!("failed to decode spaceapi response");
                     continue;
-                },
+                }
             };
 
             let current: Vec<String> = names_dehighlighted(spaceapi.sensors.people_now_present);

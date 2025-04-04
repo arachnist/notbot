@@ -13,12 +13,7 @@ use matrix_sdk::{
     Client, Error, LoopCtrl, Room,
 };
 
-use std::{
-    fs,
-    path::Path,
-    pin::Pin,
-    future::Future,
-};
+use std::{fs, future::Future, path::Path, pin::Pin};
 use toml::Table;
 
 use linkme::distributed_slice;
@@ -28,7 +23,7 @@ use linkme::distributed_slice;
 pub static MODULES: [fn(&Client, &Config)];
 
 #[distributed_slice]
-pub static ASYNC_MODULES: [fn(&Client, &Config) -> Pin<Box<dyn Future<Output=()>>>];
+pub static ASYNC_MODULES: [fn(&Client, &Config) -> Pin<Box<dyn Future<Output = ()>>>];
 
 /// The full session to persist.
 #[derive(Debug, Serialize, Deserialize)]
