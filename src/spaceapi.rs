@@ -9,6 +9,7 @@ use matrix_sdk::{
             MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
         },
         OwnedRoomId,
+        RoomAliasId,
     },
     Client, Room, RoomState,
 };
@@ -37,13 +38,21 @@ fn callback_registrar(c: &Client, config: &Config) {
         .expect("presence channel map needs to be defined");
 
     for (channel, url) in presence_channel_map.into_iter() {
-        let Ok(room_id) = OwnedRoomId::try_from(channel) else {
-            todo!()
+        let room_id = match OwnedRoomId::try_from(channel.clone()) {
+            Ok(r) => r,
+            Err(e) => {
+                info!("channel {} didn't directly map to room id: {}", channel, e);
+                continue;
+            }
         };
+
+        /* let Ok(room_id) = OwnedRoomId::try_from(channel) else {
+            c.resolve_room_alias(&RoomAliasId::parse(channel))
+        }; */
 
         let room = match c.get_room(&room_id) {
             Some(r) => r,
-            None => break,
+            None => continue,
         };
         presence_observer(room, Url::parse(&url).unwrap());
     }
@@ -58,8 +67,20 @@ fn presence_observer(room: Room, url: Url) {
         loop {
             interval.tick().await;
 
-            let json = client.get(url.clone()).send().await.unwrap();
-            let spaceapi = json.json::<SpaceAPI>().await.unwrap();
+            let json = match client.get(url.clone()).send().await {
+                Ok(r) => r,
+                Err(_) => {
+                    info!("failed to fetch spaceapi data");
+                    continue;
+                },
+            };
+            let spaceapi = match json.json::<SpaceAPI>().await {
+                Ok(d) => d,
+                Err(_) => {
+                    info!("failed to decode spaceapi response");
+                    continue;
+                },
+            };
 
             let current: Vec<String> = names_dehighlighted(spaceapi.sensors.people_now_present);
             let mut arrived: Vec<String> = vec![];
