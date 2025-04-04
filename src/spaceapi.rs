@@ -8,7 +8,7 @@ use matrix_sdk::{
         events::room::message::{
             MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
         },
-        OwnedRoomId,
+        OwnedRoomId ,
     },
     Client, Room, RoomState,
 };
@@ -58,8 +58,20 @@ fn presence_observer(room: Room, url: Url) {
         loop {
             interval.tick().await;
 
-            let json = client.get(url.clone()).send().await.unwrap();
-            let spaceapi = json.json::<SpaceAPI>().await.unwrap();
+            let json = match client.get(url.clone()).send().await {
+                Ok(r) => r,
+                Err(_) => {
+                    info!("failed to fetch spaceapi data");
+                    continue;
+                },
+            };
+            let spaceapi = match json.json::<SpaceAPI>().await {
+                Ok(d) => d,
+                Err(_) => {
+                    info!("failed to decode spaceapi response");
+                    continue;
+                },
+            };
 
             let current: Vec<String> = names_dehighlighted(spaceapi.sensors.people_now_present);
             let mut arrived: Vec<String> = vec![];
