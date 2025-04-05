@@ -1,5 +1,6 @@
 mod autojoiner;
 mod spaceapi;
+mod wolfram;
 
 use anyhow::{anyhow, Context};
 use tracing::{debug, info, trace};
