@@ -76,13 +76,7 @@ fn presence_observer(c: Client, channel: String, url: String) {
                 Ok(d) => d,
                 Err(fe) => {
                     info!("error fetching data: {fe}");
-                    if let Err(se) = room
-                        .send(RoomMessageEventContent::text_plain("couldn't fetch data"))
-                        .await
-                    {
-                        info!("error sending response: {se}");
-                    };
-                    return;
+                    continue;
                 }
             };
 
