@@ -1,4 +1,4 @@
-use crate::{Config, MODULES};
+use crate::{fetch_and_decode_json, Config, MODULES};
 
 use tracing::{debug, info, trace};
 
@@ -12,8 +12,6 @@ use matrix_sdk::{
     },
     Client, Room, RoomState,
 };
-
-use reqwest::{Client as RClient, Url};
 
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -37,13 +35,12 @@ fn callback_registrar(c: &Client, config: &Config) {
         .expect("presence channel map needs to be defined");
 
     for (channel, url) in presence_channel_map.into_iter() {
-        presence_observer(c.clone(), channel, Url::parse(&url).unwrap());
+        presence_observer(c.clone(), channel, url);
     }
 }
 
-fn presence_observer(c: Client, channel: String, url: Url) {
+fn presence_observer(c: Client, channel: String, url: String) {
     let _ = tokio::task::spawn(async move {
-        let client = RClient::new();
         let mut interval = interval(Duration::from_secs(30));
         let mut present: Vec<String> = vec![];
         let mut first_loop: bool = true;
@@ -75,22 +72,21 @@ fn presence_observer(c: Client, channel: String, url: Url) {
                 }
             };
 
-            let json = match client.get(url.clone()).send().await {
-                Ok(r) => r,
-                Err(_) => {
-                    info!("failed to fetch spaceapi data");
-                    continue;
-                }
-            };
-            let spaceapi = match json.json::<SpaceAPI>().await {
+            let data = match fetch_and_decode_json::<SpaceAPI>(url.to_owned()).await {
                 Ok(d) => d,
-                Err(_) => {
-                    info!("failed to decode spaceapi response");
-                    continue;
+                Err(fe) => {
+                    info!("error fetching data: {fe}");
+                    if let Err(se) = room
+                        .send(RoomMessageEventContent::text_plain("couldn't fetch data"))
+                        .await
+                    {
+                        info!("error sending response: {se}");
+                    };
+                    return;
                 }
             };
 
-            let current: Vec<String> = names_dehighlighted(spaceapi.sensors.people_now_present);
+            let current: Vec<String> = names_dehighlighted(data.sensors.people_now_present);
             let mut arrived: Vec<String> = vec![];
             let mut left: Vec<String> = vec![];
             let mut also_there: Vec<String> = vec![];
@@ -164,39 +160,39 @@ async fn at_response(
 
     trace!("checking if message starts with .at: {:#?}", text.body);
     if text.body.trim().starts_with(".at") {
-        debug!("channel_map: {:#?}", channel_map);
-
-        let room_name = match room.compute_display_name().await {
-            Ok(room_name) => room_name.to_string(),
-            Err(error) => {
-                debug!("error getting room display name: {error}");
-                // Let's fallback to the room ID.
-                room.room_id().to_string()
-            }
-        };
-
-        debug!("getting spaceapi url for: {:#?}", &room_name);
-        let spaceapi_url = match channel_map.get(&room_name) {
-            Some(url) => url,
-            None => {
-                debug!("no spaceapi url found, using default");
-                channel_map.get("default").unwrap()
-            }
-        }
-        .clone();
-
-        debug!("spaceapi url: {:#?}", spaceapi_url);
-
         tokio::spawn(async move {
-            let client = RClient::new();
-            debug!("fetching url");
-            let json = client.get(spaceapi_url).send().await.unwrap();
-            debug!("deserializing");
-            let spaceapi = json.json::<SpaceAPI>().await.unwrap();
+            let room_name = match room.compute_display_name().await {
+                Ok(room_name) => room_name.to_string(),
+                Err(error) => {
+                    debug!("error getting room display name: {error}");
+                    // Let's fallback to the room ID.
+                    room.room_id().to_string()
+                }
+            };
 
-            debug!("spaceapi response: {:#?}", spaceapi);
+            let url = match channel_map.get(&room_name) {
+                Some(url) => url,
+                None => {
+                    debug!("no spaceapi url found, using default");
+                    channel_map.get("default").unwrap()
+                }
+            };
 
-            let present: Vec<String> = names_dehighlighted(spaceapi.sensors.people_now_present);
+            let data = match fetch_and_decode_json::<SpaceAPI>(url.to_owned()).await {
+                Ok(d) => d,
+                Err(fe) => {
+                    info!("error fetching data: {fe}");
+                    if let Err(se) = room
+                        .send(RoomMessageEventContent::text_plain("couldn't fetch data"))
+                        .await
+                    {
+                        info!("error sending response: {se}");
+                    };
+                    return;
+                }
+            };
+
+            let present: Vec<String> = names_dehighlighted(data.sensors.people_now_present);
 
             debug!("present: {:#?}", present);
 
@@ -227,18 +223,85 @@ fn names_dehighlighted(present: Vec<PeopleNowPresent>) -> Vec<String> {
     dehighlighted
 }
 
-/// only the parts we actually care about
-#[derive(Default, Debug, Clone, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
 pub struct SpaceAPI {
+    pub api: String,
+    pub space: String,
+    pub logo: String,
+    pub url: String,
+    pub location: Location,
+    pub state: State,
+    pub contact: Contact,
+    pub issue_report_channels: Vec<String>,
+    pub projects: Vec<String>,
+    pub feeds: Feeds,
     pub sensors: Sensors,
 }
 
-#[derive(Default, Debug, Clone, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+pub struct Location {
+    pub lat: f64,
+    pub lon: f64,
+    pub address: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+pub struct State {
+    pub open: bool,
+    pub message: String,
+    pub icon: Icon,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+pub struct Icon {
+    pub open: String,
+    pub closed: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+pub struct Contact {
+    pub facebook: String,
+    pub irc: String,
+    pub ml: String,
+    pub twitter: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+pub struct Feeds {
+    pub blog: Blog,
+    pub calendar: Calendar,
+    pub wiki: Wiki,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+pub struct Blog {
+    #[serde(rename = "type")]
+    pub type_field: String,
+    pub url: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+pub struct Calendar {
+    #[serde(rename = "type")]
+    pub type_field: String,
+    pub url: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+pub struct Wiki {
+    #[serde(rename = "type")]
+    pub type_field: String,
+    pub url: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
 pub struct Sensors {
+    #[serde(rename = "people_now_present")]
     pub people_now_present: Vec<PeopleNowPresent>,
 }
 
-#[derive(Default, Debug, Clone, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
 pub struct PeopleNowPresent {
+    pub value: u16,
     pub names: Vec<String>,
 }
