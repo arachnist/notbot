@@ -1,4 +1,5 @@
 mod autojoiner;
+mod kasownik;
 mod spaceapi;
 mod wolfram;
 
@@ -206,7 +207,7 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room) {
 pub async fn fetch_and_decode_json<D: de::DeserializeOwned>(url: String) -> anyhow::Result<D> {
     let client = RClient::new();
 
-    let json = client.get(url).send().await?;
+    let data = client.get(url).send().await?;
 
-    Ok(json.json::<D>().await?)
+    Ok(data.json::<D>().await?)
 }
