@@ -17,7 +17,7 @@ use serde_json::Value;
 use urlencoding::encode as uencode;
 
 #[distributed_slice(MODULES)]
-static SPACEAPI: fn(&Client, &Config) = callback_registrar;
+static WOLFRAM: fn(&Client, &Config) = callback_registrar;
 
 fn callback_registrar(c: &Client, config: &Config) {
     info!("registering wolfram");
