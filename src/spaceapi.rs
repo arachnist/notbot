@@ -72,6 +72,7 @@ fn presence_observer(c: Client, channel: String, url: String) {
                 }
             };
 
+            debug!("fetching spaceapi url: {}", url);
             let data = match fetch_and_decode_json::<SpaceAPI>(url.to_owned()).await {
                 Ok(d) => d,
                 Err(fe) => {
@@ -219,14 +220,13 @@ fn names_dehighlighted(present: Vec<PeopleNowPresent>) -> Vec<String> {
 
 #[derive(Default, Debug, Clone, PartialEq, Deserialize)]
 pub struct SpaceAPI {
-    pub api: String,
+    pub api_compatibility: Vec<String>,
     pub space: String,
     pub logo: String,
     pub url: String,
     pub location: Location,
     pub state: State,
     pub contact: Contact,
-    pub issue_report_channels: Vec<String>,
     pub projects: Vec<String>,
     pub feeds: Feeds,
     pub sensors: Sensors,
@@ -256,6 +256,8 @@ pub struct Icon {
 pub struct Contact {
     pub facebook: String,
     pub irc: String,
+    pub mastodon: String,
+    pub matrix: String,
     pub ml: String,
     pub twitter: String,
 }
@@ -290,12 +292,11 @@ pub struct Wiki {
 
 #[derive(Default, Debug, Clone, PartialEq, Deserialize)]
 pub struct Sensors {
-    #[serde(rename = "people_now_present")]
     pub people_now_present: Vec<PeopleNowPresent>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Deserialize)]
 pub struct PeopleNowPresent {
-    pub value: u16,
+    pub value: u32,
     pub names: Vec<String>,
 }
