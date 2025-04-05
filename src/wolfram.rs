@@ -1,6 +1,6 @@
-use crate::{Config, MODULES};
+use crate::{fetch_and_decode_json, Config, MODULES};
 
-use tracing::{debug, info, trace};
+use tracing::{info, trace};
 
 use linkme::distributed_slice;
 use matrix_sdk::{
@@ -9,8 +9,6 @@ use matrix_sdk::{
     },
     Client, Room,
 };
-
-use reqwest::Client as RClient;
 
 use serde_derive::Deserialize;
 use serde_json::Value;
@@ -53,30 +51,15 @@ async fn wolfram_response(ev: OriginalSyncRoomMessageEvent, room: Room, app_id: 
                 + app_id.as_str()
                 + "&output=json";
 
-            let client = RClient::new();
-            debug!("fetching url");
-            let json = match client.get(url).send().await {
-                Ok(j) => j,
-                Err(_) => {
-                    if let Err(e) = room
+            let data = match fetch_and_decode_json::<WolframAlpha>(url).await {
+                Ok(d) => d,
+                Err(fe) => {
+                    info!("error fetching data: {fe}");
+                    if let Err(se) = room
                         .send(RoomMessageEventContent::text_plain("couldn't fetch data"))
                         .await
                     {
-                        info!("error sending response: {e}");
-                    };
-                    return;
-                }
-            };
-
-            debug!("deserializing");
-            let data = match json.json::<WolframAlpha>().await {
-                Ok(d) => d,
-                Err(_) => {
-                    if let Err(e) = room
-                        .send(RoomMessageEventContent::text_plain("couldn't decode data"))
-                        .await
-                    {
-                        info!("error sending response: {e}");
+                        info!("error sending response: {se}");
                     };
                     return;
                 }
@@ -92,30 +75,31 @@ async fn wolfram_response(ev: OriginalSyncRoomMessageEvent, room: Room, app_id: 
                 return;
             };
 
+            trace!("wolfram data: {:#?}", data);
+
+            let mut response_parts: Vec<String> = vec![];
+
             for pod in data.queryresult.pods {
                 if pod.primary.is_some_and(|x| x) {
-                    let response = RoomMessageEventContent::text_plain(
-                        pod.title + ": " + pod.subpods[0].plaintext.as_str(),
-                    );
-
-                    if let Err(e) = room.send(response).await {
-                        info!("error sending response: {e}");
-                        return;
-                    }
+                    response_parts.push(pod.title + ": " + pod.subpods[0].plaintext.as_str());
                 }
+            }
+
+            let response = RoomMessageEventContent::text_plain(response_parts.join("\n"));
+            if let Err(e) = room.send(response).await {
+                info!("error sending response: {e}");
+                return;
             }
         });
     };
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct WolframAlpha {
     pub queryresult: Queryresult,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct Queryresult {
     pub success: bool,
     pub error: bool,
@@ -137,7 +121,6 @@ pub struct Queryresult {
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct Pod {
     pub title: String,
     pub scanner: String,
@@ -153,7 +136,6 @@ pub struct Pod {
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct Subpod {
     pub title: String,
     pub img: Img,
@@ -161,7 +143,6 @@ pub struct Subpod {
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct Img {
     pub src: String,
     pub alt: String,
@@ -176,7 +157,6 @@ pub struct Img {
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct State {
     pub name: String,
     pub input: String,

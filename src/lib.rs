@@ -5,7 +5,7 @@ mod wolfram;
 use anyhow::{anyhow, Context};
 use tracing::{debug, info, trace};
 
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Serialize};
 
 use matrix_sdk::{
     config::SyncSettings,
@@ -13,6 +13,8 @@ use matrix_sdk::{
     ruma::events::room::message::{MessageType, OriginalSyncRoomMessageEvent},
     Client, Error, LoopCtrl, Room,
 };
+
+use reqwest::Client as RClient;
 
 use std::{fs, future::Future, path::Path, pin::Pin};
 use toml::Table;
@@ -199,4 +201,12 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room) {
     };
 
     info!("[{room_name}] {}: {}", event.sender, text_content.body)
+}
+
+pub async fn fetch_and_decode_json<D: de::DeserializeOwned>(url: String) -> anyhow::Result<D> {
+    let client = RClient::new();
+
+    let json = client.get(url).send().await?;
+
+    Ok(json.json::<D>().await?)
 }
