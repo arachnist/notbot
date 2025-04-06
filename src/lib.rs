@@ -1,5 +1,6 @@
 mod autojoiner;
 mod kasownik;
+mod shenanigans;
 mod spaceapi;
 mod wolfram;
 
