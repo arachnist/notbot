@@ -1,6 +1,6 @@
 use crate::{fetch_and_decode_json, Config, MODULES};
 
-use tracing::{debug, info, trace};
+use tracing::{debug, error, info, trace};
 
 use linkme::distributed_slice;
 use matrix_sdk::{
@@ -72,11 +72,11 @@ fn presence_observer(c: Client, channel: String, url: String) {
                 }
             };
 
-            debug!("fetching spaceapi url: {}", url);
+            trace!("fetching spaceapi url: {}", url);
             let data = match fetch_and_decode_json::<SpaceAPI>(url.to_owned()).await {
                 Ok(d) => d,
                 Err(fe) => {
-                    info!("error fetching data: {fe}");
+                    error!("error fetching data: {fe}");
                     continue;
                 }
             };
