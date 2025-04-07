@@ -260,7 +260,7 @@ async fn due_nag(
 
     if SystemTime::now() > next_nag_time {
         debug!("member not checked recently: {sender_str}");
-        let next_nag_time = SystemTime::now() + Duration::new(10, 0);
+        let next_nag_time = SystemTime::now() + Duration::new(60 * 60 * 24, 0);
 
         if let Err(e) = store
             .set_custom_value_no_read(ev.sender.as_bytes(), naive_systemtime_to_u8(next_nag_time))
