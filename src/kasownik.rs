@@ -55,6 +55,7 @@ fn nag_registrar(c: &Client, config: &Config) {
             }
         };
 
+    // FIXME: accessing config like this can still panic with `index not found`
     let nag_channels: Vec<String> =
         match config.module["kasownik"]["nag_channels"].clone().try_into() {
             Ok(c) => c,
@@ -64,12 +65,25 @@ fn nag_registrar(c: &Client, config: &Config) {
             }
         };
 
+    let nag_late_fees: i64 = match config.module["kasownik"]["nag_late_fees"]
+        .clone()
+        .try_into()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            info!("Couldn't fetch list of nagging channels: {e}");
+            return;
+        }
+    };
+
     if let Err(e) = DUE_NAG_MAP.set(DashMap::new()) {
         error!("couldn't initialize nag map: {:#?}", e);
         return;
     };
 
-    c.add_event_handler(move |ev, room| due_nag(ev, room, url_template_str, nag_channels));
+    c.add_event_handler(move |ev, room| {
+        due_nag(ev, room, url_template_str, nag_channels, nag_late_fees)
+    });
 }
 
 async fn due(ev: OriginalSyncRoomMessageEvent, room: Room, url_template_str: String) {
@@ -199,6 +213,7 @@ async fn due_nag(
     room: Room,
     url_template_str: String,
     nag_channels: Vec<String>,
+    nag_late_fees: i64,
 ) {
     if let Some(alias) = room.canonical_alias() {
         if !nag_channels.iter().any(|x| x == alias.as_str()) {
@@ -272,6 +287,11 @@ async fn due_nag(
     trace!("returned data: {:#?}", data);
 
     if let Some(months) = data.content.as_i64() {
+        if months < nag_late_fees {
+            debug!("too early to nag: {months}");
+            return;
+        };
+
         let period = match months {
             std::i64::MIN..=0 => {
                 return;

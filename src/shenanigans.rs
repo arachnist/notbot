@@ -25,14 +25,14 @@ async fn shenanigans(ev: OriginalSyncRoomMessageEvent, room: Room) {
         return;
     };
 
-    if ! text.body.starts_with(".shenanigans") {
-        return ;
+    if !text.body.starts_with(".shenanigans") {
+        return;
     }
 
     if let Err(se) = room
         .send(RoomMessageEventContent::text_html(
             "!irc this message requires Matrix Gold subscription",
-            "this message requires IRC+ subscription"
+            "this message requires IRC+ subscription",
         ))
         .await
     {
