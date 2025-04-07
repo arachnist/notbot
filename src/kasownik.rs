@@ -32,7 +32,7 @@ fn callback_registrar(c: &Client, config: &Config) {
         match config.module["kasownik"]["url_template"].clone().try_into() {
             Ok(a) => a,
             Err(e) => {
-                info!("Couldn't load url template from configuration: {e}");
+                error!("Couldn't load url template from configuration: {e}");
                 return;
             }
         };
@@ -50,7 +50,7 @@ fn nag_registrar(c: &Client, config: &Config) {
         match config.module["kasownik"]["url_template"].clone().try_into() {
             Ok(a) => a,
             Err(e) => {
-                info!("Couldn't load url template from configuration: {e}");
+                error!("Couldn't load url template from configuration: {e}");
                 return;
             }
         };
@@ -60,7 +60,7 @@ fn nag_registrar(c: &Client, config: &Config) {
         match config.module["kasownik"]["nag_channels"].clone().try_into() {
             Ok(c) => c,
             Err(e) => {
-                info!("Couldn't fetch list of nagging channels: {e}");
+                error!("Couldn't fetch list of nagging channels: {e}");
                 return;
             }
         };
@@ -71,7 +71,7 @@ fn nag_registrar(c: &Client, config: &Config) {
     {
         Ok(c) => c,
         Err(e) => {
-            info!("Couldn't fetch late fees setting: {e}");
+            error!("Couldn't fetch late fees setting: {e}");
             return;
         }
     };

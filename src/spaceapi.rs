@@ -48,7 +48,7 @@ fn presence_observer(c: Client, channel: String, url: String) {
         let alias_id = match RoomAliasId::parse(channel.clone()) {
             Ok(a) => a,
             Err(e) => {
-                info!("couldn't parse room alias: {} {}", channel, e);
+                error!("couldn't parse room alias: {} {}", channel, e);
                 return;
             }
         };
@@ -59,7 +59,7 @@ fn presence_observer(c: Client, channel: String, url: String) {
             let alias_response = match c.resolve_room_alias(&alias_id).await {
                 Ok(r) => r,
                 Err(e) => {
-                    info!("couldn't resolve alias: {} {}", alias_id, e);
+                    error!("couldn't resolve alias: {} {}", alias_id, e);
                     continue;
                 }
             };
@@ -67,7 +67,10 @@ fn presence_observer(c: Client, channel: String, url: String) {
             let room = match c.get_room(&alias_response.room_id) {
                 Some(r) => r,
                 None => {
-                    info!("couldn't get room from room id: {}", alias_response.room_id);
+                    error!(
+                        "couldn't get room from room id: {channel} -> {}",
+                        alias_response.room_id
+                    );
                     continue;
                 }
             };
@@ -131,7 +134,7 @@ fn presence_observer(c: Client, channel: String, url: String) {
                 ))
                 .await
             {
-                info!("couldn't send presence status to room: {} {}", channel, e);
+                error!("couldn't send presence status to room: {} {}", channel, e);
                 continue;
             };
         }

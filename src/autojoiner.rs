@@ -3,7 +3,7 @@ use linkme::distributed_slice;
 use matrix_sdk::{ruma::events::room::member::StrippedRoomMemberEvent, Client, Room};
 
 use tokio::time::{sleep, Duration};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, trace};
 
 use crate::{Config, MODULES};
 
@@ -32,14 +32,15 @@ async fn autojoin_on_invites(
         return;
     }
 
-    debug!("getting homeserver name for room");
+    trace!("getting homeserver name for room");
     let Some(room_homeserver) = &room.room_id().server_name() else {
         return;
     };
 
-    debug!(
+    trace!(
         "checking if invite is for a room on permitted homeserver: {:#?}, {:#?}",
-        &room_homeserver, &homeservers
+        &room_homeserver,
+        &homeservers
     );
     if !homeservers.contains(&room_homeserver.to_string()) {
         return;
@@ -66,6 +67,6 @@ async fn autojoin_on_invites(
                 break;
             }
         }
-        info!("Successfully joined room {}", room.room_id());
+        trace!("Successfully joined room {}", room.room_id());
     });
 }

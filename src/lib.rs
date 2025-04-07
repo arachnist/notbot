@@ -81,14 +81,14 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 
     let mut sync_settings = SyncSettings::default().full_state(false);
     if let Some(sync_token) = initial_sync_token {
-        debug!("initial sync token: {:#?}", &sync_token);
+        trace!("initial sync token: {:#?}", &sync_token);
         sync_settings = sync_settings.token(sync_token);
     }
 
-    debug!("adding config as extra context for callbacks");
+    trace!("adding config as extra context for callbacks");
     client.add_event_handler_context(config.clone());
 
-    info!("performing initial sync");
+    debug!("performing initial sync");
     client.sync_once(SyncSettings::default()).await.unwrap();
 
     client.add_event_handler(on_room_message);
@@ -97,7 +97,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         initializer(&client, &config);
     }
 
-    info!("finished initializing");
+    debug!("finished initializing");
     client
         .sync_with_result_callback(sync_settings, |sync_result| {
             let session_path = session_file.clone();
@@ -133,17 +133,17 @@ async fn restore_session(config: Config) -> anyhow::Result<(Client, Option<Strin
     let db_path = data_dir.join("store.db");
 
     let serialized_session = fs::read_to_string(session_file)?;
-    info!("deserializing session");
+    trace!("deserializing session");
     let session: Session = serde_json::from_str(&serialized_session)?;
 
-    info!("building client");
+    trace!("building client");
     let client = Client::builder()
         .homeserver_url(config.homeserver)
         .sqlite_store(db_path, None)
         .build()
         .await?;
 
-    info!("restoring session");
+    trace!("restoring session");
     client.restore_session(session.user_session).await?;
 
     Ok((client, session.sync_token))
@@ -154,7 +154,7 @@ async fn login(config: Config) -> anyhow::Result<Client> {
     let session_file = data_dir.join("session.json");
     let db_path = data_dir.join("store.db");
 
-    info!("building client");
+    trace!("building client");
     let client = Client::builder()
         .homeserver_url(config.homeserver)
         .sqlite_store(db_path, None)
@@ -162,7 +162,7 @@ async fn login(config: Config) -> anyhow::Result<Client> {
         .await?;
     let auth = client.matrix_auth();
 
-    info!("logging in");
+    trace!("logging in");
     auth.login_username(&config.user_id, &config.password)
         .initial_device_display_name(&config.device_id)
         .await?;
@@ -170,36 +170,28 @@ async fn login(config: Config) -> anyhow::Result<Client> {
         .session()
         .expect("A logged-in client should have a session");
 
-    debug!("serializing session");
+    trace!("serializing session");
     let serialized_session = serde_json::to_string(&Session {
         user_session,
         sync_token: None,
     })?;
 
-    debug!("storing session");
+    trace!("storing session");
     fs::write(session_file, serialized_session)?;
 
     Ok(client)
 }
 
-///// handlers copypasted from examples
-/// Handle room messages.
+///// handler copypasted from examples
+/// log room messages.
 async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room) {
-    // We only want to log text messages in joined rooms.
-    // if room.state() != RoomState::Joined {
-    //    return;
-    // }
     let MessageType::Text(text_content) = &event.content.msgtype else {
         return;
     };
 
-    let room_name = match room.compute_display_name().await {
-        Ok(room_name) => room_name.to_string(),
-        Err(error) => {
-            info!("Error getting room display name: {error}");
-            // Let's fallback to the room ID.
-            room.room_id().to_string()
-        }
+    let room_name = match room.canonical_alias() {
+        Some(a) => a.to_string(),
+        None => room.room_id().to_string()
     };
 
     info!("[{room_name}] {}: {}", event.sender, text_content.body)

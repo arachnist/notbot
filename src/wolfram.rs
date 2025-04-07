@@ -1,6 +1,6 @@
 use crate::{fetch_and_decode_json, Config, MODULES};
 
-use tracing::{info, trace};
+use tracing::{error, info, trace};
 
 use linkme::distributed_slice;
 use matrix_sdk::{
@@ -23,7 +23,7 @@ fn callback_registrar(c: &Client, config: &Config) {
     let app_id = match config.module["wolfram"]["AppID"].clone().try_into() {
         Ok(a) => a,
         Err(_) => {
-            info!("Couldn't load App ID from configuration");
+            error!("Couldn't load App ID from configuration");
             return;
         }
     };
@@ -54,12 +54,12 @@ async fn wolfram_response(ev: OriginalSyncRoomMessageEvent, room: Room, app_id: 
             let data = match fetch_and_decode_json::<WolframAlpha>(url).await {
                 Ok(d) => d,
                 Err(fe) => {
-                    info!("error fetching data: {fe}");
+                    error!("error fetching data: {fe}");
                     if let Err(se) = room
                         .send(RoomMessageEventContent::text_plain("couldn't fetch data"))
                         .await
                     {
-                        info!("error sending response: {se}");
+                        error!("error sending response: {se}");
                     };
                     return;
                 }
@@ -70,7 +70,7 @@ async fn wolfram_response(ev: OriginalSyncRoomMessageEvent, room: Room, app_id: 
                     .send(RoomMessageEventContent::text_plain("no results"))
                     .await
                 {
-                    info!("error sending response: {e}");
+                    error!("error sending response: {e}");
                 };
                 return;
             };
@@ -87,7 +87,7 @@ async fn wolfram_response(ev: OriginalSyncRoomMessageEvent, room: Room, app_id: 
 
             let response = RoomMessageEventContent::text_plain(response_parts.join("\n"));
             if let Err(e) = room.send(response).await {
-                info!("error sending response: {e}");
+                error!("error sending response: {e}");
                 return;
             }
         });
