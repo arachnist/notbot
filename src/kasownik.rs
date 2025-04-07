@@ -1,9 +1,7 @@
 use crate::{fetch_and_decode_json, Config, MODULES};
 
-use std::sync::OnceLock;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use dashmap::DashMap;
 use tracing::{debug, error, info, trace};
 
 use linkme::distributed_slice;
@@ -76,13 +74,15 @@ fn nag_registrar(c: &Client, config: &Config) {
         }
     };
 
-    if let Err(e) = DUE_NAG_MAP.set(DashMap::new()) {
-        error!("couldn't initialize nag map: {:#?}", e);
-        return;
-    };
-
-    c.add_event_handler(move |ev, room| {
-        due_nag(ev, room, url_template_str, nag_channels, nag_late_fees)
+    c.add_event_handler(move |ev, room, client| {
+        due_nag(
+            ev,
+            room,
+            client,
+            url_template_str,
+            nag_channels,
+            nag_late_fees,
+        )
     });
 }
 
@@ -206,11 +206,10 @@ async fn due(ev: OriginalSyncRoomMessageEvent, room: Room, url_template_str: Str
     };
 }
 
-static DUE_NAG_MAP: OnceLock<DashMap<String, SystemTime>> = OnceLock::new();
-
 async fn due_nag(
     ev: OriginalSyncRoomMessageEvent,
     room: Room,
+    c: Client,
     url_template_str: String,
     nag_channels: Vec<String>,
     nag_late_fees: i64,
@@ -223,33 +222,53 @@ async fn due_nag(
         return;
     };
 
-    let nag_map = match DUE_NAG_MAP.get() {
-        Some(m) => m,
-        None => {
-            error!("nag map not initialized, this shouldn't have happened");
+    let sender_str: &str = ev.sender.as_str();
+    let member: String = ev.sender.localpart().to_owned();
+
+    trace!("getting client store");
+    let store = c.store();
+    // let maybe_next_nag_time = store.get_custom_value(ev.sender.as_bytes()).await;
+    let next_nag_time = match store.get_custom_value(ev.sender.as_bytes()).await {
+        Ok(maybe_result) => {
+            let maybe_nag_time = match maybe_result {
+                None => {
+                    let nag_time = SystemTime::now() - Duration::new(60 * 60 * 24, 0);
+                    let nag_time_bytes = naive_systemtime_to_u8(nag_time);
+
+                    if let Err(e) = store
+                        .set_custom_value_no_read(ev.sender.as_bytes(), nag_time_bytes)
+                        .await
+                    {
+                        error!("error setting nag time value for the first time: {e}");
+                        return;
+                    };
+
+                    nag_time
+                }
+                Some(nag_time_bytes) => naive_u8_to_systemtime(nag_time_bytes),
+            };
+
+            maybe_nag_time
+        }
+        Err(e) => {
+            error!("error fetching nag time: {e}");
             return;
         }
     };
 
-    let sender_str: &str = ev.sender.as_str();
-    let member: String = ev.sender.localpart().to_owned();
-
-    let next_nag_time = if nag_map.contains_key(sender_str) {
-        trace!("nag map knows {sender_str}");
-        *nag_map.get(sender_str).unwrap().value()
-    } else {
-        trace!("nag map doesn't know {sender_str}");
-        let nag_time = SystemTime::now() - Duration::new(60 * 60 * 24, 0);
-        nag_map.insert(sender_str.to_owned(), nag_time);
-
-        nag_time
-    };
+    trace!("next_nag_time: {:#?}", next_nag_time);
 
     if SystemTime::now() > next_nag_time {
         debug!("member not checked recently: {sender_str}");
-        nag_map.alter(sender_str, |_, _| {
-            SystemTime::now() + Duration::new(60 * 60 * 24, 0)
-        });
+        let next_nag_time = SystemTime::now() + Duration::new(10, 0);
+
+        if let Err(e) = store
+            .set_custom_value_no_read(ev.sender.as_bytes(), naive_systemtime_to_u8(next_nag_time))
+            .await
+        {
+            error!("error setting nag time value for the first time: {e}");
+            return;
+        };
     } else {
         debug!("member checked recently, ignoring: {sender_str}");
         return;
@@ -329,6 +348,41 @@ async fn due_nag(
             error!("error sending message: {e}")
         }
     }
+}
+
+fn naive_u8_to_systemtime(v: Vec<u8>) -> SystemTime {
+    let boxed_v: Box<[u8; 8]> = match v.try_into() {
+        Ok(ba) => ba,
+        Err(e) => {
+            error!("error while converting vec to array: {:#?}", e);
+            Box::new([0u8; 8])
+        }
+    };
+    let d_secs: u64 = u64::from_le_bytes(*boxed_v);
+    let d: Duration = Duration::from_secs(d_secs);
+    let st: SystemTime = match UNIX_EPOCH.checked_add(d) {
+        Some(t) => t,
+        None => {
+            error!("couldn't add duration to epoch: {:#?}", d);
+            SystemTime::now()
+        }
+    };
+
+    st
+}
+
+fn naive_systemtime_to_u8(s: SystemTime) -> Vec<u8> {
+    let d: Duration = match s.duration_since(UNIX_EPOCH) {
+        Ok(d) => d,
+        Err(e) => {
+            error!("error while calculating time difference: {e}");
+            Duration::from_secs(0)
+        }
+    };
+
+    let d_secs = d.as_secs();
+
+    d_secs.to_le_bytes().to_vec()
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Deserialize)]
