@@ -1,6 +1,6 @@
-use crate::{fetch_and_decode_json, Config, MODULES};
+use crate::{fetch_and_decode_json, notbottime::NotBotTime, Config, MODULES};
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 
 use tracing::{debug, error, info, trace};
 
@@ -232,8 +232,8 @@ async fn due_nag(
         Ok(maybe_result) => {
             let maybe_nag_time = match maybe_result {
                 None => {
-                    let nag_time = SystemTime::now() - Duration::new(60 * 60 * 24, 0);
-                    let nag_time_bytes = naive_systemtime_to_u8(nag_time);
+                    let nag_time = NotBotTime(SystemTime::now() - Duration::new(60 * 60 * 24, 0));
+                    let nag_time_bytes: Vec<u8> = nag_time.into();
 
                     if let Err(e) = store
                         .set_custom_value_no_read(ev.sender.as_bytes(), nag_time_bytes)
@@ -245,7 +245,7 @@ async fn due_nag(
 
                     nag_time
                 }
-                Some(nag_time_bytes) => naive_u8_to_systemtime(nag_time_bytes),
+                Some(nag_time_bytes) => nag_time_bytes.into(),
             };
 
             maybe_nag_time
@@ -258,12 +258,12 @@ async fn due_nag(
 
     trace!("next_nag_time: {:#?}", next_nag_time);
 
-    if SystemTime::now() > next_nag_time {
+    if NotBotTime::now() > next_nag_time {
         debug!("member not checked recently: {sender_str}");
-        let next_nag_time = SystemTime::now() + Duration::new(60 * 60 * 24, 0);
+        let next_nag_time = NotBotTime(SystemTime::now() + Duration::new(60 * 60 * 24, 0));
 
         if let Err(e) = store
-            .set_custom_value_no_read(ev.sender.as_bytes(), naive_systemtime_to_u8(next_nag_time))
+            .set_custom_value_no_read(ev.sender.as_bytes(), next_nag_time.into())
             .await
         {
             error!("error setting nag time value for the first time: {e}");
@@ -348,41 +348,6 @@ async fn due_nag(
             error!("error sending message: {e}")
         }
     }
-}
-
-fn naive_u8_to_systemtime(v: Vec<u8>) -> SystemTime {
-    let boxed_v: Box<[u8; 8]> = match v.try_into() {
-        Ok(ba) => ba,
-        Err(e) => {
-            error!("error while converting vec to array: {:#?}", e);
-            Box::new([0u8; 8])
-        }
-    };
-    let d_secs: u64 = u64::from_le_bytes(*boxed_v);
-    let d: Duration = Duration::from_secs(d_secs);
-    let st: SystemTime = match UNIX_EPOCH.checked_add(d) {
-        Some(t) => t,
-        None => {
-            error!("couldn't add duration to epoch: {:#?}", d);
-            SystemTime::now()
-        }
-    };
-
-    st
-}
-
-fn naive_systemtime_to_u8(s: SystemTime) -> Vec<u8> {
-    let d: Duration = match s.duration_since(UNIX_EPOCH) {
-        Ok(d) => d,
-        Err(e) => {
-            error!("error while calculating time difference: {e}");
-            Duration::from_secs(0)
-        }
-    };
-
-    let d_secs = d.as_secs();
-
-    d_secs.to_le_bytes().to_vec()
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Deserialize)]
