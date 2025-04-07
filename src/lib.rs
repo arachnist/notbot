@@ -5,7 +5,7 @@ mod spaceapi;
 mod wolfram;
 
 use anyhow::{anyhow, Context};
-use tracing::{debug, info, trace};
+use tracing::{debug, error, info, trace};
 
 use serde::{de, Deserialize, Serialize};
 
@@ -102,9 +102,14 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         .sync_with_result_callback(sync_settings, |sync_result| {
             let session_path = session_file.clone();
             async move {
-                let response = sync_result?;
-
-                trace!("sync response: {:#?}", &response);
+                trace!("sync response: {:#?}", &sync_result);
+                let response = match sync_result {
+                    Ok(r) => r,
+                    Err(e) => {
+                        error!("sync failed: {e}");
+                        return Ok(LoopCtrl::Continue);
+                    }
+                };
 
                 persist_sync_token(&session_path, response.next_batch)
                     .await
@@ -191,7 +196,7 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room) {
 
     let room_name = match room.canonical_alias() {
         Some(a) => a.to_string(),
-        None => room.room_id().to_string()
+        None => room.room_id().to_string(),
     };
 
     info!("[{room_name}] {}: {}", event.sender, text_content.body)
