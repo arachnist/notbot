@@ -113,7 +113,7 @@ async fn due(ev: OriginalSyncRoomMessageEvent, room: Room, url_template_str: Str
     let url_template = match Template::parse(&url_template_str) {
         Ok(t) => t,
         Err(e) => {
-            info!("Couldn't parse url template: {e}");
+            error!("Couldn't parse url template: {e}");
             return;
         }
     };
@@ -127,7 +127,7 @@ async fn due(ev: OriginalSyncRoomMessageEvent, room: Room, url_template_str: Str
     })) {
         Ok(u) => u,
         Err(e) => {
-            info!("error rendering url template: {e}");
+            error!("error rendering url template: {e}");
             return;
         }
     };
@@ -136,12 +136,12 @@ async fn due(ev: OriginalSyncRoomMessageEvent, room: Room, url_template_str: Str
     let response = match client.get(url).send().await {
         Ok(r) => r,
         Err(fe) => {
-            info!("error fetching data: {fe}");
+            error!("error fetching data: {fe}");
             if let Err(se) = room
                 .send(RoomMessageEventContent::text_plain("couldn't fetch data"))
                 .await
             {
-                info!("error sending response: {se}");
+                error!("error sending response: {se}");
             };
             return;
         }
@@ -194,7 +194,7 @@ async fn due(ev: OriginalSyncRoomMessageEvent, room: Room, url_template_str: Str
                 .send(RoomMessageEventContent::text_plain(response))
                 .await
             {
-                info!("error sending response: {se}");
+                error!("error sending response: {se}");
             };
             return;
         }

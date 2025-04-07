@@ -179,12 +179,12 @@ async fn at_response(
             let data = match fetch_and_decode_json::<SpaceAPI>(url.to_owned()).await {
                 Ok(d) => d,
                 Err(fe) => {
-                    info!("error fetching data: {fe}");
+                    error!("error fetching data: {fe}");
                     if let Err(se) = room
                         .send(RoomMessageEventContent::text_plain("couldn't fetch data"))
                         .await
                     {
-                        info!("error sending response: {se}");
+                        error!("error sending response: {se}");
                     };
                     return;
                 }
