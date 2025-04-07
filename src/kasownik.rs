@@ -71,7 +71,7 @@ fn nag_registrar(c: &Client, config: &Config) {
     {
         Ok(c) => c,
         Err(e) => {
-            info!("Couldn't fetch list of nagging channels: {e}");
+            info!("Couldn't fetch late fees setting: {e}");
             return;
         }
     };
