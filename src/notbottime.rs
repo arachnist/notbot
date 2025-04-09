@@ -1,12 +1,16 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, SystemTimeError, UNIX_EPOCH};
 
 #[derive(Debug, Copy, Clone, PartialEq, PartialOrd)]
-pub struct NotBotTime(pub SystemTime);
-const NOTBOT_EPOCH: NotBotTime = NotBotTime(UNIX_EPOCH);
+pub(crate) struct NotBotTime(pub SystemTime);
+pub(crate) const NOTBOT_EPOCH: NotBotTime = NotBotTime(UNIX_EPOCH);
 
 impl NotBotTime {
-    pub fn now() -> Self {
+    pub(crate) fn now() -> Self {
         NotBotTime(SystemTime::now())
+    }
+
+    pub(crate) fn duration_since(&self, earlier: NotBotTime) -> Result<Duration, SystemTimeError> {
+        self.0.duration_since(earlier.0)
     }
 }
 
@@ -29,7 +33,7 @@ impl From<Vec<u8>> for NotBotTime {
 
 impl From<NotBotTime> for Vec<u8> {
     fn from(s: NotBotTime) -> Vec<u8> {
-        let d: Duration = match s.0.duration_since(UNIX_EPOCH) {
+        let d: Duration = match s.duration_since(NOTBOT_EPOCH) {
             Ok(d) => d,
             Err(_) => Duration::from_secs(0),
         };
