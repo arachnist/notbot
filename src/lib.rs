@@ -1,4 +1,5 @@
 mod autojoiner;
+mod inviter;
 mod kasownik;
 mod notbottime;
 mod shenanigans;
