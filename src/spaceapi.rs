@@ -159,7 +159,7 @@ async fn at_response(
     trace!("checking if message starts with .at: {:#?}", text.body);
     if text.body.trim().starts_with(".at") {
         tokio::spawn(async move {
-            let room_name = match room.compute_display_name().await {
+            let room_name = match room.display_name().await {
                 Ok(room_name) => room_name.to_string(),
                 Err(error) => {
                     debug!("error getting room display name: {error}");

@@ -226,7 +226,7 @@ async fn due_nag(
     let member: String = ev.sender.localpart().to_owned();
 
     trace!("getting client store");
-    let store = c.store();
+    let store = c.state_store();
     // let maybe_next_nag_time = store.get_custom_value(ev.sender.as_bytes()).await;
     let next_nag_time = match store.get_custom_value(ev.sender.as_bytes()).await {
         Ok(maybe_result) => {

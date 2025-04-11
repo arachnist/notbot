@@ -12,8 +12,8 @@ use tracing::{debug, error, info, trace};
 use serde::{de, Deserialize, Serialize};
 
 use matrix_sdk::{
+    authentication::matrix::MatrixSession,
     config::SyncSettings,
-    matrix_auth::MatrixSession,
     ruma::events::room::message::{MessageType, OriginalSyncRoomMessageEvent},
     Client, Error, LoopCtrl, Room,
 };
