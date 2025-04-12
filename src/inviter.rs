@@ -9,6 +9,7 @@ use tracing::{error, info, trace};
 
 use linkme::distributed_slice;
 use matrix_sdk::{
+    event_handler::EventHandlerHandle,
     ruma::{
         events::{
             reaction::OriginalSyncReactionEvent,
@@ -110,8 +111,8 @@ async fn inviter_listener(
     let evsender = ev.sender.clone();
 
     trace!("adding reaction event handler for current event");
-    client.add_event_handler(move |ev, room, client| {
-        reaction_listener(ev, room, client, config, evid, evsender)
+    client.add_event_handler(move |ev, room, client, handle| {
+        reaction_listener(ev, room, client, handle, config, evid, evsender)
     });
 
     return;
@@ -121,6 +122,7 @@ async fn reaction_listener(
     ev: OriginalSyncReactionEvent,
     room: Room,
     client: Client,
+    handle: EventHandlerHandle,
     config: InviterConfig,
     orig_ev_id: OwnedEventId,
     orig_ev_sender: OwnedUserId,
@@ -137,17 +139,14 @@ async fn reaction_listener(
         return;
     }
 
-    if let Err(e) = inviter(client, orig_ev_sender.clone(), config.invite_to).await {
-        error!("sending invites failed: {}", e);
-        if let Err(se) = room
-            .send(RoomMessageEventContent::text_plain(format!(
-                "sorry, sending invites failed: {}",
-                e
-            )))
-            .await
-        {
-            error!("sending error notification failed: {}", se);
-        };
+    client.remove_event_handler(handle);
+
+    let note = match inviter(client, orig_ev_sender.clone(), config.invite_to).await {
+        Err(e) => {
+            error!("sending invites failed: {}", e);
+            ", but sending invites may have failed. ask staff for help"
+        },
+        _ => ""
     };
 
     let requester_display_name: String = match room.get_member(&orig_ev_sender).await {
@@ -159,10 +158,10 @@ async fn reaction_listener(
     };
 
     let plain_message =
-        format!(r#"{requester_display_name}: your invitation request has been approved"#,);
+        format!(r#"{requester_display_name}: your invitation request has been approved{note}"#,);
 
     let html_message = format!(
-        r#"<a href="{uri}">{requester_display_name}</a>: your invitation request has been approved"#,
+        r#"<a href="{uri}">{requester_display_name}</a>: your invitation request has been approved{note}"#,
         uri = orig_ev_sender.matrix_to_uri(),
     );
 
