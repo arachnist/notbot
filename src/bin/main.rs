@@ -1,15 +1,17 @@
-use notbot::Config;
+use notbot::BotManager;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
-    let config_path = std::env::args().nth(1);
+
+    let config_path: String = std::env::args().nth(1).expect("no config path provided");
 
     tracing::trace!("provided config: {:#?}", config_path);
-    let config: Config = config_path.try_into()?;
+    let notbot = BotManager::new(config_path)
+        .await
+        .expect("initialization failed");
 
-    tracing::trace!("parsed config as:\n{:#?}", config);
+    notbot.run().await.expect("critical error occured");
 
-    tracing::info!("creating bot for {0}", config.user_id());
-    notbot::run(config).await
+    Ok(())
 }

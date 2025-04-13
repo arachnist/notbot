@@ -2,7 +2,7 @@ use std::time::{Duration, SystemTime};
 
 use crate::{
     notbottime::{NotBotTime, NOTBOT_EPOCH},
-    Config, MODULES,
+    Config, ModuleStarter, MODULE_STARTERS,
 };
 
 use tracing::{error, info, trace};
@@ -23,21 +23,14 @@ use matrix_sdk::{
 
 use serde_derive::Deserialize;
 
-#[distributed_slice(MODULES)]
-static INVITER: fn(&Client, &Config) = callback_registrar;
+#[distributed_slice(MODULE_STARTERS)]
+static INVITER_STARTER: ModuleStarter = ("inviter", inviter_starter);
 
-fn callback_registrar(c: &Client, config: &Config) {
-    info!("registering inviter");
-
-    let inviter_config: InviterConfig = match config.module["inviter"].clone().try_into() {
-        Ok(a) => a,
-        Err(e) => {
-            error!("Couldn't load inviter config: {e}");
-            return;
-        }
-    };
-
-    c.add_event_handler(move |ev, room, client| inviter_listener(ev, room, client, inviter_config));
+fn inviter_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
+    let inviter_config: InviterConfig = config.module_config_value("inviter")?.try_into()?;
+    Ok(client.add_event_handler(move |ev, room, client| {
+        inviter_listener(ev, room, client, inviter_config)
+    }))
 }
 
 async fn inviter_listener(
@@ -145,8 +138,8 @@ async fn reaction_listener(
         Err(e) => {
             error!("sending invites failed: {}", e);
             ", but sending invites may have failed. ask staff for help"
-        },
-        _ => ""
+        }
+        _ => "",
     };
 
     let requester_display_name: String = match room.get_member(&orig_ev_sender).await {
@@ -202,4 +195,11 @@ pub struct InviterConfig {
     pub approvers: Vec<String>,
     pub homeservers_blanket_allow: Vec<String>,
     pub invite_to: Vec<String>,
+}
+
+impl TryFrom<toml::Value> for InviterConfig {
+    type Error = crate::config::ConfigError;
+    fn try_from(v: toml::Value) -> Result<Self, Self::Error> {
+        Ok(v.try_into::<InviterConfig>()?)
+    }
 }
