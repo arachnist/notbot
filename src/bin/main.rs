@@ -6,10 +6,10 @@ async fn main() -> anyhow::Result<()> {
     let config_path = std::env::args().nth(1);
 
     tracing::trace!("provided config: {:#?}", config_path);
-    let config = Config::from_path(config_path)?;
+    let config: Config = config_path.try_into()?;
 
     tracing::trace!("parsed config as:\n{:#?}", config);
 
-    tracing::info!("creating bot for {0}", config.user_id);
+    tracing::info!("creating bot for {0}", config.user_id());
     notbot::run(config).await
 }

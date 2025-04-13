@@ -1,10 +1,11 @@
-mod autojoiner;
-mod inviter;
-mod kasownik;
-mod notbottime;
-mod shenanigans;
-mod spaceapi;
-mod wolfram;
+// mod autojoiner;
+// mod inviter;
+// mod kasownik;
+// mod notbottime;
+// mod pluginmanager;
+// mod shenanigans;
+// mod spaceapi;
+// mod wolfram;
 
 use anyhow::{anyhow, Context};
 use tracing::{debug, error, info, trace};
@@ -20,7 +21,16 @@ use matrix_sdk::{
 
 use reqwest::Client as RClient;
 
-use std::{fs, future::Future, path::Path, pin::Pin};
+use core::{error::Error as StdError, fmt};
+use std::{
+    convert::TryFrom,
+    fs,
+    future::Future,
+    io,
+    path::Path,
+    pin::Pin,
+    sync::{Arc, Mutex},
+};
 use toml::Table;
 
 use linkme::distributed_slice;
@@ -43,35 +53,119 @@ struct Session {
     sync_token: Option<String>,
 }
 
+#[derive(Debug)]
+pub enum ConfigError {
+    Io(std::io::Error),
+    Parse(toml::de::Error),
+    NoPath(&'static str),
+}
+
+impl StdError for ConfigError {}
+
+impl From<io::Error> for ConfigError {
+    fn from(e: io::Error) -> Self {
+        ConfigError::Io(e)
+    }
+}
+
+impl From<toml::de::Error> for ConfigError {
+    fn from(e: toml::de::Error) -> Self {
+        ConfigError::Parse(e)
+    }
+}
+
+impl fmt::Display for ConfigError {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ConfigError::Io(e) => write!(fmt, "IO error: {}", e),
+            ConfigError::Parse(e) => write!(fmt, "parsing error: {}", e),
+            ConfigError::NoPath(e) => write!(fmt, "No config path provided: {}", e),
+        }
+    }
+}
+
 #[derive(Deserialize, Debug, Clone)]
+pub(crate) struct ConfigInner {
+    pub(crate) homeserver: String,
+    pub(crate) user_id: String,
+    pub(crate) password: String,
+    pub(crate) data_dir: String,
+    pub(crate) device_id: String,
+    #[allow(dead_code)]
+    pub(crate) module: Table,
+}
+
+impl TryFrom<String> for ConfigInner {
+    type Error = ConfigError;
+    fn try_from(path: String) -> Result<Self, Self::Error> {
+        let config_content = fs::read_to_string(&path)?;
+        Ok(toml::from_str::<ConfigInner>(&config_content)?)
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Config {
-    pub homeserver: String,
-    pub user_id: String,
-    pub password: String,
-    pub data_dir: String,
-    pub device_id: String,
-    pub module: Table,
+    inner: Arc<Mutex<ConfigInner>>,
+}
+
+impl TryFrom<String> for Config {
+    type Error = ConfigError;
+    fn try_from(path: String) -> Result<Self, Self::Error> {
+        Ok(Config {
+            inner: Arc::new(Mutex::new(path.try_into()?)),
+        })
+    }
+}
+
+impl TryFrom<Option<String>> for Config {
+    type Error = ConfigError;
+    fn try_from(maybe_path: Option<String>) -> Result<Self, Self::Error> {
+        let path = match maybe_path {
+            Some(p) => p,
+            None => return Err(ConfigError::NoPath("no path provided")),
+        };
+
+        Ok(path.try_into()?)
+    }
 }
 
 impl Config {
-    pub fn from_path(path: Option<String>) -> anyhow::Result<Self, anyhow::Error> {
-        let config_path = match path {
-            Some(s) => s,
-            None => return Err(anyhow!("configuration path not provided")),
-        };
+    #[allow(dead_code)]
+    pub fn reload(mut self, path: String) -> anyhow::Result<Config> {
+        let new_cfg = Arc::new(Mutex::new(TryInto::<ConfigInner>::try_into(path)?));
+        self.inner = new_cfg;
+        Ok(self)
+    }
 
-        let config_content =
-            fs::read_to_string(&config_path).context("couldn't read config file")?;
-        let config: Config =
-            toml::from_str(&config_content).context("couldn't parse config file")?;
+    pub fn homeserver(&self) -> String {
+        let inner = &self.inner.lock().unwrap();
+        inner.homeserver.clone()
+    }
 
-        info!("using config: {config_path}");
-        Ok(config)
+    pub fn user_id(&self) -> String {
+        let inner = &self.inner.lock().unwrap();
+        inner.user_id.clone()
+    }
+
+    pub fn password(&self) -> String {
+        let inner = &self.inner.lock().unwrap();
+        inner.password.clone()
+    }
+
+    pub fn data_dir(&self) -> String {
+        let inner = &self.inner.lock().unwrap();
+        inner.data_dir.clone()
+    }
+
+    pub fn device_id(&self) -> String {
+        let inner = &self.inner.lock().unwrap();
+        inner.device_id.clone()
     }
 }
 
 pub async fn run(config: Config) -> anyhow::Result<()> {
-    let data_dir = Path::new(&config.data_dir);
+    let data_dir_str = &config.data_dir();
+    let data_dir = Path::new(&data_dir_str);
     let session_file = data_dir.join("session.json");
     let (client, initial_sync_token) = if session_file.exists() {
         info!("previous session found, attempting restore");
@@ -135,7 +229,8 @@ async fn persist_sync_token(session_file: &Path, sync_token: String) -> anyhow::
 }
 
 async fn restore_session(config: Config) -> anyhow::Result<(Client, Option<String>)> {
-    let data_dir = Path::new(&config.data_dir);
+    let data_dir_str = &config.data_dir();
+    let data_dir = Path::new(&data_dir_str);
     let session_file = data_dir.join("session.json");
     let db_path = data_dir.join("store.db");
 
@@ -145,7 +240,7 @@ async fn restore_session(config: Config) -> anyhow::Result<(Client, Option<Strin
 
     trace!("building client");
     let client = Client::builder()
-        .homeserver_url(config.homeserver)
+        .homeserver_url(config.homeserver())
         .sqlite_store(db_path, None)
         .build()
         .await?;
@@ -157,21 +252,22 @@ async fn restore_session(config: Config) -> anyhow::Result<(Client, Option<Strin
 }
 
 async fn login(config: Config) -> anyhow::Result<Client> {
-    let data_dir = Path::new(&config.data_dir);
+    let data_dir_str = &config.data_dir();
+    let data_dir = Path::new(&data_dir_str);
     let session_file = data_dir.join("session.json");
     let db_path = data_dir.join("store.db");
 
     trace!("building client");
     let client = Client::builder()
-        .homeserver_url(config.homeserver)
+        .homeserver_url(config.homeserver())
         .sqlite_store(db_path, None)
         .build()
         .await?;
     let auth = client.matrix_auth();
 
     trace!("logging in");
-    auth.login_username(&config.user_id, &config.password)
-        .initial_device_display_name(&config.device_id)
+    auth.login_username(&config.user_id(), &config.password())
+        .initial_device_display_name(&config.device_id())
         .await?;
     let user_session = auth
         .session()
