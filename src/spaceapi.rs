@@ -1,14 +1,18 @@
-use crate::{fetch_and_decode_json, Config, MODULES};
+use crate::{
+    fetch_and_decode_json, Config, ModuleStarter, WorkerStarter, MODULE_STARTERS, WORKERS,
+};
 
-use tracing::{debug, error, info, trace};
+use tokio::task::AbortHandle;
+use tracing::{debug, error, trace};
 
 use linkme::distributed_slice;
 use matrix_sdk::{
+    event_handler::EventHandlerHandle,
     ruma::{
         events::room::message::{
             MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
         },
-        RoomAliasId,
+        OwnedRoomAliasId, OwnedRoomId,
     },
     Client, Room, RoomState,
 };
@@ -17,65 +21,46 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use tokio::time::{interval, Duration};
 
-#[distributed_slice(MODULES)]
-static SPACEAPI: fn(&Client, &Config) = callback_registrar;
+#[distributed_slice(MODULE_STARTERS)]
+static MODULE_STARTER: ModuleStarter = (module_path!(), module_starter);
 
-fn callback_registrar(c: &Client, config: &Config) {
-    info!("registering spaceapi");
-
-    let at_channel_map: HashMap<String, String> = config.module["checkinator"]["Channels"]
-        .clone()
-        .try_into()
-        .expect("checkinator channel map needs to be defined");
-    c.add_event_handler(move |ev, room| at_response(ev, room, at_channel_map));
-
-    let presence_channel_map: HashMap<String, String> = config.module["presence"]["Channels"]
-        .clone()
-        .try_into()
-        .expect("presence channel map needs to be defined");
-
-    for (channel, url) in presence_channel_map.into_iter() {
-        presence_observer(c.clone(), channel, url);
-    }
+fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
+    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+    Ok(client.add_event_handler(move |ev, room| module_entrypoint(ev, room, module_config)))
 }
 
-fn presence_observer(c: Client, channel: String, url: String) {
-    let _ = tokio::task::spawn(async move {
-        let mut interval = interval(Duration::from_secs(30));
-        let mut present: Vec<String> = vec![];
-        let mut first_loop: bool = true;
+#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+pub struct ModuleConfig {
+    room_map: HashMap<String, String>,
+    presence_map: HashMap<String, Vec<String>>,
+    presence_interval: u64,
+}
 
-        let alias_id = match RoomAliasId::parse(channel.clone()) {
-            Ok(a) => a,
-            Err(e) => {
-                error!("couldn't parse room alias: {} {}", channel, e);
-                return;
-            }
-        };
+#[distributed_slice(WORKERS)]
+static WORKER_STARTER: WorkerStarter = (module_path!(), worker_starter);
 
-        loop {
-            interval.tick().await;
+fn worker_starter(client: &Client, config: &Config) -> anyhow::Result<AbortHandle> {
+    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+    let worker = tokio::task::spawn(presence_observer(client.clone(), module_config));
+    Ok(worker.abort_handle())
+}
 
-            let alias_response = match c.resolve_room_alias(&alias_id).await {
-                Ok(r) => r,
-                Err(e) => {
-                    error!("couldn't resolve alias: {} {}", alias_id, e);
-                    continue;
-                }
-            };
+async fn presence_observer(client: Client, module_config: ModuleConfig) {
+    // let  = tokio::task::spawn(async move {
+    let mut interval = interval(Duration::from_secs(module_config.presence_interval));
+    let mut present: HashMap<String, Vec<String>> = Default::default();
+    let mut first_loop: HashMap<String, bool> = Default::default();
 
-            let room = match c.get_room(&alias_response.room_id) {
-                Some(r) => r,
-                None => {
-                    error!(
-                        "couldn't get room from room id: {channel} -> {}",
-                        alias_response.room_id
-                    );
-                    continue;
-                }
-            };
+    for (url, _) in &module_config.presence_map {
+        present.insert(url.clone(), vec![]);
+        first_loop.insert(url.clone(), true);
+    }
 
-            trace!("fetching spaceapi url: {}", url);
+    loop {
+        interval.tick().await;
+
+        for (url, rooms) in &module_config.presence_map {
+            debug!("fetching spaceapi url: {}", url);
             let data = match fetch_and_decode_json::<SpaceAPI>(url.to_owned()).await {
                 Ok(d) => d,
                 Err(fe) => {
@@ -90,12 +75,12 @@ fn presence_observer(c: Client, channel: String, url: String) {
             let mut also_there: Vec<String> = vec![];
 
             for name in &current {
-                if !present.contains(&name) {
+                if !present[url].contains(&name) {
                     arrived.push(name.clone());
                 };
             }
 
-            for name in &present {
+            for name in &present[url] {
                 if current.contains(&name) {
                     also_there.push(name.clone());
                 } else {
@@ -103,10 +88,10 @@ fn presence_observer(c: Client, channel: String, url: String) {
                 };
             }
 
-            present = current;
+            present.insert(url.clone(), current);
 
-            if first_loop {
-                first_loop = false;
+            if first_loop[url] {
+                first_loop.insert(url.clone(), false);
                 continue;
             }
 
@@ -128,81 +113,103 @@ fn presence_observer(c: Client, channel: String, url: String) {
                 continue;
             };
 
-            if let Err(e) = room
-                .send(RoomMessageEventContent::notice_plain(
-                    response_parts.join(", "),
-                ))
-                .await
-            {
-                error!("couldn't send presence status to room: {} {}", channel, e);
-                continue;
-            };
+            let response = RoomMessageEventContent::notice_plain(response_parts.join(", "));
+            for maybe_room in rooms {
+                let room_id: OwnedRoomId = match maybe_room.clone().try_into() {
+                    Ok(r) => r,
+                    Err(_) => {
+                        let alias_id = match OwnedRoomAliasId::try_from(maybe_room.clone()) {
+                            Ok(a) => a,
+                            Err(_) => {
+                                error!("couldn't parse room name: {}", maybe_room);
+                                continue;
+                            }
+                        };
+
+                        match client.resolve_room_alias(&alias_id).await {
+                            Err(e) => {
+                                error!("couldn't resolve room alias: {e}");
+                                continue;
+                            }
+                            Ok(r) => r.room_id,
+                        }
+                    }
+                };
+
+                let room = match client.get_room(&room_id) {
+                    Some(r) => r,
+                    None => continue,
+                };
+
+                if let Err(e) = room.send(response.clone()).await {
+                    error!("error while sending presence update: {e}");
+                };
+            }
         }
-    });
+    }
 }
 
-async fn at_response(
+async fn module_entrypoint(
     ev: OriginalSyncRoomMessageEvent,
     room: Room,
-    channel_map: HashMap<String, String>,
-) {
+    module_config: ModuleConfig,
+) -> anyhow::Result<()> {
     trace!("in at_response");
     if room.state() != RoomState::Joined {
-        return;
+        return Ok(());
     }
 
     trace!("checking message type");
     let MessageType::Text(text) = ev.content.msgtype else {
-        return;
+        return Ok(());
     };
 
     trace!("checking if message starts with .at: {:#?}", text.body);
     if text.body.trim().starts_with(".at") {
-        tokio::spawn(async move {
-            let room_name = match room.display_name().await {
-                Ok(room_name) => room_name.to_string(),
-                Err(error) => {
-                    debug!("error getting room display name: {error}");
-                    // Let's fallback to the room ID.
-                    room.room_id().to_string()
+        let room_name = match room.canonical_alias() {
+            Some(name) => name.to_string(),
+            None => room.room_id().to_string(),
+        };
+
+        let url = match module_config.room_map.get(&room_name) {
+            Some(url) => url,
+            None => {
+                debug!("no spaceapi url found, using default");
+                match module_config.room_map.get("default") {
+                    None => return Ok(()),
+                    Some(u) => u,
                 }
-            };
+            }
+        };
 
-            let url = match channel_map.get(&room_name) {
-                Some(url) => url,
-                None => {
-                    debug!("no spaceapi url found, using default");
-                    channel_map.get("default").unwrap()
-                }
-            };
+        let data = match fetch_and_decode_json::<SpaceAPI>(url.to_owned()).await {
+            Ok(d) => d,
+            Err(fe) => {
+                error!("error fetching data: {fe}");
+                if let Err(se) = room
+                    .send(RoomMessageEventContent::text_plain("couldn't fetch data"))
+                    .await
+                {
+                    error!("error sending response: {se}");
+                };
+                return Ok(());
+            }
+        };
 
-            let data = match fetch_and_decode_json::<SpaceAPI>(url.to_owned()).await {
-                Ok(d) => d,
-                Err(fe) => {
-                    error!("error fetching data: {fe}");
-                    if let Err(se) = room
-                        .send(RoomMessageEventContent::text_plain("couldn't fetch data"))
-                        .await
-                    {
-                        error!("error sending response: {se}");
-                    };
-                    return;
-                }
-            };
+        let present: Vec<String> = names_dehighlighted(data.sensors.people_now_present);
 
-            let present: Vec<String> = names_dehighlighted(data.sensors.people_now_present);
+        debug!("present: {:#?}", present);
 
-            debug!("present: {:#?}", present);
+        let response = if present.len() > 0 {
+            RoomMessageEventContent::text_plain(present.join(", "))
+        } else {
+            RoomMessageEventContent::text_plain("Nikdo není doma...")
+        };
 
-            let response = if present.len() > 0 {
-                RoomMessageEventContent::text_plain(present.join(", "))
-            } else {
-                RoomMessageEventContent::text_plain("Nikdo není doma...")
-            };
-
-            room.send(response).await.unwrap();
-        });
+        room.send(response).await?;
     };
+
+    Ok(())
 }
 
 fn names_dehighlighted(present: Vec<PeopleNowPresent>) -> Vec<String> {

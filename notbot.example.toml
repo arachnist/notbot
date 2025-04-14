@@ -1,0 +1,58 @@
+homeserver = "https://is-a.cat"
+user_id = "@notbot-test:is-a.cat"
+password = "…"
+device_id = "silly-rust-bot"
+data_dir = "./.notbot-data"
+
+[module.reloader]
+admins = [
+    "@ar:is-a.cat"
+]
+
+[module."notbot::wolfram"]
+app_id = "…"
+
+[module."notbot::spaceapi"]
+presence_interval = 3
+
+[module."notbot::spaceapi".presence_map]
+"https://hackerspace.pl/spaceapi" = [
+    "#members:hackerspace.pl",
+    "#notbot-test-private-room:is-a.cat",
+    "#bottest:is-a.cat"
+]
+
+[module."notbot::spaceapi".room_map]
+"default" = "https://hackerspace.pl/spaceapi"
+"#members" = "https://hackerspace.pl/spaceapi"
+"#gimbaza" = "https://hackerspace.pl/spaceapi"
+"#bottest" = "https://hackerspace.pl/spaceapi"
+
+[module."notbot::kasownik"]
+url_template = "https://kasownik.hackerspace.pl/api/months_due/{ member }.json"
+nag_channels = [
+    "#bottest:is-a.cat",
+    "#members:hackerspace.pl",
+    "#notbot-test-private-room:is-a.cat"
+]
+nag_late_fees = 0
+
+[module."notbot::inviter"]
+requests = "#general:hackerspace.pl"
+confirmations = "#members:hackerspace.pl"
+approvers = [
+    "@ar:is-a.cat"
+]
+homeservers_blanket_allow = [
+    "hackerspace.pl"
+]
+invite_to = [
+    "!LPEcDKoGvnCdhRSTJW:is-a.cat",
+    "#bottest:is-a.cat"
+]
+
+[module."notbot::autojoiner"]
+homeservers = [
+    "is-a.cat",
+    "hackerspace.pl",
+]

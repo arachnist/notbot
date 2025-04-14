@@ -7,6 +7,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+use tokio::task::AbortHandle;
 
 use tracing::{debug, error, info, trace};
 
@@ -26,6 +27,19 @@ use serde::{Deserialize, Serialize};
 
 use linkme::distributed_slice;
 
+pub type WorkerStarter = (
+    &'static str,
+    fn(&Client, &Config) -> anyhow::Result<AbortHandle>,
+);
+
+#[distributed_slice]
+pub static WORKERS: [WorkerStarter];
+
+pub struct Worker {
+    handle: Option<AbortHandle>,
+    starter: fn(&Client, &Config) -> anyhow::Result<AbortHandle>,
+}
+
 pub type ModuleStarter = (
     &'static str,
     fn(&Client, &Config) -> anyhow::Result<EventHandlerHandle>,
@@ -41,6 +55,7 @@ pub struct Module {
 
 struct BotManagerInner {
     modules: HashMap<String, Module>,
+    workers: HashMap<String, Worker>,
     config: Config,
     client: Client,
     session_file: PathBuf,
@@ -52,30 +67,58 @@ impl BotManagerInner {
     pub async fn reload(&mut self) -> anyhow::Result<()> {
         info!("reloading");
 
-        self.config = Config::new(self.config_path.clone())?;
+        self.config = match Config::new(self.config_path.clone()) {
+            Ok(c) => c,
+            Err(e) => {
+                error!("couldn't parse configuration: {e}");
+                return Ok(());
+            }
+        };
 
         trace!("config: {:#?}", self.config);
 
         for (name, module) in &mut self.modules {
             match &module.handle {
                 Some(handle) => {
-                    info!("deregistering {name}");
+                    info!("unregistering\t{name}");
                     self.client.remove_event_handler(handle.to_owned());
                 }
                 None => info!("module was previously not registerd: {name}"),
             };
 
-            info!("registering: {name}");
+            info!("registering:\t{name}");
 
             let handle = match (module.starter)(&self.client, &self.config) {
                 Ok(h) => Some(h),
                 Err(e) => {
-                    error!("initializing {name} failed: {e}");
+                    error!("initializing module failed: {name} {e}");
                     None
                 }
             };
 
             module.handle = handle;
+        }
+
+        for (name, worker) in &mut self.workers {
+            match &worker.handle {
+                Some(handle) => {
+                    info!("stopping: {name}");
+                    handle.abort();
+                }
+                None => info!("worker was previously not started: {name}"),
+            };
+
+            info!("starting: {name}");
+
+            let handle = match (worker.starter)(&self.client, &self.config) {
+                Ok(h) => Some(h),
+                Err(e) => {
+                    error!("initializing worker failed: {name} {e}");
+                    None
+                }
+            };
+
+            worker.handle = handle;
         }
 
         Ok(())
@@ -114,18 +157,11 @@ impl BotManager {
         let mut modules: HashMap<String, Module> = Default::default();
 
         for (name, starter) in MODULE_STARTERS {
-            let handle: EventHandlerHandle = match starter(&client, &config) {
-                Ok(h) => h,
+            let handle: Option<EventHandlerHandle> = match starter(&client, &config) {
+                Ok(h) => Some(h),
                 Err(e) => {
-                    error!("initializing {name} failed: {e}");
-                    modules.insert(
-                        name.to_string(),
-                        Module {
-                            handle: None,
-                            starter: *starter,
-                        },
-                    );
-                    continue;
+                    error!("initializing module {name} failed: {e}");
+                    None
                 }
             };
 
@@ -134,7 +170,29 @@ impl BotManager {
             modules.insert(
                 name.to_string(),
                 Module {
-                    handle: Some(handle),
+                    handle,
+                    starter: *starter,
+                },
+            );
+        }
+
+        let mut workers: HashMap<String, Worker> = Default::default();
+
+        for (name, starter) in WORKERS {
+            let handle: Option<AbortHandle> = match starter(&client, &config) {
+                Ok(h) => Some(h),
+                Err(e) => {
+                    error!("initializing worker {name} failed: {e}");
+                    None
+                }
+            };
+
+            info!("registering worker: {name}");
+
+            workers.insert(
+                name.to_string(),
+                Worker {
+                    handle,
                     starter: *starter,
                 },
             );
@@ -144,7 +202,11 @@ impl BotManager {
 
         let tx2 = tx.clone();
 
-        client.add_event_handler(move |ev| Self::reload_trigger(ev, tx.clone()));
+        // this config will not be reloadable :(
+        let reloader_config: ReloaderConfig =
+            config.module_config_value("notbot::reloader")?.try_into()?;
+        let _ = client
+            .add_event_handler(move |ev| Self::reload_trigger(ev, tx.clone(), reloader_config));
 
         info!("finished initializing");
 
@@ -152,6 +214,7 @@ impl BotManager {
             BotManager {
                 inner: Arc::new(Mutex::new(BotManagerInner {
                     modules,
+                    workers,
                     config,
                     client,
                     session_file,
@@ -281,6 +344,7 @@ impl BotManager {
     async fn reload_trigger(
         event: OriginalSyncRoomMessageEvent,
         tx: Sender<()>,
+        module_config: ReloaderConfig,
     ) -> anyhow::Result<()> {
         let MessageType::Text(text) = event.content.msgtype else {
             return Ok(());
@@ -290,7 +354,7 @@ impl BotManager {
             return Ok(());
         };
 
-        if event.sender.as_str() == "@ar:is-a.cat" {
+        if module_config.admins.contains(&event.sender.to_string()) {
             info!("sending reload trigger");
             // inner.reload().await;
             tx.send(())?;
@@ -308,6 +372,11 @@ impl BotManager {
             inner.reload().await?;
         }
     }
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+pub struct ReloaderConfig {
+    admins: Vec<String>,
 }
 
 /// The full session to persist.
