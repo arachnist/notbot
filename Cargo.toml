@@ -13,6 +13,7 @@ path = "src/bin/main.rs"
 
 [dependencies]
 anyhow = "1.0.95"
+futures = "0.3.31"
 leon = "3.0.2"
 linkme = "0.3.31"
 matrix-sdk = { version = "0.11.0", features = ["sqlite", "e2e-encryption", "anyhow", "markdown"] }

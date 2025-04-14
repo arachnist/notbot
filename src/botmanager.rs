@@ -1,6 +1,8 @@
 use crate::Config;
 
+use futures::lock::Mutex;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -18,6 +20,8 @@ use matrix_sdk::{
     Error as MatrixError, LoopCtrl, Room,
 };
 
+use tokio::sync::broadcast::{channel, Receiver, Sender};
+
 use serde::{Deserialize, Serialize};
 
 use linkme::distributed_slice;
@@ -31,21 +35,60 @@ pub type ModuleStarter = (
 pub static MODULE_STARTERS: [ModuleStarter];
 
 pub struct Module {
-    handle: EventHandlerHandle,
+    handle: Option<EventHandlerHandle>,
     starter: fn(&Client, &Config) -> anyhow::Result<EventHandlerHandle>,
 }
 
-pub struct BotManager {
+struct BotManagerInner {
     modules: HashMap<String, Module>,
     config: Config,
     client: Client,
     session_file: PathBuf,
     sync_settings: SyncSettings,
+    config_path: String,
+}
+
+impl BotManagerInner {
+    pub async fn reload(&mut self) -> anyhow::Result<()> {
+        info!("reloading");
+
+        self.config = Config::new(self.config_path.clone())?;
+
+        trace!("config: {:#?}", self.config);
+
+        for (name, module) in &mut self.modules {
+            match &module.handle {
+                Some(handle) => {
+                    info!("deregistering {name}");
+                    self.client.remove_event_handler(handle.to_owned());
+                }
+                None => info!("module was previously not registerd: {name}"),
+            };
+
+            info!("registering: {name}");
+
+            let handle = match (module.starter)(&self.client, &self.config) {
+                Ok(h) => Some(h),
+                Err(e) => {
+                    error!("initializing {name} failed: {e}");
+                    None
+                }
+            };
+
+            module.handle = handle;
+        }
+
+        Ok(())
+    }
+}
+
+pub struct BotManager {
+    inner: Arc<Mutex<BotManagerInner>>,
 }
 
 impl BotManager {
-    pub async fn new(config_path: String) -> anyhow::Result<Self> {
-        let config = Config::new(config_path)?;
+    pub async fn new(config_path: String) -> anyhow::Result<(Self, Sender<()>)> {
+        let config = Config::new(config_path.clone())?;
         let data_dir_str = config.data_dir();
         let data_dir = Path::new(&data_dir_str);
         let session_file = data_dir.join("session.json");
@@ -75,6 +118,13 @@ impl BotManager {
                 Ok(h) => h,
                 Err(e) => {
                     error!("initializing {name} failed: {e}");
+                    modules.insert(
+                        name.to_string(),
+                        Module {
+                            handle: None,
+                            starter: *starter,
+                        },
+                    );
                     continue;
                 }
             };
@@ -82,39 +132,65 @@ impl BotManager {
             modules.insert(
                 name.to_string(),
                 Module {
-                    handle,
+                    handle: Some(handle),
                     starter: *starter,
                 },
             );
         }
 
+        let (tx, _) = channel::<()>(1);
+
+        let tx2 = tx.clone();
+
+        client.add_event_handler(move |ev| Self::reload_trigger(ev, tx.clone()));
+
         info!("finished initializing");
-        Ok(BotManager {
-            modules,
-            config,
-            client,
-            session_file,
-            sync_settings: sync_settings.clone(),
-        })
+
+        Ok((
+            BotManager {
+                inner: Arc::new(Mutex::new(BotManagerInner {
+                    modules,
+                    config,
+                    client,
+                    session_file,
+                    sync_settings: sync_settings.clone(),
+                    config_path,
+                })),
+            },
+            tx2,
+        ))
     }
 
     pub async fn run(&self) -> anyhow::Result<()> {
-        Ok(self
-            .client
-            .sync_with_result_callback(self.sync_settings.clone(), |sync_result| async move {
-                trace!("sync response: {:#?}", &sync_result);
-                let response = match sync_result {
-                    Ok(r) => r,
-                    Err(e) => {
-                        error!("sync failed: {e}");
-                        return Ok(LoopCtrl::Continue);
-                    }
-                };
+        let (sync_settings, session_file, client) = {
+            debug!("run: attempting lock");
+            let inner = self.inner.lock().await;
+            debug!("run: grabbed lock");
+            (
+                inner.sync_settings.clone(),
+                inner.session_file.clone(),
+                inner.client.clone(),
+            )
+        };
 
-                Self::persist_sync_token(&self.session_file, response.next_batch)
-                    .await
-                    .map_err(|err| MatrixError::UnknownError(err.into()))?;
-                Ok(LoopCtrl::Continue)
+        Ok(client
+            .sync_with_result_callback(sync_settings, |sync_result| {
+                let sfc = session_file.clone();
+                async move {
+                    trace!("sync response: {:#?}", &sync_result);
+                    let response = match sync_result {
+                        Ok(r) => r,
+                        Err(e) => {
+                            error!("sync failed: {e}");
+                            return Ok(LoopCtrl::Continue);
+                        }
+                    };
+
+                    Self::persist_sync_token(&sfc, response.next_batch)
+                        .await
+                        .map_err(|err| MatrixError::UnknownError(err.into()))?;
+                    Ok(LoopCtrl::Continue)
+                }
             })
             .await?)
     }
@@ -198,6 +274,37 @@ impl BotManager {
         };
 
         info!("[{room_name}] {}: {}", event.sender, text_content.body)
+    }
+
+    async fn reload_trigger(
+        event: OriginalSyncRoomMessageEvent,
+        tx: Sender<()>,
+    ) -> anyhow::Result<()> {
+        let MessageType::Text(text) = event.content.msgtype else {
+            return Ok(());
+        };
+
+        if !text.body.trim().starts_with(".reload") {
+            return Ok(());
+        };
+
+        if event.sender.as_str() == "@ar:is-a.cat" {
+            info!("sending reload trigger");
+            // inner.reload().await;
+            tx.send(())?;
+        };
+
+        Ok(())
+    }
+
+    pub async fn reload(&self, mut rx: Receiver<()>) -> anyhow::Result<()> {
+        loop {
+            let _ = rx.recv().await?;
+            debug!("reload: attempting lock");
+            let inner = &mut self.inner.lock().await;
+            debug!("reload: grabbed lock");
+            inner.reload().await?;
+        }
     }
 }
 
