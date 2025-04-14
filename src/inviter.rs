@@ -24,20 +24,28 @@ use matrix_sdk::{
 use serde_derive::Deserialize;
 
 #[distributed_slice(MODULE_STARTERS)]
-static INVITER_STARTER: ModuleStarter = ("inviter", inviter_starter);
+static MODULE_STARTER: ModuleStarter = (module_path!(), module_starter);
 
-fn inviter_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
-    let inviter_config: InviterConfig = config.module_config_value("inviter")?.try_into()?;
+fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
+    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
     Ok(client.add_event_handler(move |ev, room, client| {
-        inviter_listener(ev, room, client, inviter_config)
+        inviter_listener(ev, room, client, module_config)
     }))
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+pub struct ModuleConfig {
+    pub requests: String,
+    pub approvers: Vec<String>,
+    pub homeservers_blanket_allow: Vec<String>,
+    pub invite_to: Vec<String>,
 }
 
 async fn inviter_listener(
     ev: OriginalSyncRoomMessageEvent,
     room: Room,
     client: Client,
-    config: InviterConfig,
+    config: ModuleConfig,
 ) {
     if let Some(alias) = room.canonical_alias() {
         if config.requests != alias.as_str() {
@@ -116,7 +124,7 @@ async fn reaction_listener(
     room: Room,
     client: Client,
     handle: EventHandlerHandle,
-    config: InviterConfig,
+    config: ModuleConfig,
     orig_ev_id: OwnedEventId,
     orig_ev_sender: OwnedUserId,
 ) {
@@ -187,19 +195,4 @@ async fn inviter(client: Client, invitee: OwnedUserId, rooms: Vec<String>) -> an
         room.invite_user_by_id(&invitee).await?
     }
     Ok(())
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
-pub struct InviterConfig {
-    pub requests: String,
-    pub approvers: Vec<String>,
-    pub homeservers_blanket_allow: Vec<String>,
-    pub invite_to: Vec<String>,
-}
-
-impl TryFrom<toml::Value> for InviterConfig {
-    type Error = crate::config::ConfigError;
-    fn try_from(v: toml::Value) -> Result<Self, Self::Error> {
-        Ok(v.try_into::<InviterConfig>()?)
-    }
 }

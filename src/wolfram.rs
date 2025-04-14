@@ -1,9 +1,10 @@
-use crate::{fetch_and_decode_json, Config, MODULES};
+use crate::{fetch_and_decode_json, Config, ModuleStarter, MODULE_STARTERS};
 
-use tracing::{error, info, trace};
+use tracing::{error, trace};
 
 use linkme::distributed_slice;
 use matrix_sdk::{
+    event_handler::EventHandlerHandle,
     ruma::events::room::message::{
         MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
     },
@@ -14,24 +15,20 @@ use serde_derive::Deserialize;
 use serde_json::Value;
 use urlencoding::encode as uencode;
 
-#[distributed_slice(MODULES)]
-static WOLFRAM: fn(&Client, &Config) = callback_registrar;
+#[distributed_slice(MODULE_STARTERS)]
+static MODULE_STARTER: ModuleStarter = (module_path!(), module_starter);
 
-fn callback_registrar(c: &Client, config: &Config) {
-    info!("registering wolfram");
-
-    let app_id = match config.module["wolfram"]["AppID"].clone().try_into() {
-        Ok(a) => a,
-        Err(_) => {
-            error!("Couldn't load App ID from configuration");
-            return;
-        }
-    };
-
-    c.add_event_handler(move |ev, room| wolfram_response(ev, room, app_id));
+fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
+    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+    Ok(client.add_event_handler(move |ev, room| module_entrypoint(ev, room, module_config)))
 }
 
-async fn wolfram_response(ev: OriginalSyncRoomMessageEvent, room: Room, app_id: String) {
+#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+pub struct ModuleConfig {
+    pub app_id: String,
+}
+
+async fn module_entrypoint(ev: OriginalSyncRoomMessageEvent, room: Room, config: ModuleConfig) {
     trace!("in wolfram");
 
     trace!("checking message type");
@@ -48,7 +45,7 @@ async fn wolfram_response(ev: OriginalSyncRoomMessageEvent, room: Room, app_id: 
             let url: String = "http://api.wolframalpha.com/v2/query?input=".to_owned()
                 + query.as_ref()
                 + "&appid="
-                + app_id.as_str()
+                + config.app_id.as_str()
                 + "&output=json";
 
             let data = match fetch_and_decode_json::<WolframAlpha>(url).await {

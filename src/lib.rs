@@ -1,4 +1,4 @@
-// mod autojoiner;
+mod autojoiner;
 mod inviter;
 // mod kasownik;
 mod botmanager;
@@ -7,8 +7,8 @@ pub use crate::botmanager::BotManager;
 use crate::botmanager::{ModuleStarter, MODULE_STARTERS};
 // mod shenanigans;
 // mod spaceapi;
-// mod wolfram;
 mod config;
+mod wolfram;
 pub use crate::config::Config;
 pub use crate::config::ModuleConfig;
 

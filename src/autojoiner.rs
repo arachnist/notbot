@@ -1,31 +1,36 @@
 use linkme::distributed_slice;
 
-use matrix_sdk::{ruma::events::room::member::StrippedRoomMemberEvent, Client, Room};
+use matrix_sdk::{
+    event_handler::EventHandlerHandle, ruma::events::room::member::StrippedRoomMemberEvent, Client,
+    Room,
+};
 
+use serde_derive::Deserialize;
 use tokio::time::{sleep, Duration};
-use tracing::{debug, error, info, trace};
+use tracing::{error, info, trace};
 
-use crate::{Config, MODULES};
+use crate::{Config, ModuleStarter, MODULE_STARTERS};
 
-#[distributed_slice(MODULES)]
-static AUTOJOINER: fn(&Client, &Config) = callback_registrar;
+#[distributed_slice(MODULE_STARTERS)]
+static MODULE_STARTER: ModuleStarter = (module_path!(), module_starter);
 
-fn callback_registrar(c: &Client, config: &Config) {
-    info!("registering autojoiner");
-
-    let homeservers: Vec<String> = config.module["autojoiner"]["homeservers"]
-        .clone()
-        .try_into()
-        .expect("list of allowed homeservers needs to be defined");
-    debug!("homeservers: {:#?}", &homeservers);
-    c.add_event_handler(move |ev, client, room| autojoin_on_invites(ev, client, room, homeservers));
+fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
+    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+    Ok(client.add_event_handler(move |ev, client, room| {
+        module_entrypoint(ev, client, room, module_config)
+    }))
 }
 
-async fn autojoin_on_invites(
+#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+pub struct ModuleConfig {
+    pub homeservers: Vec<String>,
+}
+
+async fn module_entrypoint(
     room_member: StrippedRoomMemberEvent,
     client: Client,
     room: Room,
-    homeservers: Vec<String>,
+    module_config: ModuleConfig,
 ) {
     // ignore invites not meant for us
     if room_member.state_key != client.user_id().unwrap() {
@@ -40,9 +45,12 @@ async fn autojoin_on_invites(
     trace!(
         "checking if invite is for a room on permitted homeserver: {:#?}, {:#?}",
         &room_homeserver,
-        &homeservers
+        &module_config.homeservers
     );
-    if !homeservers.contains(&room_homeserver.to_string()) {
+    if !module_config
+        .homeservers
+        .contains(&room_homeserver.to_string())
+    {
         return;
     };
 
