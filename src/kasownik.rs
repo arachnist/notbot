@@ -1,11 +1,14 @@
-use crate::{fetch_and_decode_json, notbottime::NotBotTime, Config, MODULES};
+use crate::{
+    fetch_and_decode_json, notbottime::NotBotTime, Config, ModuleStarter, MODULE_STARTERS,
+};
 
 use std::time::{Duration, SystemTime};
 
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, trace};
 
 use linkme::distributed_slice;
 use matrix_sdk::{
+    event_handler::EventHandlerHandle,
     ruma::events::{
         room::message::{MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent},
         Mentions,
@@ -20,73 +23,37 @@ use reqwest::Client as RClient;
 
 use leon::{vals, Template};
 
-#[distributed_slice(MODULES)]
-static KASOWNIK: fn(&Client, &Config) = callback_registrar;
+// module_path!().to_string() + "_nag"
 
-fn callback_registrar(c: &Client, config: &Config) {
-    info!("registering kasownik");
+#[distributed_slice(MODULE_STARTERS)]
+static MODULE_STARTER_NAG: ModuleStarter = ("notbot::kasownik_nag", module_starter_nag);
 
-    let url_template_str: String =
-        match config.module["kasownik"]["url_template"].clone().try_into() {
-            Ok(a) => a,
-            Err(e) => {
-                error!("Couldn't load url template from configuration: {e}");
-                return;
-            }
-        };
-
-    c.add_event_handler(move |ev, room| due(ev, room, url_template_str));
+fn module_starter_nag(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
+    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+    Ok(client
+        .add_event_handler(move |ev, room, c| module_entrypoint_nag(ev, room, c, module_config)))
 }
 
-#[distributed_slice(MODULES)]
-static DUE_NAG: fn(&Client, &Config) = nag_registrar;
+#[distributed_slice(MODULE_STARTERS)]
+static MODULE_STARTER: ModuleStarter = (module_path!(), module_starter);
 
-fn nag_registrar(c: &Client, config: &Config) {
-    info!("registering kasownik nag");
-
-    let url_template_str: String =
-        match config.module["kasownik"]["url_template"].clone().try_into() {
-            Ok(a) => a,
-            Err(e) => {
-                error!("Couldn't load url template from configuration: {e}");
-                return;
-            }
-        };
-
-    // FIXME: accessing config like this can still panic with `index not found`
-    let nag_channels: Vec<String> =
-        match config.module["kasownik"]["nag_channels"].clone().try_into() {
-            Ok(c) => c,
-            Err(e) => {
-                error!("Couldn't fetch list of nagging channels: {e}");
-                return;
-            }
-        };
-
-    let nag_late_fees: i64 = match config.module["kasownik"]["nag_late_fees"]
-        .clone()
-        .try_into()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            error!("Couldn't fetch late fees setting: {e}");
-            return;
-        }
-    };
-
-    c.add_event_handler(move |ev, room, client| {
-        due_nag(
-            ev,
-            room,
-            client,
-            url_template_str,
-            nag_channels,
-            nag_late_fees,
-        )
-    });
+fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
+    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+    Ok(client.add_event_handler(move |ev, room| module_entrypoint(ev, room, module_config)))
 }
 
-async fn due(ev: OriginalSyncRoomMessageEvent, room: Room, url_template_str: String) {
+#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+pub struct ModuleConfig {
+    pub url_template: String,
+    pub nag_channels: Vec<String>,
+    pub nag_late_fees: i64,
+}
+
+async fn module_entrypoint(
+    ev: OriginalSyncRoomMessageEvent,
+    room: Room,
+    module_config: ModuleConfig,
+) {
     let MessageType::Text(text) = ev.content.msgtype else {
         return;
     };
@@ -110,7 +77,7 @@ async fn due(ev: OriginalSyncRoomMessageEvent, room: Room, url_template_str: Str
         return;
     };
 
-    let url_template = match Template::parse(&url_template_str) {
+    let url_template = match Template::parse(&module_config.url_template) {
         Ok(t) => t,
         Err(e) => {
             error!("Couldn't parse url template: {e}");
@@ -206,16 +173,18 @@ async fn due(ev: OriginalSyncRoomMessageEvent, room: Room, url_template_str: Str
     };
 }
 
-async fn due_nag(
+async fn module_entrypoint_nag(
     ev: OriginalSyncRoomMessageEvent,
     room: Room,
     c: Client,
-    url_template_str: String,
-    nag_channels: Vec<String>,
-    nag_late_fees: i64,
+    module_config: ModuleConfig,
 ) {
     if let Some(alias) = room.canonical_alias() {
-        if !nag_channels.iter().any(|x| x == alias.as_str()) {
+        if !module_config
+            .nag_channels
+            .iter()
+            .any(|x| x == alias.as_str())
+        {
             return;
         };
     } else {
@@ -274,7 +243,7 @@ async fn due_nag(
         return;
     };
 
-    let url_template = match Template::parse(&url_template_str) {
+    let url_template = match Template::parse(&module_config.url_template) {
         Ok(t) => t,
         Err(e) => {
             error!("Couldn't parse url template: {e}");
@@ -306,7 +275,7 @@ async fn due_nag(
     trace!("returned data: {:#?}", data);
 
     if let Some(months) = data.content.as_i64() {
-        if months < nag_late_fees {
+        if months < module_config.nag_late_fees {
             debug!("too early to nag: {months}");
             return;
         };

@@ -129,6 +129,8 @@ impl BotManager {
                 }
             };
 
+            info!("registering: {name}");
+
             modules.insert(
                 name.to_string(),
                 Module {

@@ -1,9 +1,10 @@
-use crate::{Config, MODULES};
+use crate::{Config, ModuleStarter, MODULE_STARTERS};
 
 use tracing::{error, info, trace};
 
 use linkme::distributed_slice;
 use matrix_sdk::{
+    event_handler::EventHandlerHandle,
     ruma::events::reaction::OriginalSyncReactionEvent,
     ruma::events::room::message::{
         MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
@@ -11,12 +12,22 @@ use matrix_sdk::{
     Client, Room,
 };
 
-#[distributed_slice(MODULES)]
-static SHENANIGANS: fn(&Client, &Config) = callback_registrar;
+#[distributed_slice(MODULE_STARTERS)]
+static MODULE_STARTER: ModuleStarter = (module_path!(), module_starter);
 
-fn callback_registrar(c: &Client, _: &Config) {
-    c.add_event_handler(move |ev, room| shenanigans(ev, room));
-    c.add_event_handler(move |ev, room| reaction_dumper(ev, room));
+fn module_starter(client: &Client, _: &Config) -> anyhow::Result<EventHandlerHandle> {
+    Ok(client.add_event_handler(shenanigans))
+}
+
+#[distributed_slice(MODULE_STARTERS)]
+static MODULE_STARTER_REACTION_DUMPER: ModuleStarter =
+    (module_path!(), module_starter_reaction_dumper);
+
+fn module_starter_reaction_dumper(
+    client: &Client,
+    _: &Config,
+) -> anyhow::Result<EventHandlerHandle> {
+    Ok(client.add_event_handler(reaction_dumper))
 }
 
 async fn shenanigans(ev: OriginalSyncRoomMessageEvent, room: Room) {

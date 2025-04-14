@@ -29,7 +29,7 @@ static MODULE_STARTER: ModuleStarter = (module_path!(), module_starter);
 fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
     Ok(client.add_event_handler(move |ev, room, client| {
-        inviter_listener(ev, room, client, module_config)
+        module_entrypoint(ev, room, client, module_config)
     }))
 }
 
@@ -41,7 +41,7 @@ pub struct ModuleConfig {
     pub invite_to: Vec<String>,
 }
 
-async fn inviter_listener(
+async fn module_entrypoint(
     ev: OriginalSyncRoomMessageEvent,
     room: Room,
     client: Client,
