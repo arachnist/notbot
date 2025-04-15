@@ -79,6 +79,8 @@ fn worker_starter(_: &Client, config: &Config) -> anyhow::Result<AbortHandle> {
     Ok(worker.abort_handle())
 }
 
+// FIXME: can fail if the connection is held open by client
+// FIXME: only handles a single connection at a time
 async fn worker_entrypoint(module_config: ModuleConfig) {
     let addr: SocketAddr = match module_config.listen_address.parse() {
         Ok(a) => a,

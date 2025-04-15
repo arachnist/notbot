@@ -341,6 +341,9 @@ impl BotManager {
         info!("[{room_name}] {}: {}", event.sender, text_content.body)
     }
 
+    // FIXME: can cause panic if the bot is flooded with .reloads
+    // thread 'main' panicked at src/bin/main.rs:19:16:
+    // critical error occured: channel lagged by 7
     async fn reload_trigger(
         event: OriginalSyncRoomMessageEvent,
         tx: Sender<()>,
@@ -356,7 +359,6 @@ impl BotManager {
 
         if module_config.admins.contains(&event.sender.to_string()) {
             info!("sending reload trigger");
-            // inner.reload().await;
             tx.send(())?;
         };
 
