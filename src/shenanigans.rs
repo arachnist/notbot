@@ -51,7 +51,6 @@ async fn shenanigans(ev: OriginalSyncRoomMessageEvent, room: Room) {
     {
         error!("error sending response: {se}");
     };
-    return;
 }
 
 async fn reaction_dumper(ev: OriginalSyncReactionEvent, _room: Room) {

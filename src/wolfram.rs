@@ -85,7 +85,6 @@ async fn module_entrypoint(ev: OriginalSyncRoomMessageEvent, room: Room, config:
             let response = RoomMessageEventContent::text_plain(response_parts.join("\n"));
             if let Err(e) = room.send(response).await {
                 error!("error sending response: {e}");
-                return;
             }
         });
     };

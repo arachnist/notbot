@@ -51,7 +51,7 @@ async fn presence_observer(client: Client, module_config: ModuleConfig) {
     let mut present: HashMap<String, Vec<String>> = Default::default();
     let mut first_loop: HashMap<String, bool> = Default::default();
 
-    for (url, _) in &module_config.presence_map {
+    for url in module_config.presence_map.keys() {
         present.insert(url.clone(), vec![]);
         first_loop.insert(url.clone(), true);
     }
@@ -75,13 +75,13 @@ async fn presence_observer(client: Client, module_config: ModuleConfig) {
             let mut also_there: Vec<String> = vec![];
 
             for name in &current {
-                if !present[url].contains(&name) {
+                if !present[url].contains(name) {
                     arrived.push(name.clone());
                 };
             }
 
             for name in &present[url] {
-                if current.contains(&name) {
+                if current.contains(name) {
                     also_there.push(name.clone());
                 } else {
                     left.push(name.clone());
@@ -97,19 +97,19 @@ async fn presence_observer(client: Client, module_config: ModuleConfig) {
 
             let mut response_parts: Vec<String> = vec![];
 
-            if arrived.len() > 0 {
+            if !arrived.is_empty() {
                 response_parts.push(["arrived: ", &arrived.join(", ")].concat());
             };
 
-            if left.len() > 0 {
+            if !left.is_empty() {
                 response_parts.push(["left: ", &left.join(", ")].concat());
             };
 
-            if also_there.len() > 0 {
+            if !also_there.is_empty() {
                 response_parts.push(["also there: ", &also_there.join(", ")].concat());
             };
 
-            if arrived.len() == 0 && left.len() == 0 {
+            if arrived.is_empty() && left.is_empty() {
                 continue;
             };
 
@@ -200,7 +200,7 @@ async fn module_entrypoint(
 
         debug!("present: {:#?}", present);
 
-        let response = if present.len() > 0 {
+        let response = if !present.is_empty() {
             RoomMessageEventContent::text_plain(present.join(", "))
         } else {
             RoomMessageEventContent::text_plain("Nikdo není doma...")

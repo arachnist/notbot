@@ -150,10 +150,10 @@ async fn module_entrypoint(
                     return;
                 }
                 Some(months) => match months {
-                    std::i64::MIN..0 => format!("{member} is {} months ahead. Cool!", 0 - months),
+                    i64::MIN..0 => format!("{member} is {} months ahead. Cool!", 0 - months),
                     0 => format!("{member} has paid all their membership fees."),
                     1 => format!("{member} needs to pay one membership fee."),
-                    1..=std::i64::MAX => format!("{member} needs to pay {months} membership fees."),
+                    2..=i64::MAX => format!("{member} needs to pay {months} membership fees."),
                 },
             };
 
@@ -163,7 +163,6 @@ async fn module_entrypoint(
             {
                 error!("error sending response: {se}");
             };
-            return;
         }
         _ => {
             _ = room
@@ -198,27 +197,23 @@ async fn module_entrypoint_nag(
     let store = c.state_store();
     // let maybe_next_nag_time = store.get_custom_value(ev.sender.as_bytes()).await;
     let next_nag_time = match store.get_custom_value(ev.sender.as_bytes()).await {
-        Ok(maybe_result) => {
-            let maybe_nag_time = match maybe_result {
-                None => {
-                    let nag_time = NotBotTime(SystemTime::now() - Duration::new(60 * 60 * 24, 0));
-                    let nag_time_bytes: Vec<u8> = nag_time.into();
+        Ok(maybe_result) => match maybe_result {
+            None => {
+                let nag_time = NotBotTime(SystemTime::now() - Duration::new(60 * 60 * 24, 0));
+                let nag_time_bytes: Vec<u8> = nag_time.into();
 
-                    if let Err(e) = store
-                        .set_custom_value_no_read(ev.sender.as_bytes(), nag_time_bytes)
-                        .await
-                    {
-                        error!("error setting nag time value for the first time: {e}");
-                        return;
-                    };
+                if let Err(e) = store
+                    .set_custom_value_no_read(ev.sender.as_bytes(), nag_time_bytes)
+                    .await
+                {
+                    error!("error setting nag time value for the first time: {e}");
+                    return;
+                };
 
-                    nag_time
-                }
-                Some(nag_time_bytes) => nag_time_bytes.into(),
-            };
-
-            maybe_nag_time
-        }
+                nag_time
+            }
+            Some(nag_time_bytes) => nag_time_bytes.into(),
+        },
         Err(e) => {
             error!("error fetching nag time: {e}");
             return;
@@ -281,7 +276,7 @@ async fn module_entrypoint_nag(
         };
 
         let period = match months {
-            std::i64::MIN..=0 => {
+            i64::MIN..=0 => {
                 return;
             }
             1 => "month",

@@ -1,7 +1,5 @@
 use crate::{Config, WorkerStarter, WORKERS};
 
-use std::collections::HashMap;
-
 use serde::Deserialize;
 use tokio::task::AbortHandle;
 
@@ -11,7 +9,7 @@ use linkme::distributed_slice;
 
 #[derive(Default, Debug, Clone, PartialEq, Deserialize)]
 pub struct ModuleConfig {
-	listen_address: String,
+    listen_address: String,
 }
 
 #[distributed_slice(WORKERS)]
@@ -23,5 +21,4 @@ fn worker_starter(_: &Client, config: &Config) -> anyhow::Result<AbortHandle> {
     Ok(worker.abort_handle())
 }
 
-async fn worker_entrypoint(module_config: ModuleConfig) {
-}
+async fn worker_entrypoint(_module_config: ModuleConfig) {}

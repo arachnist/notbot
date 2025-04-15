@@ -82,7 +82,7 @@ impl TryFrom<Option<String>> for Config {
             None => return Err(ConfigError::NoPath("no path provided".to_string())),
         };
 
-        Ok(path.try_into()?)
+        path.try_into()
     }
 }
 

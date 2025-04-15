@@ -115,8 +115,6 @@ async fn module_entrypoint(
     client.add_event_handler(move |ev, room, client, handle| {
         reaction_listener(ev, room, client, handle, config, evid, evsender)
     });
-
-    return;
 }
 
 async fn reaction_listener(

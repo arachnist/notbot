@@ -298,7 +298,7 @@ impl BotManager {
         let auth = client.matrix_auth();
 
         trace!("logging in");
-        auth.login_username(&config.user_id(), &config.password())
+        auth.login_username(config.user_id(), &config.password())
             .initial_device_display_name(&config.device_id())
             .await?;
         let user_session = auth
@@ -365,7 +365,7 @@ impl BotManager {
 
     pub async fn reload(&self, mut rx: Receiver<()>) -> anyhow::Result<()> {
         loop {
-            let _ = rx.recv().await?;
+            rx.recv().await?;
             debug!("reload: attempting lock");
             let inner = &mut self.inner.lock().await;
             debug!("reload: grabbed lock");
