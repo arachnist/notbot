@@ -33,7 +33,7 @@ pub type WorkerStarter = (
 );
 
 #[distributed_slice]
-pub static WORKERS: [WorkerStarter];
+pub static WORKERS: [WorkerStarter] = [..];
 
 pub struct Worker {
     handle: Option<AbortHandle>,
@@ -46,7 +46,7 @@ pub type ModuleStarter = (
 );
 
 #[distributed_slice]
-pub static MODULE_STARTERS: [ModuleStarter];
+pub static MODULE_STARTERS: [ModuleStarter] = [..];
 
 pub struct Module {
     handle: Option<EventHandlerHandle>,

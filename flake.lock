@@ -1,0 +1,27 @@
+{
+  "nodes": {
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1744285385,
+        "narHash": "sha256-3Lhf9UoJzttvxNjF6RiISZgq3aX8Z+yr/pEBxbde+G0=",
+        "owner": "arachnist",
+        "repo": "nixpkgs",
+        "rev": "f397f153f8ff77995ec3ab36f902aa5187b7c7a0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "arachnist",
+        "ref": "ar-patchset-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "nixpkgs": "nixpkgs"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

@@ -10,7 +10,7 @@ use toml::{Table, Value};
 pub enum ConfigError {
     Io(std::io::Error),
     Parse(toml::de::Error),
-    NoPath(&'static str),
+    NoPath(String),
     NoModuleConfig(String),
 }
 
@@ -79,7 +79,7 @@ impl TryFrom<Option<String>> for Config {
     fn try_from(maybe_path: Option<String>) -> Result<Self, Self::Error> {
         let path = match maybe_path {
             Some(p) => p,
-            None => return Err(ConfigError::NoPath("no path provided")),
+            None => return Err(ConfigError::NoPath("no path provided".to_string())),
         };
 
         Ok(path.try_into()?)
