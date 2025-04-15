@@ -3,6 +3,7 @@ use crate::{Config, WorkerStarter, WORKERS};
 use std::net::SocketAddr;
 
 use serde::Deserialize;
+use tokio::net::TcpStream;
 use tokio::task::AbortHandle;
 
 use matrix_sdk::Client;
@@ -20,7 +21,7 @@ use lazy_static::lazy_static;
 use prometheus::{labels, opts, register_counter, register_gauge, register_histogram_vec};
 use prometheus::{Counter, Encoder, Gauge, HistogramVec, TextEncoder};
 use tokio::net::TcpListener;
-use tracing::{error, warn, info};
+use tracing::{error, info, warn};
 
 type BoxedErr = Box<dyn std::error::Error + Send + Sync + 'static>;
 
@@ -79,14 +80,12 @@ fn worker_starter(_: &Client, config: &Config) -> anyhow::Result<AbortHandle> {
     Ok(worker.abort_handle())
 }
 
-// FIXME: can fail if the connection is held open by client
-// FIXME: only handles a single connection at a time
 async fn worker_entrypoint(module_config: ModuleConfig) {
     let addr: SocketAddr = match module_config.listen_address.parse() {
         Ok(a) => a,
         Err(e) => {
             error!("parsing config listen address failed: {e}");
-            return ;
+            return;
         }
     };
 
@@ -94,7 +93,7 @@ async fn worker_entrypoint(module_config: ModuleConfig) {
         Ok(l) => l,
         Err(e) => {
             error!("binding to listen socket failed: {e}");
-            return ;
+            return;
         }
     };
 
@@ -106,13 +105,20 @@ async fn worker_entrypoint(module_config: ModuleConfig) {
             Err(e) => {
                 warn!("accepting socket failed: {e}");
                 continue;
-            },
+            }
         };
-        let io = TokioIo::new(stream);
 
-        let service = service_fn(serve_req);
-        if let Err(err) = http1::Builder::new().serve_connection(io, service).await {
-            error!("server error: {:?}", err);
-        };
+        tokio::task::spawn(handle_request(stream));
     }
+}
+
+async fn handle_request(s: TcpStream) -> anyhow::Result<()> {
+    let io = TokioIo::new(s);
+
+    let service = service_fn(serve_req);
+    if let Err(err) = http1::Builder::new().serve_connection(io, service).await {
+        error!("server error: {:?}", err);
+    };
+
+    Ok(())
 }
