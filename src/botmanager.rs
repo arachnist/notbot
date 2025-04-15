@@ -17,7 +17,9 @@ use matrix_sdk::Client;
 use matrix_sdk::{
     authentication::matrix::MatrixSession,
     config::SyncSettings,
-    ruma::events::room::message::{MessageType, OriginalSyncRoomMessageEvent},
+    ruma::events::room::message::{
+        MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
+    },
     Error as MatrixError, LoopCtrl, Room,
 };
 
@@ -64,16 +66,19 @@ struct BotManagerInner {
 }
 
 impl BotManagerInner {
-    pub async fn reload(&mut self) -> anyhow::Result<()> {
+    pub async fn reload(&mut self) -> anyhow::Result<String> {
         info!("reloading");
 
         self.config = match Config::new(self.config_path.clone()) {
             Ok(c) => c,
             Err(e) => {
                 error!("couldn't parse configuration: {e}");
-                return Ok(());
+                return Err(e);
             }
         };
+
+        let mut failed_modules: Vec<String> = vec![];
+        let mut failed_workers: Vec<String> = vec![];
 
         trace!("config: {:#?}", self.config);
 
@@ -92,6 +97,7 @@ impl BotManagerInner {
                 Ok(h) => Some(h),
                 Err(e) => {
                     error!("initializing module failed: {name} {e}");
+                    failed_modules.push(name.to_owned());
                     None
                 }
             };
@@ -114,6 +120,7 @@ impl BotManagerInner {
                 Ok(h) => Some(h),
                 Err(e) => {
                     error!("initializing worker failed: {name} {e}");
+                    failed_workers.push(name.to_owned());
                     None
                 }
             };
@@ -121,7 +128,44 @@ impl BotManagerInner {
             worker.handle = handle;
         }
 
-        Ok(())
+        let mut status: String = "configuration reloaded".to_string();
+
+        if failed_workers.is_empty() && failed_modules.is_empty() {
+            return Ok(status);
+        } else {
+            status.push_str(", but:");
+        };
+
+        if !failed_modules.is_empty() {
+            status.push_str(
+                format!(
+                    " {len} module{maybe_plural} failed: {modules}",
+                    len = failed_modules.len(),
+                    modules = failed_modules.join(", "),
+                    maybe_plural = if failed_modules.len() == 1 { "" } else { "s" }
+                )
+                .as_str(),
+            );
+        };
+
+        if !failed_workers.is_empty() {
+            status.push_str(
+                format!(
+                    "{maybe_conjunction} {len} worker{maybe_plural} failed: {workers}",
+                    maybe_conjunction = if failed_modules.is_empty() {
+                        ""
+                    } else {
+                        ", and"
+                    },
+                    len = failed_workers.len(),
+                    workers = failed_workers.join(", "),
+                    maybe_plural = if failed_workers.len() == 1 { "" } else { "s" }
+                )
+                .as_str(),
+            );
+        };
+
+        Ok(status)
     }
 }
 
@@ -130,7 +174,7 @@ pub struct BotManager {
 }
 
 impl BotManager {
-    pub async fn new(config_path: String) -> anyhow::Result<(Self, Sender<()>)> {
+    pub async fn new(config_path: String) -> anyhow::Result<(Self, Sender<Room>)> {
         let config = Config::new(config_path.clone())?;
         let data_dir_str = config.data_dir();
         let data_dir = Path::new(&data_dir_str);
@@ -198,15 +242,16 @@ impl BotManager {
             );
         }
 
-        let (tx, _) = channel::<()>(1);
+        let (tx, _) = channel::<Room>(1);
 
         let tx2 = tx.clone();
 
         // this config will not be reloadable :(
         let reloader_config: ReloaderConfig =
             config.module_config_value("notbot::reloader")?.try_into()?;
-        let _ = client
-            .add_event_handler(move |ev| Self::reload_trigger(ev, tx.clone(), reloader_config));
+        let _ = client.add_event_handler(move |ev, room| {
+            Self::reload_trigger(ev, room, tx.clone(), reloader_config)
+        });
 
         info!("finished initializing");
 
@@ -343,7 +388,8 @@ impl BotManager {
 
     async fn reload_trigger(
         event: OriginalSyncRoomMessageEvent,
-        tx: Sender<()>,
+        room: Room,
+        tx: Sender<Room>,
         module_config: ReloaderConfig,
     ) -> anyhow::Result<()> {
         let MessageType::Text(text) = event.content.msgtype else {
@@ -357,7 +403,7 @@ impl BotManager {
         if module_config.admins.contains(&event.sender.to_string()) {
             if tx.is_empty() {
                 info!("sending reload trigger");
-                tx.send(())?;
+                tx.send(room)?;
             } else {
                 warn!("already processing reload request");
                 return Ok(());
@@ -367,13 +413,19 @@ impl BotManager {
         Ok(())
     }
 
-    pub async fn reload(&self, mut rx: Receiver<()>) -> anyhow::Result<()> {
+    pub async fn reload(&self, mut rx: Receiver<Room>) -> anyhow::Result<()> {
         loop {
-            rx.recv().await?;
+            let room: Room = rx.recv().await?;
             debug!("reload: attempting lock");
             let inner = &mut self.inner.lock().await;
             debug!("reload: grabbed lock");
-            inner.reload().await?;
+            let status: String = match inner.reload().await {
+                Ok(s) => s,
+                Err(e) => format!("configuration not reloaded: {e}"),
+            };
+            if let Err(e) = room.send(RoomMessageEventContent::text_plain(status)).await {
+                error!("sending reload status failed: {e}");
+            };
         }
     }
 }
