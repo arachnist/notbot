@@ -421,7 +421,10 @@ impl BotManager {
             debug!("reload: grabbed lock");
             let status: String = match inner.reload().await {
                 Ok(s) => s,
-                Err(e) => format!("configuration not reloaded: {e}"),
+                Err(e) => format!(
+                    "configuration not reloaded: {message}",
+                    message = e.to_string().lines().nth(0).unwrap_or("couldn't decode")
+                ),
             };
             if let Err(e) = room.send(RoomMessageEventContent::text_plain(status)).await {
                 error!("sending reload status failed: {e}");
