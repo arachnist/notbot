@@ -1,4 +1,4 @@
-{ lib, rustPlatform, pkg-config, openssl, sqlite, ... }:
+{ lib, rustPlatform, pkg-config, openssl, sqlite, luajit_2_1, ... }:
 let
 	cargoToml = fromTOML (builtins.readFile ( ./. + "/Cargo.toml"));
 in
@@ -14,5 +14,6 @@ rustPlatform.buildRustPackage {
   buildInputs = [
     openssl
     sqlite
+    luajit_2_1
   ];
 }
