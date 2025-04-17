@@ -59,7 +59,7 @@ fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandl
             lua.to_value(&json)
         })?,
     );
-    let _ = lua_globals.set(
+    lua_globals.set(
         "r_debug",
         lua.create_function(|_, value: Value| {
             debug!("{value:#?}");
@@ -75,7 +75,7 @@ fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandl
     let proxy: Function = lua.create_async_function(move |_, strings: Variadic<String>| {
         let msg_tx = proxy_tx.clone();
         async move {
-            if let Err(e) = msg_tx.send(strings.try_into().unwrap()).await {
+            if let Err(e) = msg_tx.send(strings.into()).await {
                 error!("couldn't send irc message to pipe: {e}");
             };
             Ok(())
@@ -173,50 +173,34 @@ async fn lua_dispatcher(
         return Ok(());
     };
 
-    let blocking_http = lua.create_function(|lua, uri| blocking_fetch_http(lua, uri).into_lua_err())?;
-    let async_http = lua.create_async_function(|lua, uri| async move {
-            async_fetch_http(lua, uri).await.into_lua_err()
-        })?;
-    let handle_command = lua
-        .load(chunk! {
-            irc:HandleCommand(...)
-        })
-        .into_function()?;
-    let fetch = lua
-        .load(chunk! {
-            local resp = $async_http(...)
-            r_debug(resp)
-        })
-        .call_async("https://hackerspace.pl/spaceapi").await?;
+    let handle_command = lua.load(chunk! {
+        irc:HandleCommand(...)
+    });
 
-
-    //if let Err(e) = fetch.call::<()>("https://hackerspace.pl/spaceapi") {
-    //    error!("error: {}", e);
-    // }
     match event {
         AnyTimelineEvent::MessageLike(AnyMessageLikeEvent::RoomMessage(
             RoomMessageEvent::Original(event),
         )) => match &event.content.msgtype {
             MessageType::Notice(content) => {
-                if let Err(e) = handle_command.call::<()>((
-                    "irc.Notice",
-                    event.sender.to_string(),
-                    target.as_str(),
-                    content.body.as_str(),
-                )) {
-                    error!("error: {}", e);
-                }
+                handle_command
+                    .call_async::<()>((
+                        "irc.Notice",
+                        event.sender.as_str(),
+                        target.as_str(),
+                        content.body.as_str(),
+                    ))
+                    .await?;
                 Ok(())
             }
             MessageType::Text(content) => {
-                if let Err(e) = handle_command.call::<()>((
-                    "irc.Message",
-                    event.sender.to_string(),
-                    target.as_str(),
-                    content.body.as_str(),
-                )) {
-                    error!("error: {}", e);
-                }
+                handle_command
+                    .call_async::<()>((
+                        "irc.Message",
+                        event.sender.as_str(),
+                        target.as_str(),
+                        content.body.as_str(),
+                    ))
+                    .await?;
                 Ok(())
             }
             _ => Ok(()),
