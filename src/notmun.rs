@@ -180,31 +180,17 @@ async fn lua_dispatcher(
     match event {
         AnyTimelineEvent::MessageLike(AnyMessageLikeEvent::RoomMessage(
             RoomMessageEvent::Original(event),
-        )) => match &event.content.msgtype {
-            MessageType::Notice(content) => {
-                handle_command
-                    .call_async::<()>((
-                        "irc.Notice",
-                        event.sender.as_str(),
-                        target.as_str(),
-                        content.body.as_str(),
-                    ))
-                    .await?;
-                Ok(())
-            }
-            MessageType::Text(content) => {
-                handle_command
-                    .call_async::<()>((
-                        "irc.Message",
-                        event.sender.as_str(),
-                        target.as_str(),
-                        content.body.as_str(),
-                    ))
-                    .await?;
-                Ok(())
-            }
-            _ => Ok(()),
-        },
+        )) => {
+            let (ev_type, content) = match &event.content.msgtype {
+                MessageType::Notice(content) => ("irc.Notice", content.body.as_str()),
+                MessageType::Text(content) => ("irc.Message", content.body.as_str()),
+                _ => return Ok(()),
+            };
+            handle_command
+                .call_async::<()>((ev_type, event.sender.as_str(), target.as_str(), content))
+                .await?;
+            Ok(())
+        }
         _ => Ok(()),
     }
 }
