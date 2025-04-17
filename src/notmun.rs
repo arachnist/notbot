@@ -2,7 +2,7 @@ use crate::{Config, ModuleStarter, MODULE_STARTERS};
 
 use std::{fs, path::Path};
 
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use tokio::sync::mpsc::{channel, Receiver};
 
@@ -17,13 +17,7 @@ use matrix_sdk::{
 use linkme::distributed_slice;
 use serde_derive::Deserialize;
 
-use mlua::{chunk, Function, Lua, Table};
-/*
-lazy_static! {
-    static ref LUA: Lua = Lua::new();
-    static ref lua_globals: Table = LUA.globals();
-}
-*/
+use mlua::{chunk, ExternalResult, Function, Lua, LuaSerdeExt, Table, Value, Variadic};
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 enum IRCAction {
@@ -43,19 +37,55 @@ fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandl
     let lua_globals: Table = lua.globals();
 
     let _ = lua_globals.set("MUN_PATH", module_config.mun_path.clone());
-    // mlua appears to ignore LUA_PATH global, and do something silly with relative path requires
-    //
-    // std::env::set_var("LUA_PATH", module_config.lua_path.clone());
 
-    /* let mun_path = module_config.mun_path.clone();
-    info!("mun_path: {mun_path}");
+    let _ = lua_globals.set(
+        "blocking_fetch_http",
+        lua.create_function(|lua, uri| blocking_fetch_http(lua, uri).into_lua_err())?,
+    );
+    let _ = lua_globals.set(
+        "async_fetch_http",
+        lua.create_async_function(|lua, uri| async move {
+            async_fetch_http(lua, uri).await.into_lua_err()
+        })?,
+    );
+    let _ = lua_globals.set(
+        "fetch_json",
+        lua.create_async_function(|lua, uri: String| async move {
+            let resp = reqwest::get(&uri)
+                .await
+                .and_then(|resp| resp.error_for_status())
+                .into_lua_err()?;
+            let json = resp.json::<serde_json::Value>().await.into_lua_err()?;
+            lua.to_value(&json)
+        })?,
+    );
+    let _ = lua_globals.set(
+        "r_debug",
+        lua.create_function(|_, value: Value| {
+            debug!("{value:#?}");
+            Ok(())
+        })?,
+    )?;
 
-    let _ = LUA.load(chunk! {
-        local _require = require
-        require = function(path)
-           return lua_require($mun_path .. "/" .. path)
-        end
-    }).set_name("preamble").exec();*/
+    // FIXME: an absolutely horrible channel, but i couldn't get anything else to work :(
+    let (tx, rx) = channel::<Vec<String>>(1);
+    let lua_matrix: Table = lua.create_table()?;
+
+    let proxy_tx = tx.clone();
+    let proxy: Function = lua.create_async_function(move |_, strings: Variadic<String>| {
+        let msg_tx = proxy_tx.clone();
+        async move {
+            if let Err(e) = msg_tx.send(strings.try_into().unwrap()).await {
+                error!("couldn't send irc message to pipe: {e}");
+            };
+            Ok(())
+        }
+    })?;
+
+    let _ = lua_matrix.set("Proxy", proxy);
+    let _ = lua_globals.set("Matrix", lua_matrix);
+
+    tokio::task::spawn(consumer(client.clone(), rx));
 
     let startmun = Path::new(&module_config.mun_path).join("start.lua");
     info!("startmun: {}", startmun.display());
@@ -74,76 +104,6 @@ fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandl
         })
         .exec()?
     }
-
-    // FIXME: an absolutely horrible channel, but i couldn't get anything else to work :(
-    let (tx, rx) = channel::<Vec<String>>(1);
-    let lua_matrix: Table = lua.create_table()?;
-
-    let say_tx = tx.clone();
-    let say: Function =
-        lua.create_async_function(move |_, (target, message): (String, String)| {
-            let msg_tx = say_tx.clone();
-            async move {
-                if let Err(e) = msg_tx.send(vec!["Say".to_string(), target, message]).await {
-                    error!("couldn't send irc message to pipe: {e}");
-                };
-                Ok(())
-            }
-        })?;
-
-    let notice_tx = tx.clone();
-    let notice: Function =
-        lua.create_async_function(move |_, (target, message): (String, String)| {
-            let msg_tx = notice_tx.clone();
-            async move {
-                if let Err(e) = msg_tx
-                    .send(vec!["Notice".to_string(), target, message])
-                    .await
-                {
-                    error!("couldn't send irc message to pipe: {e}");
-                };
-                Ok(())
-            }
-        })?;
-
-    let kick_tx = tx.clone();
-    let kick: Function =
-        lua.create_async_function(move |_, (room, target, reason): (String, String, String)| {
-            let msg_tx = kick_tx.clone();
-            async move {
-                if let Err(e) = msg_tx
-                    .send(vec!["Kick".to_string(), room, target, reason])
-                    .await
-                {
-                    error!("couldn't send irc message to pipe: {e}");
-                };
-                Ok(())
-            }
-        })?;
-
-    let set_nick_tx = tx.clone();
-    let set_nick: Function =
-        lua.create_async_function(move |_, (target, message): (String, String)| {
-            let msg_tx = set_nick_tx.clone();
-            async move {
-                if let Err(e) = msg_tx
-                    .send(vec!["SetNick".to_string(), target, message])
-                    .await
-                {
-                    error!("couldn't send irc message to pipe: {e}");
-                };
-                Ok(())
-            }
-        })?;
-
-    let _ = lua_matrix.set("Say", say);
-    let _ = lua_matrix.set("Notice", notice);
-    let _ = lua_matrix.set("Kick", kick);
-    let _ = lua_matrix.set("SetNick", set_nick);
-
-    let _ = lua_globals.set("Matrix", lua_matrix);
-
-    tokio::task::spawn(consumer(client.clone(), rx));
 
     client.add_event_handler_context(lua);
 
@@ -212,41 +172,98 @@ async fn lua_dispatcher(
     if client.user_id().unwrap() == event.sender() {
         return Ok(());
     };
-    let lua_globals: Table = lua.globals();
 
-    let irc: Table = lua_globals.get("irc")?;
-    let handle_command: Function = irc.get("HandleCommand")?;
+    let blocking_http = lua.create_function(|lua, uri| blocking_fetch_http(lua, uri).into_lua_err())?;
+    let async_http = lua.create_async_function(|lua, uri| async move {
+            async_fetch_http(lua, uri).await.into_lua_err()
+        })?;
+    let handle_command = lua
+        .load(chunk! {
+            irc:HandleCommand(...)
+        })
+        .into_function()?;
+    let fetch = lua
+        .load(chunk! {
+            local resp = $async_http(...)
+            r_debug(resp)
+        })
+        .call_async("https://hackerspace.pl/spaceapi").await?;
 
+
+    //if let Err(e) = fetch.call::<()>("https://hackerspace.pl/spaceapi") {
+    //    error!("error: {}", e);
+    // }
     match event {
         AnyTimelineEvent::MessageLike(AnyMessageLikeEvent::RoomMessage(
             RoomMessageEvent::Original(event),
-        )) => {
-            match &event.content.msgtype {
-                MessageType::Notice(content) => {
-                    handle_command.call::<()>((
-                        "", // FIXME: figure out the missing argument
-                        "irc.Notice",
-                        event.sender.to_string(),
-                        target.as_str(),
-                        content.body.as_str(),
-                    ))?;
-                    Ok(())
+        )) => match &event.content.msgtype {
+            MessageType::Notice(content) => {
+                if let Err(e) = handle_command.call::<()>((
+                    "irc.Notice",
+                    event.sender.to_string(),
+                    target.as_str(),
+                    content.body.as_str(),
+                )) {
+                    error!("error: {}", e);
                 }
-                MessageType::Text(content) => {
-                    if let Err(e) = handle_command.call::<()>((
-                        "", // FIXME: figure out the missing argument
-                        "irc.Message",
-                        event.sender.to_string(),
-                        target.as_str(),
-                        content.body.as_str(),
-                    )) {
-                        error!("error: {}", e);
-                    }
-                    Ok(())
-                }
-                _ => Ok(()),
+                Ok(())
             }
-        }
+            MessageType::Text(content) => {
+                if let Err(e) = handle_command.call::<()>((
+                    "irc.Message",
+                    event.sender.to_string(),
+                    target.as_str(),
+                    content.body.as_str(),
+                )) {
+                    error!("error: {}", e);
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        },
         _ => Ok(()),
     }
+}
+
+fn blocking_fetch_http(lua: &Lua, uri: String) -> anyhow::Result<(String, u16, Table)> {
+    let resp = reqwest::blocking::get(&uri)
+        .and_then(|resp| resp.error_for_status())
+        .into_lua_err()?;
+
+    let code = resp.status().as_u16();
+    let headers: Table = lua.create_table()?;
+
+    for (k, raw_v) in resp.headers() {
+        headers.set(k.as_str(), raw_v.to_str().into_lua_err()?)?;
+    }
+
+    let body = match resp.text() {
+        Ok(r) => r,
+        Err(_) => "".to_string(),
+    };
+
+    let rval = (body, code, headers);
+    Ok(rval)
+}
+
+async fn async_fetch_http(lua: Lua, uri: String) -> anyhow::Result<(String, u16, Table)> {
+    let resp = reqwest::get(&uri)
+        .await
+        .and_then(|resp| resp.error_for_status())
+        .into_lua_err()?;
+
+    let code = resp.status().as_u16();
+    let headers: Table = lua.create_table()?;
+
+    for (k, raw_v) in resp.headers() {
+        headers.set(k.as_str(), raw_v.to_str().into_lua_err()?)?;
+    }
+
+    let body = match resp.text().await {
+        Ok(r) => r,
+        Err(_) => "".to_string(),
+    };
+
+    let rval = (body, code, headers);
+    Ok(rval)
 }
