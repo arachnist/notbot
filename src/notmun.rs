@@ -29,6 +29,25 @@ enum IRCAction {
     SetNick(String, String),
 }
 
+impl IRCAction {
+    async fn get_room(&self, c: &Client) -> anyhow::Result<Room> {
+        match self {
+            IRCAction::Say(room, _) => Ok(maybe_get_room(c, room).await?),
+            IRCAction::Notice(room, _) => Ok(maybe_get_room(c, room).await?),
+            IRCAction::Kick(room, _, _) => Ok(maybe_get_room(c, room).await?),
+            IRCAction::SetNick(room, _) => Ok(maybe_get_room(c, room).await?),
+        }
+    }
+
+    fn get_message(&self) -> anyhow::Result<RoomMessageEventContent> {
+        match self {
+            IRCAction::Say(_, message) => Ok(RoomMessageEventContent::text_plain(message)),
+            IRCAction::Notice(_, message) => Ok(RoomMessageEventContent::text_plain(message)),
+            _ => Err(NotMunError::UnhandledAction(self.clone()).into()),
+        }
+    }
+}
+
 impl fmt::Display for IRCAction {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -44,10 +63,10 @@ impl fmt::Display for IRCAction {
     }
 }
 
-impl TryFrom<Variadic<String>> for IRCAction {
+impl TryFrom<Vec<String>> for IRCAction {
     type Error = NotMunError;
 
-    fn try_from(msg: Variadic<String>) -> Result<IRCAction, NotMunError> {
+    fn try_from(msg: Vec<String>) -> Result<IRCAction, NotMunError> {
         let first = msg[0].clone();
         match first.as_str() {
             "Say" => {
@@ -119,7 +138,7 @@ fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandl
     let proxy: Function = lua.create_async_function(move |_, msg: Variadic<String>| {
         let msg_tx = proxy_tx.clone();
         async move {
-            let action: IRCAction = msg.try_into().into_lua_err()?;
+            let action: IRCAction = msg.to_vec().try_into().into_lua_err()?;
 
             if let Err(e) = msg_tx.send(action).await {
                 error!("couldn't send irc message to pipe: {e}");
@@ -165,16 +184,11 @@ async fn consumer(client: Client, mut rx: Receiver<IRCAction>) -> anyhow::Result
             None => continue,
         };
 
+        let room = action.get_room(&client).await?;
+
         match action {
-            IRCAction::Say(maybe_room, message) => {
-                let room = maybe_get_room(&client, maybe_room).await?;
-                room.send(RoomMessageEventContent::text_plain(message))
-                    .await?;
-            }
-            IRCAction::Notice(maybe_room, message) => {
-                let room = maybe_get_room(&client, maybe_room).await?;
-                room.send(RoomMessageEventContent::notice_plain(message))
-                    .await?;
+            IRCAction::Say(_, _) | IRCAction::Notice(_, _) => {
+                room.send(action.get_message()?).await?;
             }
             e => {
                 error!("{}", NotMunError::UnhandledAction(e));
@@ -202,11 +216,11 @@ impl fmt::Display for NotMunError {
     }
 }
 
-pub async fn maybe_get_room(c: &Client, maybe_room: String) -> anyhow::Result<Room> {
-    let room_id: OwnedRoomId = match maybe_room.clone().try_into() {
+pub async fn maybe_get_room(c: &Client, maybe_room: &str) -> anyhow::Result<Room> {
+    let room_id: OwnedRoomId = match maybe_room.try_into() {
         Ok(r) => r,
         Err(_) => {
-            let alias_id = OwnedRoomAliasId::try_from(maybe_room.clone())?;
+            let alias_id = OwnedRoomAliasId::try_from(maybe_room)?;
 
             c.resolve_room_alias(&alias_id).await?.room_id
         }
@@ -214,7 +228,7 @@ pub async fn maybe_get_room(c: &Client, maybe_room: String) -> anyhow::Result<Ro
 
     match c.get_room(&room_id) {
         Some(room) => Ok(room),
-        None => Err(NotMunError::NoRoom(maybe_room).into()),
+        None => Err(NotMunError::NoRoom(maybe_room.to_string()).into()),
     }
 }
 
