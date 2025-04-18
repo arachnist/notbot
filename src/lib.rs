@@ -1,5 +1,3 @@
-#![feature(sync_unsafe_cell)]
-
 mod autojoiner;
 mod botmanager;
 mod config;

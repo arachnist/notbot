@@ -7,7 +7,9 @@ use tracing::{debug, error, info, trace, warn};
 
 use linkme::distributed_slice;
 use matrix_sdk::{
-    event_handler::EventHandlerHandle, ruma::events::room::message::OriginalSyncRoomMessageEvent,
+    event_handler::EventHandlerHandle,
+    ruma::events::room::message::OriginalSyncRoomMessageEvent,
+    ruma::events::room::message::{MessageType, RoomMessageEventContent},
     Client, Room,
 };
 
@@ -55,13 +57,43 @@ fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandl
         dbc.insert(name.to_owned(), pool);
     }
 
-    Ok(client.add_event_handler(move |ev, room| module_entrypoint(ev, room, module_config)))
+    Ok(client.add_event_handler(module_entrypoint))
 }
 
 async fn module_entrypoint(
-    _ev: OriginalSyncRoomMessageEvent,
-    _room: Room,
-    _module_config: DBConfig,
+    ev: OriginalSyncRoomMessageEvent,
+    client: Client,
+    room: Room,
 ) -> anyhow::Result<()> {
+    if client.user_id().unwrap() == ev.sender {
+        return Ok(());
+    };
+
+    let MessageType::Text(text) = ev.content.msgtype else {
+        return Ok(());
+    };
+
+    if !text.body.trim().starts_with(".db") {
+        return Ok(());
+    };
+
+    let response = {
+        let mut wip_response: String = "database status: ".to_string();
+
+        let dbc = DB_CONNECTIONS.lock().unwrap();
+        for (name, dbpool) in dbc.iter() {
+            if dbpool.is_closed() {
+                wip_response.push_str(format!("{name}: closed").as_str());
+            } else {
+                wip_response.push_str(format!("{name}: open").as_str());
+            };
+        }
+
+        wip_response
+    };
+
+    room.send(RoomMessageEventContent::text_plain(response))
+        .await?;
+
     Ok(())
 }
