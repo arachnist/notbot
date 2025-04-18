@@ -23,7 +23,21 @@ use reqwest::Client as RClient;
 
 use leon::{vals, Template};
 
-// module_path!().to_string() + "_nag"
+use lazy_static::lazy_static;
+use prometheus::Counter;
+use prometheus::{opts, register_counter};
+
+lazy_static! {
+    static ref DUE_CHECKS: Counter =
+        register_counter!(opts!("due_checks_total", "Number of due checks",)).unwrap();
+    static ref DUE_CHECKS_SUCCESSFUL: Counter = register_counter!(opts!(
+        "due_checks_successful",
+        "Number of successful due checks",
+    ))
+    .unwrap();
+    static ref NAGS: Counter =
+        register_counter!(opts!("nags_total", "Number of times members were nagged",)).unwrap();
+}
 
 #[distributed_slice(MODULE_STARTERS)]
 static MODULE_STARTER_NAG: ModuleStarter = ("notbot::kasownik_nag", module_starter_nag);
@@ -53,13 +67,13 @@ async fn module_entrypoint(
     ev: OriginalSyncRoomMessageEvent,
     room: Room,
     module_config: ModuleConfig,
-) {
+) -> anyhow::Result<()> {
     let MessageType::Text(text) = ev.content.msgtype else {
-        return;
+        return Ok(());
     };
 
     if !text.body.trim().starts_with(".due") && !text.body.starts_with("~due") {
-        return;
+        return Ok(());
     };
 
     let member: String = if text.body.starts_with(".due-me") || text.body.starts_with("~due-me") {
@@ -74,80 +88,52 @@ async fn module_entrypoint(
             .to_string()
     } else {
         error!("malformed message: {}", text.body);
-        return;
+        return Ok(());
     };
 
-    let url_template = match Template::parse(&module_config.url_template) {
-        Ok(t) => t,
-        Err(e) => {
-            error!("Couldn't parse url template: {e}");
-            return;
-        }
-    };
+    DUE_CHECKS.inc();
 
-    let url = match url_template.render(&&vals(|key| {
+    let url_template = Template::parse(&module_config.url_template)?;
+
+    let url = url_template.render(&&vals(|key| {
         if key == "member" {
             Some(member.clone().into())
         } else {
             None
         }
-    })) {
-        Ok(u) => u,
-        Err(e) => {
-            error!("error rendering url template: {e}");
-            return;
-        }
-    };
+    }))?;
 
     let client = RClient::new();
-    let response = match client.get(url).send().await {
-        Ok(r) => r,
-        Err(fe) => {
-            error!("error fetching data: {fe}");
-            if let Err(se) = room
-                .send(RoomMessageEventContent::text_plain("couldn't fetch data"))
-                .await
-            {
-                error!("error sending response: {se}");
-            };
-            return;
-        }
-    };
+    let response = client.get(url).send().await?;
 
     match response.status().as_u16() {
         404 => {
             _ = room
                 .send(RoomMessageEventContent::text_plain("No such member."))
-                .await
+                .await?
         }
         410 => {
             _ = room
                 .send(RoomMessageEventContent::text_plain("HTTP 410 Gone."))
-                .await
+                .await?
         }
         420 => {
             _ = room
                 .send(RoomMessageEventContent::text_plain("HTTP 420 Stoned."))
-                .await
+                .await?
         }
         200 => {
-            let data = match response.json::<Kasownik>().await {
-                Ok(d) => d,
-                Err(e) => {
-                    error!("couldn't decode response: {e}");
-                    return;
-                }
-            };
+            let data = response.json::<Kasownik>().await?;
 
             if data.status != "ok" {
                 error!("no such member? {:#?}", data);
-                return;
+                return Ok(());
             };
 
             let response = match data.content.as_i64() {
                 None => {
                     error!("we should not be here: {:#?}", data);
-                    return;
+                    return Ok(());
                 }
                 Some(months) => match months {
                     i64::MIN..0 => format!("{member} is {} months ahead. Cool!", 0 - months),
@@ -157,19 +143,19 @@ async fn module_entrypoint(
                 },
             };
 
-            if let Err(se) = room
-                .send(RoomMessageEventContent::text_plain(response))
-                .await
-            {
-                error!("error sending response: {se}");
-            };
+            DUE_CHECKS_SUCCESSFUL.inc();
+
+            room.send(RoomMessageEventContent::text_plain(response))
+                .await?;
         }
         _ => {
             _ = room
                 .send(RoomMessageEventContent::text_plain("wrong status code"))
-                .await
+                .await?
         }
     };
+
+    Ok(())
 }
 
 async fn module_entrypoint_nag(
@@ -274,6 +260,8 @@ async fn module_entrypoint_nag(
             debug!("too early to nag: {months}");
             return;
         };
+
+        NAGS.inc();
 
         let period = match months {
             i64::MIN..=0 => {

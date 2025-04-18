@@ -1,3 +1,5 @@
+use crate::{Config, ModuleStarter, MODULE_STARTERS};
+
 use linkme::distributed_slice;
 
 use matrix_sdk::{
@@ -9,7 +11,14 @@ use serde_derive::Deserialize;
 use tokio::time::{sleep, Duration};
 use tracing::{error, info, trace};
 
-use crate::{Config, ModuleStarter, MODULE_STARTERS};
+use lazy_static::lazy_static;
+use prometheus::Counter;
+use prometheus::{opts, register_counter};
+
+lazy_static! {
+    static ref ROOM_INVITES: Counter =
+        register_counter!(opts!("room_invite_events_total", "Number of room invites",)).unwrap();
+}
 
 #[distributed_slice(MODULE_STARTERS)]
 static MODULE_STARTER: ModuleStarter = (module_path!(), module_starter);
@@ -53,6 +62,8 @@ async fn module_entrypoint(
     {
         return;
     };
+
+    ROOM_INVITES.inc();
 
     tokio::spawn(async move {
         info!("Autojoining room {}", room.room_id());

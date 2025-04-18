@@ -21,6 +21,18 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use tokio::time::{interval, Duration};
 
+use lazy_static::lazy_static;
+use prometheus::Counter;
+use prometheus::{opts, register_counter};
+
+lazy_static! {
+    static ref CHECKINATOR_CALLS: Counter = register_counter!(opts!(
+        "checkinator_calls_total",
+        "Number of times checkinator was called",
+    ))
+    .unwrap();
+}
+
 #[distributed_slice(MODULE_STARTERS)]
 static MODULE_STARTER: ModuleStarter = (module_path!(), module_starter);
 
@@ -166,6 +178,8 @@ async fn module_entrypoint(
 
     trace!("checking if message starts with .at: {:#?}", text.body);
     if text.body.trim().starts_with(".at") {
+        CHECKINATOR_CALLS.inc();
+
         let room_name = match room.canonical_alias() {
             Some(name) => name.to_string(),
             None => room.room_id().to_string(),
