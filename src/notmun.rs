@@ -34,8 +34,44 @@ impl fmt::Display for IRCAction {
         match self {
             IRCAction::Say(room, message) => write!(fmt, "Say: {room} <- {message}"),
             IRCAction::Notice(room, message) => write!(fmt, "Notice: {room} <- {message}"),
-            IRCAction::Kick(room, target, reason) => write!(fmt, "Kick: {room} -> {target}: {reason}"),
-            IRCAction::SetNick(room, display_name) => write!(fmt, "Present as: {room} -> {display_name}"),
+            IRCAction::Kick(room, target, reason) => {
+                write!(fmt, "Kick: {room} -> {target}: {reason}")
+            }
+            IRCAction::SetNick(room, display_name) => {
+                write!(fmt, "Present as: {room} -> {display_name}")
+            }
+        }
+    }
+}
+
+impl TryFrom<Variadic<String>> for IRCAction {
+    type Error = NotMunError;
+
+    fn try_from(msg: Variadic<String>) -> Result<IRCAction, NotMunError> {
+        let first = msg[0].clone();
+        match first.as_str() {
+            "Say" => {
+                let room: String = msg[1].clone();
+                let message: String = msg[2].clone();
+                Ok(IRCAction::Say(room, message))
+            }
+            "Notice" => {
+                let room: String = msg[1].clone();
+                let message: String = msg[2].clone();
+                Ok(IRCAction::Notice(room, message))
+            }
+            "Kick" => {
+                let room: String = msg[1].clone();
+                let target: String = msg[2].clone();
+                let message: String = msg[3].clone();
+                Ok(IRCAction::Kick(room, target, message))
+            }
+            "SetNick" => {
+                let room: String = msg[1].clone();
+                let display_name: String = msg[2].clone();
+                Ok(IRCAction::SetNick(room, display_name))
+            }
+            &_ => Err(NotMunError::UnknownAction),
         }
     }
 }
@@ -83,31 +119,7 @@ fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandl
     let proxy: Function = lua.create_async_function(move |_, msg: Variadic<String>| {
         let msg_tx = proxy_tx.clone();
         async move {
-            let first = msg[0].clone();
-            let action: IRCAction = match first.as_str() {
-                "Say" => {
-                    let room: String = msg[1].clone();
-                    let message: String = msg[2].clone();
-                    IRCAction::Say(room, message)
-                }
-                "Notice" => {
-                    let room: String = msg[1].clone();
-                    let message: String = msg[2].clone();
-                    IRCAction::Notice(room, message)
-                }
-                "Kick" => {
-                    let room: String = msg[1].clone();
-                    let target: String = msg[2].clone();
-                    let message: String = msg[3].clone();
-                    IRCAction::Kick(room, target, message)
-                }
-                "SetNick" => {
-                    let room: String = msg[1].clone();
-                    let display_name: String = msg[2].clone();
-                    IRCAction::SetNick(room, display_name)
-                }
-                &_ => todo!(),
-            };
+            let action: IRCAction = msg.try_into().into_lua_err()?;
 
             if let Err(e) = msg_tx.send(action).await {
                 error!("couldn't send irc message to pipe: {e}");
@@ -156,14 +168,16 @@ async fn consumer(client: Client, mut rx: Receiver<IRCAction>) -> anyhow::Result
         match action {
             IRCAction::Say(maybe_room, message) => {
                 let room = maybe_get_room(&client, maybe_room).await?;
-                room.send(RoomMessageEventContent::text_plain(message)).await?;
+                room.send(RoomMessageEventContent::text_plain(message))
+                    .await?;
             }
             IRCAction::Notice(maybe_room, message) => {
                 let room = maybe_get_room(&client, maybe_room).await?;
-                room.send(RoomMessageEventContent::notice_plain(message)).await?;
+                room.send(RoomMessageEventContent::notice_plain(message))
+                    .await?;
             }
             e => {
-                error!("unhandled action type: {e}");
+                error!("{}", NotMunError::UnhandledAction(e));
             }
         }
     }
@@ -172,6 +186,8 @@ async fn consumer(client: Client, mut rx: Receiver<IRCAction>) -> anyhow::Result
 #[derive(Debug)]
 enum NotMunError {
     NoRoom(String),
+    UnknownAction,
+    UnhandledAction(IRCAction),
 }
 
 impl StdError for NotMunError {}
@@ -179,7 +195,9 @@ impl StdError for NotMunError {}
 impl fmt::Display for NotMunError {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            NotMunError::NoRoom(e) => write!(fmt, "Couldn't get room from: {}", e),
+            NotMunError::NoRoom(e) => write!(fmt, "Couldn't get room from: {e}"),
+            NotMunError::UnknownAction => write!(fmt, "Unknown action"),
+            NotMunError::UnhandledAction(e) => write!(fmt, "Unhandled action: {e}"),
         }
     }
 }
@@ -274,27 +292,6 @@ async fn lua_dispatcher(
         }
         _ => Ok(()),
     }
-}
-
-fn blocking_fetch_http(lua: &Lua, uri: String) -> anyhow::Result<(String, u16, Table)> {
-    let resp = reqwest::blocking::get(&uri)
-        .and_then(|resp| resp.error_for_status())
-        .into_lua_err()?;
-
-    let code = resp.status().as_u16();
-    let headers: Table = lua.create_table()?;
-
-    for (k, raw_v) in resp.headers() {
-        headers.set(k.as_str(), raw_v.to_str().into_lua_err()?)?;
-    }
-
-    let body = match resp.text() {
-        Ok(r) => r,
-        Err(_) => "".to_string(),
-    };
-
-    let rval = (body, code, headers);
-    Ok(rval)
 }
 
 async fn async_fetch_http(lua: Lua, uri: String) -> anyhow::Result<(String, u16, Table)> {
