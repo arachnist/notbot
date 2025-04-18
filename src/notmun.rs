@@ -2,14 +2,15 @@ use crate::{Config, ModuleStarter, MODULE_STARTERS};
 
 use std::{fs, path::Path};
 
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, trace};
 
 use tokio::sync::mpsc::{channel, Receiver};
 
 use matrix_sdk::{
     event_handler::{Ctx, EventHandlerHandle},
+    ruma::events::room::member::{MembershipChange, RoomMemberEvent},
     ruma::events::room::message::{MessageType, RoomMessageEvent, RoomMessageEventContent},
-    ruma::events::{AnyMessageLikeEvent, AnySyncTimelineEvent, AnyTimelineEvent},
+    ruma::events::{AnyMessageLikeEvent, AnyStateEvent, AnySyncTimelineEvent, AnyTimelineEvent},
     ruma::{OwnedRoomAliasId, OwnedRoomId},
     Client, Room,
 };
@@ -190,6 +191,36 @@ async fn lua_dispatcher(
                 .call_async::<()>((ev_type, event.sender.as_str(), target.as_str(), content))
                 .await?;
             Ok(())
+        }
+        AnyTimelineEvent::State(AnyStateEvent::RoomMember(RoomMemberEvent::Original(event))) => {
+            info!(
+                "membership change: {target} {:#?} {}",
+                event.membership_change(),
+                event.state_key
+            );
+
+            match event.membership_change() {
+                MembershipChange::Invited => {
+                    trace!("membershi content: {event:#?}");
+                    // needed to properly fill-up channel objects
+                    if event.state_key != client.user_id().unwrap() {
+                        debug!(
+                            "event not for us: {}, {}",
+                            event.state_key,
+                            client.user_id().unwrap()
+                        );
+                        return Ok(());
+                    };
+                    debug!("calling irc:Join for {target}");
+                    lua.load(chunk! {
+                        irc:Join($target)
+                    })
+                    .exec()?;
+
+                    Ok(())
+                }
+                _ => Ok(()),
+            }
         }
         _ => Ok(()),
     }
