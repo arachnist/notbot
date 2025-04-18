@@ -198,10 +198,7 @@ async fn consumer(client: Client, mut rx: Receiver<IRCAction>) -> anyhow::Result
     }
 }
 
-async fn async_fetch_http(
-    lua: Lua,
-    uri: String,
-) -> anyhow::Result<(String, u16, Table)> {
+async fn async_fetch_http(lua: Lua, uri: String) -> anyhow::Result<(String, u16, Table)> {
     let resp = reqwest::get(&uri)
         .await
         .and_then(|resp| resp.error_for_status())

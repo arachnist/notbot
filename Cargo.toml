@@ -13,6 +13,7 @@ path = "src/bin/main.rs"
 
 [dependencies]
 anyhow = "1.0.95"
+deadpool-postgres = { version = "0.14.1", features = ["serde", "rt_tokio_1"] }
 futures = "0.3.31"
 hyper = { version = "1.6.0", features = ["server", "http1"] }
 hyper-util = "0.1.11"
@@ -27,6 +28,7 @@ serde = { version = "1.0.217", features = ["derive", "serde_derive"] }
 serde_derive = "1.0.217"
 serde_json = "1.0.137"
 tokio = { version = "1.43.0", features = ["macros", "rt-multi-thread"] }
+tokio-postgres = "0.7.13"
 toml = "0.8.19"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
