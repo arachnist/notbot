@@ -1,5 +1,6 @@
 use crate::{Config, ModuleStarter, MODULE_STARTERS};
 
+use core::{error::Error as StdError, fmt};
 use std::{fs, path::Path};
 
 use tracing::{debug, error, info, trace};
@@ -28,6 +29,17 @@ enum IRCAction {
     SetNick(String, String),
 }
 
+impl fmt::Display for IRCAction {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            IRCAction::Say(room, message) => write!(fmt, "Say: {room} <- {message}"),
+            IRCAction::Notice(room, message) => write!(fmt, "Notice: {room} <- {message}"),
+            IRCAction::Kick(room, target, reason) => write!(fmt, "Kick: {room} -> {target}: {reason}"),
+            IRCAction::SetNick(room, display_name) => write!(fmt, "Present as: {room} -> {display_name}"),
+        }
+    }
+}
+
 #[distributed_slice(MODULE_STARTERS)]
 static MODULE_STARTER: ModuleStarter = (module_path!(), module_starter);
 
@@ -39,10 +51,6 @@ fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandl
 
     let _ = lua_globals.set("MUN_PATH", module_config.mun_path.clone());
 
-    let _ = lua_globals.set(
-        "blocking_fetch_http",
-        lua.create_function(|lua, uri| blocking_fetch_http(lua, uri).into_lua_err())?,
-    );
     let _ = lua_globals.set(
         "async_fetch_http",
         lua.create_async_function(|lua, uri| async move {
@@ -68,15 +76,40 @@ fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandl
         })?,
     )?;
 
-    // FIXME: an absolutely horrible channel, but i couldn't get anything else to work :(
-    let (tx, rx) = channel::<Vec<String>>(1);
+    let (tx, rx) = channel::<IRCAction>(1);
     let lua_matrix: Table = lua.create_table()?;
 
     let proxy_tx = tx.clone();
-    let proxy: Function = lua.create_async_function(move |_, strings: Variadic<String>| {
+    let proxy: Function = lua.create_async_function(move |_, msg: Variadic<String>| {
         let msg_tx = proxy_tx.clone();
         async move {
-            if let Err(e) = msg_tx.send(strings.into()).await {
+            let first = msg[0].clone();
+            let action: IRCAction = match first.as_str() {
+                "Say" => {
+                    let room: String = msg[1].clone();
+                    let message: String = msg[2].clone();
+                    IRCAction::Say(room, message)
+                }
+                "Notice" => {
+                    let room: String = msg[1].clone();
+                    let message: String = msg[2].clone();
+                    IRCAction::Notice(room, message)
+                }
+                "Kick" => {
+                    let room: String = msg[1].clone();
+                    let target: String = msg[2].clone();
+                    let message: String = msg[3].clone();
+                    IRCAction::Kick(room, target, message)
+                }
+                "SetNick" => {
+                    let room: String = msg[1].clone();
+                    let display_name: String = msg[2].clone();
+                    IRCAction::SetNick(room, display_name)
+                }
+                &_ => todo!(),
+            };
+
+            if let Err(e) = msg_tx.send(action).await {
                 error!("couldn't send irc message to pipe: {e}");
             };
             Ok(())
@@ -113,40 +146,57 @@ fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandl
     }))
 }
 
-// FIXME: goes without saying
-async fn consumer(client: Client, mut rx: Receiver<Vec<String>>) -> anyhow::Result<()> {
+async fn consumer(client: Client, mut rx: Receiver<IRCAction>) -> anyhow::Result<()> {
     loop {
-        let msg = match rx.recv().await {
+        let action = match rx.recv().await {
             Some(m) => m,
             None => continue,
         };
 
-        let maybe_room: String = msg[1].clone();
-
-        let room_id: OwnedRoomId = match maybe_room.clone().try_into() {
-            Ok(r) => r,
-            Err(_) => {
-                let alias_id = OwnedRoomAliasId::try_from(maybe_room)?;
-
-                client.resolve_room_alias(&alias_id).await?.room_id
+        match action {
+            IRCAction::Say(maybe_room, message) => {
+                let room = maybe_get_room(&client, maybe_room).await?;
+                room.send(RoomMessageEventContent::text_plain(message)).await?;
             }
-        };
-
-        let room = match client.get_room(&room_id) {
-            Some(r) => r,
-            None => continue,
-        };
-
-        if msg[0] == "Say" {
-            room.send(RoomMessageEventContent::text_plain(msg[2].clone()))
-                .await?;
-            continue;
-        };
-        if msg[0] == "Notice" {
-            room.send(RoomMessageEventContent::notice_plain(msg[2].clone()))
-                .await?;
-            continue;
+            IRCAction::Notice(maybe_room, message) => {
+                let room = maybe_get_room(&client, maybe_room).await?;
+                room.send(RoomMessageEventContent::notice_plain(message)).await?;
+            }
+            e => {
+                error!("unhandled action type: {e}");
+            }
         }
+    }
+}
+
+#[derive(Debug)]
+enum NotMunError {
+    NoRoom(String),
+}
+
+impl StdError for NotMunError {}
+
+impl fmt::Display for NotMunError {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            NotMunError::NoRoom(e) => write!(fmt, "Couldn't get room from: {}", e),
+        }
+    }
+}
+
+pub async fn maybe_get_room(c: &Client, maybe_room: String) -> anyhow::Result<Room> {
+    let room_id: OwnedRoomId = match maybe_room.clone().try_into() {
+        Ok(r) => r,
+        Err(_) => {
+            let alias_id = OwnedRoomAliasId::try_from(maybe_room.clone())?;
+
+            c.resolve_room_alias(&alias_id).await?.room_id
+        }
+    };
+
+    match c.get_room(&room_id) {
+        Some(room) => Ok(room),
+        None => Err(NotMunError::NoRoom(maybe_room).into()),
     }
 }
 
