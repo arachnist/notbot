@@ -29,6 +29,18 @@ use serde::{Deserialize, Serialize};
 
 use linkme::distributed_slice;
 
+use lazy_static::lazy_static;
+use prometheus::Counter;
+use prometheus::{opts, register_counter};
+
+lazy_static! {
+    static ref CONFIG_RELOADS: Counter = register_counter!(opts!(
+        "config_reloads_total",
+        "Number of DB status requests",
+    ))
+    .unwrap();
+}
+
 pub type WorkerStarter = (
     &'static str,
     fn(&Client, &Config) -> anyhow::Result<AbortHandle>,
@@ -416,6 +428,7 @@ impl BotManager {
     pub async fn reload(&self, mut rx: Receiver<Room>) -> anyhow::Result<()> {
         loop {
             let room: Room = rx.recv().await?;
+            CONFIG_RELOADS.inc();
             debug!("reload: attempting lock");
             let inner = &mut self.inner.lock().await;
             debug!("reload: grabbed lock");

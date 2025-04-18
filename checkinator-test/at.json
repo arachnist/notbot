@@ -1,0 +1,55 @@
+{
+  "api_compatibility": [
+    "15"
+  ],
+  "space": "Warsaw Hackerspace",
+  "logo": "https://hackerspace.pl/static/site/syrenka-black.png",
+  "url": "https://hackerspace.pl",
+  "location": {
+    "lat": 52.2416,
+    "lon": 20.98485,
+    "address": "ul. Żelazna 103A, 01-018 Warszawa, Poland"
+  },
+  "state": {
+    "open": false,
+    "message": "members only",
+    "icon": {
+      "open": "https://hackerspace.pl/static/site/status-open-small.png",
+      "closed": "https://hackerspace.pl/static/site/status-closed-small.png"
+    }
+  },
+  "contact": {
+    "facebook": "hackerspacepl",
+    "irc": "irc://irc.libera.chat/#hswaw",
+    "mastodon": "@hswaw@hackerspace.pl",
+    "matrix": "#general:hackerspace.pl",
+    "ml": "waw@lists.hackerspace.pl",
+    "twitter": "@hackerspacepl"
+  },
+  "projects": [
+    "https://wiki.hackerspace.pl/projects"
+  ],
+  "feeds": {
+    "blog": {
+      "type": "atom",
+      "url": "https://blog.hackerspace.pl/feed/atom/"
+    },
+    "calendar": {
+      "type": "ical",
+      "url": "https://owncloud.hackerspace.pl/remote.php/dav/public-calendars/g8toktZrA9fyAHNi/?export"
+    },
+    "wiki": {
+      "type": "rss",
+      "url": "https://wiki.hackerspace.pl/feed.php"
+    }
+  },
+  "sensors": {
+    "people_now_present": [
+      {
+        "value": 0,
+        "names": [
+        ]
+      }
+    ]
+  }
+}

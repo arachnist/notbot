@@ -15,6 +15,23 @@ use serde_derive::Deserialize;
 use serde_json::Value;
 use urlencoding::encode as uencode;
 
+use lazy_static::lazy_static;
+use prometheus::Counter;
+use prometheus::{opts, register_counter};
+
+lazy_static! {
+    static ref WOLFRAM_CALLS: Counter = register_counter!(opts!(
+        "wolfram_calls_total",
+        "Number of times wolfram was called",
+    ))
+    .unwrap();
+    static ref WOLFRAM_CALLS_SUCCESSFUL: Counter = register_counter!(opts!(
+        "wolfram_calls_total",
+        "Number of times wolfram was called",
+    ))
+    .unwrap();
+}
+
 #[distributed_slice(MODULE_STARTERS)]
 static MODULE_STARTER: ModuleStarter = (module_path!(), module_starter);
 
@@ -28,66 +45,66 @@ pub struct ModuleConfig {
     pub app_id: String,
 }
 
-async fn module_entrypoint(ev: OriginalSyncRoomMessageEvent, room: Room, config: ModuleConfig) {
+async fn module_entrypoint(
+    ev: OriginalSyncRoomMessageEvent,
+    room: Room,
+    config: ModuleConfig,
+) -> anyhow::Result<()> {
     trace!("in wolfram");
 
     trace!("checking message type");
     let MessageType::Text(text) = ev.content.msgtype else {
-        return;
+        return Ok(());
     };
 
     trace!("checking if message starts with .c: {:#?}", text.body);
-    if text.body.trim().starts_with(".c ") {
-        tokio::spawn(async move {
-            let text_query = text.body.trim().strip_prefix(".c ").unwrap();
-            let query = uencode(text_query);
-
-            let url: String = "http://api.wolframalpha.com/v2/query?input=".to_owned()
-                + query.as_ref()
-                + "&appid="
-                + config.app_id.as_str()
-                + "&output=json";
-
-            let data = match fetch_and_decode_json::<WolframAlpha>(url).await {
-                Ok(d) => d,
-                Err(fe) => {
-                    error!("error fetching data: {fe}");
-                    if let Err(se) = room
-                        .send(RoomMessageEventContent::text_plain("couldn't fetch data"))
-                        .await
-                    {
-                        error!("error sending response: {se}");
-                    };
-                    return;
-                }
-            };
-
-            if !data.queryresult.success || data.queryresult.numpods == 0 {
-                if let Err(e) = room
-                    .send(RoomMessageEventContent::text_plain("no results"))
-                    .await
-                {
-                    error!("error sending response: {e}");
-                };
-                return;
-            };
-
-            trace!("wolfram data: {:#?}", data);
-
-            let mut response_parts: Vec<String> = vec![];
-
-            for pod in data.queryresult.pods {
-                if pod.primary.is_some_and(|x| x) {
-                    response_parts.push(pod.title + ": " + pod.subpods[0].plaintext.as_str());
-                }
-            }
-
-            let response = RoomMessageEventContent::text_plain(response_parts.join("\n"));
-            if let Err(e) = room.send(response).await {
-                error!("error sending response: {e}");
-            }
-        });
+    if !text.body.trim().starts_with(".c ") {
+        return Ok(());
     };
+
+    WOLFRAM_CALLS.inc();
+
+    let text_query = text.body.trim().strip_prefix(".c ").unwrap();
+    let query = uencode(text_query);
+
+    let url: String = "http://api.wolframalpha.com/v2/query?input=".to_owned()
+        + query.as_ref()
+        + "&appid="
+        + config.app_id.as_str()
+        + "&output=json";
+
+    let data = match fetch_and_decode_json::<WolframAlpha>(url).await {
+        Ok(d) => d,
+        Err(fe) => {
+            error!("error fetching data: {fe}");
+            room.send(RoomMessageEventContent::text_plain(
+                "couldn't fetch data from wolfram",
+            ))
+            .await?;
+            return Ok(());
+        }
+    };
+
+    if !data.queryresult.success || data.queryresult.numpods == 0 {
+        room.send(RoomMessageEventContent::text_plain("no results"))
+            .await?;
+        return Ok(());
+    };
+
+    trace!("wolfram data: {:#?}", data);
+
+    let mut response_parts: Vec<String> = vec![];
+
+    for pod in data.queryresult.pods {
+        if pod.primary.is_some_and(|x| x) {
+            response_parts.push(pod.title + ": " + pod.subpods[0].plaintext.as_str());
+        }
+    }
+
+    let response = RoomMessageEventContent::text_plain(response_parts.join("\n"));
+    room.send(response).await?;
+
+    Ok(())
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Deserialize)]

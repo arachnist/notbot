@@ -3,7 +3,7 @@ use crate::{Config, ModuleStarter, MODULE_STARTERS};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use tracing::{debug, error, info, trace, warn};
+use tracing::{error, info};
 
 use linkme::distributed_slice;
 use matrix_sdk::{
@@ -12,6 +12,8 @@ use matrix_sdk::{
     ruma::events::room::message::{MessageType, RoomMessageEventContent},
     Client, Room,
 };
+use prometheus::{opts, register_counter};
+use prometheus::Counter;
 
 use lazy_static::lazy_static;
 
@@ -19,6 +21,11 @@ use deadpool_postgres::{Config as PGConfig, ManagerConfig, Pool, RecyclingMethod
 use tokio_postgres::NoTls;
 
 lazy_static! {
+    static ref DB_STATUS: Counter = register_counter!(opts!(
+        "db_status_requests_total",
+        "Number of DB status requests",
+    ))
+    .unwrap();
     static ref DB_CONNECTIONS: DBPools = Default::default();
 }
 
@@ -76,6 +83,8 @@ async fn module_entrypoint(
     if !text.body.trim().starts_with(".db") {
         return Ok(());
     };
+
+    DB_STATUS.inc();
 
     let response = {
         let mut wip_response: String = "database status: ".to_string();
