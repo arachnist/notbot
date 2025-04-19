@@ -1,4 +1,4 @@
-use crate::{maybe_get_room, Config, ModuleStarter, MODULE_STARTERS};
+use crate::{maybe_get_room, Config, DBError, DBPools, ModuleStarter, MODULE_STARTERS};
 
 use core::{error::Error as StdError, fmt};
 use std::{fs, path::Path};
@@ -29,32 +29,7 @@ fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandl
     let lua: Lua = Lua::new();
     let lua_globals: Table = lua.globals();
 
-    let _ = lua_globals.set("MUN_PATH", module_config.mun_path.clone());
-
-    let _ = lua_globals.set(
-        "async_fetch_http",
-        lua.create_async_function(|lua, uri| async move {
-            async_fetch_http(lua, uri).await.into_lua_err()
-        })?,
-    );
-    let _ = lua_globals.set(
-        "fetch_json",
-        lua.create_async_function(|lua, uri: String| async move {
-            let resp = reqwest::get(&uri)
-                .await
-                .and_then(|resp| resp.error_for_status())
-                .into_lua_err()?;
-            let json = resp.json::<serde_json::Value>().await.into_lua_err()?;
-            lua.to_value(&json)
-        })?,
-    );
-    lua_globals.set(
-        "r_debug",
-        lua.create_function(|_, value: Value| {
-            debug!("{value:#?}");
-            Ok(())
-        })?,
-    )?;
+    initialize_lua_env(&lua, &lua_globals, &module_config)?;
 
     let (tx, rx) = channel::<IRCAction>(1);
     let lua_matrix: Table = lua.create_table()?;
@@ -196,6 +171,40 @@ async fn consumer(client: Client, mut rx: Receiver<IRCAction>) -> anyhow::Result
             }
         }
     }
+}
+
+fn initialize_lua_env(lua: &Lua, global: &Table, config: &ModuleConfig) -> anyhow::Result<()> {
+    global.set("MUN_PATH", config.mun_path.clone())?;
+
+    global.set(
+        "async_fetch_http",
+        lua.create_async_function(|lua, uri| async move {
+            async_fetch_http(lua, uri).await.into_lua_err()
+        })?,
+    )?;
+    global.set(
+        "fetch_json",
+        lua.create_async_function(|lua, uri: String| async move {
+            let resp = reqwest::get(&uri)
+                .await
+                .and_then(|resp| resp.error_for_status())
+                .into_lua_err()?;
+            let json = resp.json::<serde_json::Value>().await.into_lua_err()?;
+            lua.to_value(&json)
+        })?,
+    )?;
+    global.set(
+        "r_debug",
+        lua.create_function(|_, value: Value| {
+            debug!("{value:#?}");
+            Ok(())
+        })?,
+    )?;
+
+    let db_mod: Table = lua.create_table()?;
+    db_mod.set(
+
+    Ok(())
 }
 
 async fn async_fetch_http(lua: Lua, uri: String) -> anyhow::Result<(String, u16, Table)> {

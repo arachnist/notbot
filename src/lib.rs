@@ -14,6 +14,8 @@ mod wolfram;
 pub use crate::botmanager::BotManager;
 use crate::notmun::NotMunError;
 
+pub use crate::db::{DBError, DBPools};
+
 use crate::botmanager::{ModuleStarter, WorkerStarter, MODULE_STARTERS, WORKERS};
 pub use crate::config::Config;
 pub use crate::config::ModuleConfig;

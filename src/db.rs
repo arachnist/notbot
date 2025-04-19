@@ -19,7 +19,7 @@ use prometheus::{opts, register_counter};
 use lazy_static::lazy_static;
 
 use deadpool_postgres::{
-    Client as DBClient, Config as PGConfig, Manager, ManagerConfig, Pool, RecyclingMethod, Runtime,
+    Client as DBClient, Config as PGConfig, ManagerConfig, Pool, RecyclingMethod, Runtime,
 };
 use tokio_postgres::NoTls;
 
@@ -35,7 +35,7 @@ lazy_static! {
 pub type DBConfig = HashMap<String, PGConfig>;
 
 #[derive(Default)]
-struct DBPools(Arc<Mutex<HashMap<String, Pool>>>);
+pub struct DBPools(Arc<Mutex<HashMap<String, Pool>>>);
 
 impl DBPools {
     pub(crate) async fn get_pool(handle: &str) -> Result<Pool, DBError> {
@@ -174,7 +174,7 @@ async fn module_entrypoint(
 }
 
 #[derive(Debug)]
-pub(crate) enum DBError {
+pub enum DBError {
     CollectionLock,
     HandleNotFound,
     GetClient,
