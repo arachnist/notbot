@@ -171,7 +171,7 @@ async fn consumer(client: Client, mut rx: Receiver<IRCAction>) -> anyhow::Result
         let room = action.get_room(&client).await?;
 
         match action {
-            IRCAction::Say(_, _) | IRCAction::Notice(_, _) => {
+            IRCAction::Say(_, _) | IRCAction::Notice(_, _) | IRCAction::Html(_, _) => {
                 room.send(action.get_message()?).await?;
             }
             e => {
@@ -308,6 +308,7 @@ async fn async_fetch_http(lua: Lua, uri: String) -> anyhow::Result<(String, u16,
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub(crate) enum IRCAction {
     Say(String, String),
+    Html(String, String),
     Notice(String, String),
     Kick(String, String, String),
     SetNick(String, String),
@@ -316,17 +317,20 @@ pub(crate) enum IRCAction {
 impl IRCAction {
     async fn get_room(&self, c: &Client) -> anyhow::Result<Room> {
         match self {
-            IRCAction::Say(room, _) => Ok(maybe_get_room(c, room).await?),
-            IRCAction::Notice(room, _) => Ok(maybe_get_room(c, room).await?),
-            IRCAction::Kick(room, _, _) => Ok(maybe_get_room(c, room).await?),
-            IRCAction::SetNick(room, _) => Ok(maybe_get_room(c, room).await?),
+            IRCAction::Say(room, _)
+            | IRCAction::Html(room, _)
+            | IRCAction::Notice(room, _)
+            | IRCAction::Kick(room, _, _)
+            | IRCAction::SetNick(room, _) => Ok(maybe_get_room(c, room).await?),
         }
     }
 
     fn get_message(&self) -> anyhow::Result<RoomMessageEventContent> {
         match self {
-            IRCAction::Say(_, message) => Ok(RoomMessageEventContent::text_plain(message)),
-            IRCAction::Notice(_, message) => Ok(RoomMessageEventContent::text_plain(message)),
+            IRCAction::Say(_, message) | IRCAction::Notice(_, message) => {
+                Ok(RoomMessageEventContent::text_plain(message))
+            }
+            IRCAction::Html(_, message) => Ok(RoomMessageEventContent::text_html(message, message)),
             _ => Err(NotMunError::UnhandledAction(self.clone()).into()),
         }
     }
@@ -336,6 +340,7 @@ impl fmt::Display for IRCAction {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self {
             IRCAction::Say(room, message) => write!(fmt, "Say: {room} <- {message}"),
+            IRCAction::Html(room, message) => write!(fmt, "Html: {room} <- {message}"),
             IRCAction::Notice(room, message) => write!(fmt, "Notice: {room} <- {message}"),
             IRCAction::Kick(room, target, reason) => {
                 write!(fmt, "Kick: {room} -> {target}: {reason}")
@@ -357,6 +362,11 @@ impl TryFrom<Vec<String>> for IRCAction {
                 let room: String = msg[1].clone();
                 let message: String = msg[2].clone();
                 Ok(IRCAction::Say(room, message))
+            }
+            "Html" => {
+                let room: String = msg[1].clone();
+                let message: String = msg[2].clone();
+                Ok(IRCAction::Html(room, message))
             }
             "Notice" => {
                 let room: String = msg[1].clone();
