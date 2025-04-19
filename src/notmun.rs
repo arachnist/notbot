@@ -18,7 +18,14 @@ use matrix_sdk::{
 use linkme::distributed_slice;
 use serde_derive::Deserialize;
 
-use mlua::{chunk, ExternalResult, Function, Lua, LuaSerdeExt, Table, Value, Variadic};
+use deadpool_postgres::Client as DBClient;
+use futures::pin_mut;
+use tokio_postgres::Row;
+use tokio_stream::StreamExt;
+
+use mlua::{
+    chunk, ExternalResult, Function, Lua, LuaSerdeExt, Result as LuaResult, Table, Value, Variadic,
+};
 
 #[distributed_slice(MODULE_STARTERS)]
 static MODULE_STARTER: ModuleStarter = (module_path!(), module_starter);
@@ -105,6 +112,7 @@ async fn lua_dispatcher(
         irc:HandleCommand(...)
     });
 
+    debug!("attempting to match event");
     match event {
         AnyTimelineEvent::MessageLike(AnyMessageLikeEvent::RoomMessage(
             RoomMessageEvent::Original(event),
@@ -200,11 +208,74 @@ fn initialize_lua_env(lua: &Lua, global: &Table, config: &ModuleConfig) -> anyho
             Ok(())
         })?,
     )?;
-
-    let db_mod: Table = lua.create_table()?;
-    db_mod.set(
+    global.set(
+        "rust_db_query_wrapper",
+        lua.create_async_function(
+            |lua, (handle, statement, query_args): (String, String, Variadic<String>)| async move {
+                debug!(
+                    "in db query wrapper: {handle} | {statement} | {:#?}",
+                    query_args
+                );
+                let res = lua_db_query(lua, &handle, &statement, query_args)
+                    .await
+                    .into_lua_err()?;
+                trace!("returning from query wrapper: {:#?}", res);
+                LuaResult::Ok(res)
+            },
+        )?,
+    )?;
 
     Ok(())
+}
+
+async fn lua_db_query(
+    lua: Lua,
+    handle: &str,
+    statement_str: &str,
+    query_args: Variadic<String>,
+) -> LuaResult<Table> {
+    debug!("aquiring client for {handle}");
+    let client = DBPools::get_client(handle).await.into_lua_err()?;
+    debug!("preparing statement with {statement_str}");
+    let statement = client.prepare(statement_str).await.into_lua_err()?;
+
+    debug!("executing query");
+    let results_stream = client
+        .query_raw(&statement, query_args.to_vec())
+        .await
+        .into_lua_err()?;
+    debug!("query executed");
+
+    pin_mut!(results_stream);
+
+    debug!("constructing response");
+    let lua_result = lua.create_table()?;
+
+    while let Some(result) = results_stream.next().await {
+        let row: Row = match result {
+            Ok(r) => r,
+            Err(_) => break,
+        };
+        trace!("returned row: {:#?}", row);
+
+        let lua_row: Table = lua_db_row_to_table(&lua, &row)?;
+
+        lua_result.push(lua_row)?;
+    }
+
+    trace!("returning results {:#?}", lua_result);
+
+    LuaResult::Ok(lua_result)
+}
+
+fn lua_db_row_to_table(lua: &Lua, row: &Row) -> LuaResult<Table> {
+    let lua_row: Table = lua.create_table()?;
+
+    for (i, rcol) in row.columns().iter().enumerate() {
+        lua_row.set(rcol.name(), row.get::<usize, String>(i))?;
+    }
+
+    LuaResult::Ok(lua_row)
 }
 
 async fn async_fetch_http(lua: Lua, uri: String) -> anyhow::Result<(String, u16, Table)> {
