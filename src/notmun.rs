@@ -23,7 +23,8 @@ use tokio_postgres::{types::Type, Row};
 use tokio_stream::StreamExt;
 
 use mlua::{
-    chunk, ExternalResult, Function, Lua, LuaSerdeExt, Result as LuaResult, Table, Value, Variadic,
+    chunk, ExternalError, ExternalResult, Lua, LuaSerdeExt, Result as LuaResult, Table, Value,
+    Variadic,
 };
 
 #[distributed_slice(MODULE_STARTERS)]
@@ -41,19 +42,22 @@ fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandl
     let lua_matrix: Table = lua.create_table()?;
 
     let proxy_tx = tx.clone();
-    let proxy: Function = lua.create_async_function(move |_, msg: Variadic<String>| {
-        let msg_tx = proxy_tx.clone();
-        async move {
-            let action: IRCAction = msg.to_vec().try_into().into_lua_err()?;
 
-            if let Err(e) = msg_tx.send(action).await {
-                error!("couldn't send irc message to pipe: {e}");
-            };
-            Ok(())
-        }
-    })?;
+    lua_matrix.set(
+        "Proxy",
+        lua.create_async_function(move |_, msg: Variadic<String>| {
+            let msg_tx = proxy_tx.clone();
+            async move {
+                let action: IRCAction = msg.to_vec().try_into().into_lua_err()?;
 
-    let _ = lua_matrix.set("Proxy", proxy);
+                if let Err(e) = msg_tx.send(action).await {
+                    error!("couldn't send irc message to pipe: {e}");
+                    return Err(e.into_lua_err());
+                };
+                Ok(())
+            }
+        })?,
+    )?;
     let _ = lua_globals.set("Matrix", lua_matrix);
 
     tokio::task::spawn(consumer(client.clone(), rx));
