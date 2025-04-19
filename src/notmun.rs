@@ -1,7 +1,7 @@
 use crate::{maybe_get_room, Config, DBError, DBPools, ModuleStarter, MODULE_STARTERS};
 
 use core::{error::Error as StdError, fmt};
-use std::{fs, path::Path};
+use std::{any::Any, fs, path::Path};
 
 use tracing::{debug, error, info, trace};
 
@@ -20,7 +20,7 @@ use serde_derive::Deserialize;
 
 use deadpool_postgres::Client as DBClient;
 use futures::pin_mut;
-use tokio_postgres::Row;
+use tokio_postgres::{types::Type, Row};
 use tokio_stream::StreamExt;
 
 use mlua::{
@@ -272,7 +272,12 @@ fn lua_db_row_to_table(lua: &Lua, row: &Row) -> LuaResult<Table> {
     let lua_row: Table = lua.create_table()?;
 
     for (i, rcol) in row.columns().iter().enumerate() {
-        lua_row.set(rcol.name(), row.get::<usize, String>(i))?;
+        debug!("column type is: {:#?}", rcol.type_());
+        // lua_row.set(rcol.name(), row.get::<usize, >(i))?,
+        match rcol.type_().to_owned() {
+            Type::INT8 => lua_row.set(rcol.name(), row.get::<usize, i64>(i))?,
+            _ => lua_row.set(rcol.name(), row.get::<usize, String>(i))?,
+        }
     }
 
     LuaResult::Ok(lua_row)
