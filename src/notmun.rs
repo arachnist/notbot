@@ -1,7 +1,7 @@
-use crate::{maybe_get_room, Config, DBError, DBPools, ModuleStarter, MODULE_STARTERS};
+use crate::{maybe_get_room, Config, DBPools, ModuleStarter, MODULE_STARTERS};
 
 use core::{error::Error as StdError, fmt};
-use std::{any::Any, fs, path::Path};
+use std::{fs, path::Path};
 
 use tracing::{debug, error, info, trace};
 
@@ -18,7 +18,6 @@ use matrix_sdk::{
 use linkme::distributed_slice;
 use serde_derive::Deserialize;
 
-use deadpool_postgres::Client as DBClient;
 use futures::pin_mut;
 use tokio_postgres::{types::Type, Row};
 use tokio_stream::StreamExt;

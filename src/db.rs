@@ -48,7 +48,7 @@ impl DBPools {
         trace!("aquiring pool");
         match dbc.get(handle) {
             Some(p) if !p.is_closed() => Ok(p.clone()),
-            _ => return Err(DBError::HandleNotFound),
+            _ => Err(DBError::HandleNotFound),
         }
     }
 
@@ -71,11 +71,11 @@ impl DBPools {
         match pool.get().await {
             Ok(client) => {
                 trace!("client aquired");
-                return Ok(client);
+                Ok(client)
             }
             Err(_) => {
                 trace!("acquiring failed");
-                return Err(DBError::GetClient);
+                Err(DBError::GetClient)
             }
         }
     }
@@ -145,7 +145,7 @@ async fn module_entrypoint(
         // for (name, pool) in dbc.iter() {
         for name in config.keys() {
             trace!("checking connection: {name}");
-            let dbpool = DBPools::get_pool(&name).await?;
+            let dbpool = DBPools::get_pool(name).await?;
 
             if dbpool.is_closed() {
                 wip_response.push_str(format!(" {name}: closed;").as_str());
@@ -154,7 +154,7 @@ async fn module_entrypoint(
 
                 let client = dbpool.get().await?;
                 let stmt = client.prepare_cached("SELECT 'foo' || $1").await?;
-                if let Err(_) = client.query(&stmt, &[&"bar"]).await {
+                if (client.query(&stmt, &[&"bar"]).await).is_err() {
                     wip_response.push_str(" broken: {e}");
                 } else {
                     wip_response.push_str(" functional");
