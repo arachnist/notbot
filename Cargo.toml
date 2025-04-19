@@ -24,7 +24,6 @@ matrix-sdk = { version = "0.11.0", features = ["sqlite", "e2e-encryption", "anyh
 mlua = { version = "0.10.3", features = ["async", "serialize", "send", "anyhow", "userdata-wrappers", "luajit", "macros"] }
 prometheus = { version = "0.14.0", features = ["process"] }
 reqwest = { version = "0.12.12", features = ["blocking", "json"] }
-rust_decimal = { version = "1.37.1", features = ["db-postgres", "tokio-postgres"] }
 serde = { version = "1.0.217", features = ["derive", "serde_derive"] }
 serde_derive = "1.0.217"
 serde_json = "1.0.137"
