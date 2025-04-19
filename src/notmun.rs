@@ -163,8 +163,8 @@ async fn lua_dispatcher(
 async fn consumer(client: Client, mut rx: Receiver<IRCAction>) -> anyhow::Result<()> {
     loop {
         let action = match rx.recv().await {
-            Some(m) => m,
-            None => continue,
+            Some(a) => a,
+            None => return Err(NotMunError::ChannelClosed.into()),
         };
 
         let room = action.get_room(&client).await?;
@@ -393,6 +393,7 @@ pub(crate) enum NotMunError {
     NoRoom(String),
     UnknownAction,
     UnhandledAction(IRCAction),
+    ChannelClosed,
 }
 
 impl StdError for NotMunError {}
@@ -403,6 +404,7 @@ impl fmt::Display for NotMunError {
             NotMunError::NoRoom(e) => write!(fmt, "Couldn't get room from: {e}"),
             NotMunError::UnknownAction => write!(fmt, "Unknown action"),
             NotMunError::UnhandledAction(e) => write!(fmt, "Unhandled action: {e}"),
+            NotMunError::ChannelClosed => write!(fmt, "action consumer is closed"),
         }
     }
 }
