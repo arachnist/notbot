@@ -9,7 +9,6 @@ use tokio::sync::mpsc::{channel, Receiver};
 
 use linkme::distributed_slice;
 use matrix_sdk::{
-    deserialized_responses::RawSyncOrStrippedState,
     event_handler::{Ctx, EventHandlerHandle},
     ruma::{
         events::{
@@ -18,7 +17,6 @@ use matrix_sdk::{
                 message::{MessageType, RoomMessageEvent, RoomMessageEventContent},
             },
             AnyMessageLikeEvent, AnyStateEvent, AnySyncTimelineEvent, AnyTimelineEvent,
-            StateEventType,
         },
         OwnedUserId, UserId,
     },
@@ -186,24 +184,25 @@ async fn consumer(client: Client, mut rx: Receiver<NotMunAction>) -> anyhow::Res
 }
 
 async fn consume(client: &Client, action: &NotMunAction) -> anyhow::Result<()> {
-    let room = action.get_room(&client).await?;
+    let room = action.get_room(client).await?;
     let target = action.get_target();
     let reason = action.get_reason();
 
     match action {
-        NotMunAction::Say(_, _) | NotMunAction::Notice(_, _) | NotMunAction::Html(_, _) => {
+        NotMunAction::Say(_, _) | NotMunAction::Notice(_, _) | NotMunAction::Html(_, _, _) => {
             room.send(action.get_message()?).await?;
             return Ok(());
         }
         NotMunAction::Kick(_, _, _) => room.kick_user(&target.unwrap(), reason).await?,
         NotMunAction::Ban(_, _, _) => room.ban_user(&target.clone().unwrap(), reason).await?,
-        NotMunAction::SetNick(_, roomnick) => {
-            let member_event = room
+        NotMunAction::SetNick(_, _roomnick) => {
+            let _member_event = room
                 .get_state_event_static_for_key::<RoomMemberEventContent, UserId>(
                     client.user_id().unwrap(),
                 )
                 .await?;
             error!("SetNick is a work in progress");
+            // need to send an m.room.member event with `content.displayname: whatever` set
             return Err(NotMunError::UnhandledAction(action.clone()).into());
         }
         e => {
@@ -341,7 +340,7 @@ async fn async_fetch_http(lua: Lua, uri: String) -> anyhow::Result<(String, u16,
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub(crate) enum NotMunAction {
     Say(String, String),
-    Html(String, String),
+    Html(String, String, String),
     Notice(String, String),
     Invite(String, String),
     Kick(String, String, Option<String>),
@@ -353,7 +352,7 @@ impl NotMunAction {
     async fn get_room(&self, c: &Client) -> anyhow::Result<Room> {
         match self {
             NotMunAction::Say(room, _)
-            | NotMunAction::Html(room, _)
+            | NotMunAction::Html(room, _, _)
             | NotMunAction::Notice(room, _)
             | NotMunAction::Invite(room, _)
             | NotMunAction::Kick(room, _, _)
@@ -366,7 +365,7 @@ impl NotMunAction {
         match self {
             NotMunAction::Invite(_, target)
             | NotMunAction::Kick(_, target, _)
-            | NotMunAction::Ban(_, target, _) => UserId::parse(&target).ok(),
+            | NotMunAction::Ban(_, target, _) => UserId::parse(target).ok(),
             _ => None,
         }
     }
@@ -383,8 +382,8 @@ impl NotMunAction {
             NotMunAction::Say(_, message) | NotMunAction::Notice(_, message) => {
                 Ok(RoomMessageEventContent::text_plain(message))
             }
-            NotMunAction::Html(_, message) => {
-                Ok(RoomMessageEventContent::text_html(message, message))
+            NotMunAction::Html(_, plain, html) => {
+                Ok(RoomMessageEventContent::text_html(plain, html))
             }
             _ => Err(NotMunError::UnhandledAction(self.clone()).into()),
         }
@@ -395,7 +394,8 @@ impl fmt::Display for NotMunAction {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self {
             NotMunAction::Say(room, message) => write!(fmt, "Say: {room} <- {message}"),
-            NotMunAction::Html(room, message) => write!(fmt, "Html: {room} <- {message}"),
+            // maybe we could detect somehow figure out how different plain/html versions are, and maybe display both if the difference is non-trivial?
+            NotMunAction::Html(room, message, _) => write!(fmt, "Html: {room} <- {message}"),
             NotMunAction::Notice(room, message) => write!(fmt, "Notice: {room} <- {message}"),
             NotMunAction::Invite(room, target) => {
                 write!(fmt, "Invite: {room} <- {target}")
@@ -418,29 +418,26 @@ impl TryFrom<Vec<String>> for NotMunAction {
 
     fn try_from(msg: Vec<String>) -> Result<NotMunAction, NotMunError> {
         let first = msg[0].clone();
+        let room = msg[1].clone();
         match first.as_str() {
             "Say" => {
-                let room: String = msg[1].clone();
                 let message: String = msg[2].clone();
                 Ok(NotMunAction::Say(room, message))
             }
             "Html" => {
-                let room: String = msg[1].clone();
-                let message: String = msg[2].clone();
-                Ok(NotMunAction::Html(room, message))
+                let plain: String = msg[2].clone();
+                let html: String = msg[3].clone();
+                Ok(NotMunAction::Html(room, plain, html))
             }
             "Notice" => {
-                let room: String = msg[1].clone();
                 let message: String = msg[2].clone();
                 Ok(NotMunAction::Notice(room, message))
             }
             "Invite" => {
-                let room: String = msg[1].clone();
                 let target: String = msg[2].clone();
                 Ok(NotMunAction::Invite(room, target))
             }
             "Kick" => {
-                let room: String = msg[1].clone();
                 let target: String = msg[2].clone();
                 let message: Option<String> = if msg.len() >= 3 {
                     Some(msg[3].clone())
@@ -450,7 +447,6 @@ impl TryFrom<Vec<String>> for NotMunAction {
                 Ok(NotMunAction::Kick(room, target, message))
             }
             "Ban" => {
-                let room: String = msg[1].clone();
                 let target: String = msg[2].clone();
                 let message: Option<String> = if msg.len() >= 3 {
                     Some(msg[3].clone())
@@ -460,7 +456,6 @@ impl TryFrom<Vec<String>> for NotMunAction {
                 Ok(NotMunAction::Ban(room, target, message))
             }
             "SetNick" => {
-                let room: String = msg[1].clone();
                 let display_name: String = msg[2].clone();
                 Ok(NotMunAction::SetNick(room, display_name))
             }
