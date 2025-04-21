@@ -2,8 +2,7 @@ use crate::{maybe_get_room, Config, DBPools, ModuleStarter, MODULE_STARTERS};
 
 use core::{error::Error as StdError, fmt};
 use std::{fs, path::Path};
-
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 
 use tokio::sync::mpsc::{channel, Receiver};
 
@@ -234,13 +233,6 @@ fn initialize_lua_env(lua: &Lua, global: &Table, config: &ModuleConfig) -> anyho
         })?,
     )?;
     global.set(
-        "r_debug",
-        lua.create_function(|_, value: Value| {
-            debug!("{value:#?}");
-            Ok(())
-        })?,
-    )?;
-    global.set(
         "rust_db_query_wrapper",
         lua.create_async_function(
             |lua, (handle, statement, query_args): (String, String, Variadic<String>)| async move {
@@ -255,6 +247,45 @@ fn initialize_lua_env(lua: &Lua, global: &Table, config: &ModuleConfig) -> anyho
                 LuaResult::Ok(res)
             },
         )?,
+    )?;
+    global.set(
+        "r_error",
+        lua.create_function(|_, value: Value| {
+            error!("[mun]: {value:#?}");
+            Ok(())
+        })?,
+    )?;
+    global.set(
+        "r_warn",
+        lua.create_function(|_, value: Value| {
+            warn!("[mun]: {value:#?}");
+            Ok(())
+        })?,
+    )?;
+    global.set(
+        "r_info",
+        lua.create_function(|_, value: Value| {
+            info!("[mun]: {value:#?}");
+            Ok(())
+        })?,
+    )?;
+    global.set(
+        "r_debug",
+        lua.create_function(|_, value: Value| {
+            debug!("[mun]: {value:#?}");
+            Ok(())
+        })?,
+    )?;
+    global.set(
+        "r_trace",
+        lua.create_function(|_, value: Value| {
+            trace!("[mun]: {value:#?}");
+            Ok(())
+        })?,
+    )?;
+    global.set(
+        "r_format",
+        lua.create_function(|_, value: Value| Ok(format!("{value:#?}").to_string()))?,
     )?;
 
     Ok(())
