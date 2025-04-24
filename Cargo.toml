@@ -7,6 +7,9 @@ autobins = true
 [lib]
 name = "notbot"
 
+[profile.release]
+lto = true
+
 [[bin]]
 name = "notbot"
 path = "src/bin/main.rs"
