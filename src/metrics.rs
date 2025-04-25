@@ -3,7 +3,6 @@ use crate::{Config, WorkerStarter, WORKERS};
 use std::net::SocketAddr;
 
 use serde::Deserialize;
-use tokio::net::TcpStream;
 use tokio::task::AbortHandle;
 
 use matrix_sdk::Client;
@@ -80,22 +79,10 @@ fn worker_starter(_: &Client, config: &Config) -> anyhow::Result<AbortHandle> {
     Ok(worker.abort_handle())
 }
 
-async fn worker_entrypoint(module_config: ModuleConfig) {
-    let addr: SocketAddr = match module_config.listen_address.parse() {
-        Ok(a) => a,
-        Err(e) => {
-            error!("parsing config listen address failed: {e}");
-            return;
-        }
-    };
+async fn worker_entrypoint(module_config: ModuleConfig) -> anyhow::Result<()> {
+    let addr: SocketAddr = module_config.listen_address.parse()?;
 
-    let listener = match TcpListener::bind(addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            error!("binding to listen socket failed: {e}");
-            return;
-        }
-    };
+    let listener = TcpListener::bind(addr).await?;
 
     info!("listening on {addr}");
 
@@ -108,17 +95,13 @@ async fn worker_entrypoint(module_config: ModuleConfig) {
             }
         };
 
-        tokio::task::spawn(handle_request(stream));
+        tokio::task::spawn(async move {
+            if let Err(err) = http1::Builder::new()
+                .serve_connection(TokioIo::new(stream), service_fn(serve_req))
+                .await
+            {
+                error!("Failed to serve connection: {:?}", err);
+            }
+        });
     }
-}
-
-async fn handle_request(s: TcpStream) -> anyhow::Result<()> {
-    let io = TokioIo::new(s);
-
-    let service = service_fn(serve_req);
-    if let Err(err) = http1::Builder::new().serve_connection(io, service).await {
-        error!("server error: {:?}", err);
-    };
-
-    Ok(())
 }
