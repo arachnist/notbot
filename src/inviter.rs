@@ -1,11 +1,22 @@
+use bytes::Bytes;
+use std::future::Future;
+use std::pin::Pin;
 use std::time::{Duration, SystemTime};
 
 use crate::{
     notbottime::{NotBotTime, NOTBOT_EPOCH},
-    Config, ModuleStarter, MODULE_STARTERS,
+    Config, ModuleStarter, WorkerStarter, MODULE_STARTERS, WORKERS,
 };
 
-use tracing::{error, info, trace};
+use std::net::SocketAddr;
+
+use tracing::{error, info, trace, warn};
+
+use http_body_util::Full;
+use hyper::{body::Incoming, server::conn::http1, service::Service, Error, Request, Response};
+use hyper_util::rt::TokioIo;
+use tokio::net::TcpListener;
+use tokio::task::AbortHandle;
 
 use linkme::distributed_slice;
 use matrix_sdk::{
@@ -23,6 +34,73 @@ use matrix_sdk::{
 
 use serde_derive::Deserialize;
 
+#[distributed_slice(WORKERS)]
+static WORKER_STARTER: WorkerStarter = (module_path!(), worker_starter);
+
+fn worker_starter(mx: &Client, config: &Config) -> anyhow::Result<AbortHandle> {
+    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+    let worker = tokio::task::spawn(worker_entrypoint(mx.clone(), module_config));
+    Ok(worker.abort_handle())
+}
+
+#[derive(Debug, Clone)]
+struct SelfInvite {
+    mx: Client,
+}
+
+impl Service<Request<Incoming>> for SelfInvite {
+    type Response = Response<Full<Bytes>>;
+    type Error = hyper::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn call(&self, req: Request<Incoming>) -> Self::Future {
+        fn mk_response(s: String) -> Result<Response<Full<Bytes>>, hyper::Error> {
+            Ok(Response::builder().body(Full::new(Bytes::from(s))).unwrap())
+        }
+
+        let mut resp = "".to_string();
+        for (k, v) in req.headers().iter() {
+            resp.push_str(format!("{k}: {v:?}\n").as_str());
+        }
+
+        let res = match req.uri().path() {
+            &_ => mk_response(resp),
+        };
+
+        Box::pin(async { res })
+    }
+}
+
+async fn worker_entrypoint(mx: Client, module_config: ModuleConfig) -> anyhow::Result<()> {
+    let addr: SocketAddr = module_config.listen_address.parse()?;
+    let listener = TcpListener::bind(addr).await?;
+    info!("listening on {addr}");
+
+    let self_invite = SelfInvite { mx };
+    loop {
+        let (stream, _) = match listener.accept().await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("accepting socket failed: {e}");
+                continue;
+            }
+        };
+
+        let io = TokioIo::new(stream);
+
+        let inviter_web = self_invite.clone();
+
+        tokio::task::spawn(async move {
+            if let Err(err) = http1::Builder::new()
+                .serve_connection(io, inviter_web)
+                .await
+            {
+                error!("Failed to serve connection: {:?}", err);
+            }
+        });
+    }
+}
+
 #[distributed_slice(MODULE_STARTERS)]
 static MODULE_STARTER: ModuleStarter = (module_path!(), module_starter);
 
@@ -37,8 +115,9 @@ fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandl
 pub struct ModuleConfig {
     pub requests: String,
     pub approvers: Vec<String>,
-    pub homeservers_blanket_allow: Vec<String>,
+    pub homeservers_selfservice_allow: Vec<String>,
     pub invite_to: Vec<String>,
+    pub listen_address: String,
 }
 
 async fn module_entrypoint(

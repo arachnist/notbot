@@ -16,8 +16,10 @@ path = "src/bin/main.rs"
 
 [dependencies]
 anyhow = "1.0.95"
+bytes = { version = "1.10.1", features = ["serde"] }
 deadpool-postgres = { version = "0.14.1", features = ["serde", "rt_tokio_1"] }
 futures = "0.3.31"
+http-body-util = { version = "0.1.3", features = ["full"] }
 hyper = { version = "1.6.0", features = ["server", "http1"] }
 hyper-util = "0.1.11"
 lazy_static = "1.5.0"
