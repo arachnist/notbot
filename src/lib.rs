@@ -10,6 +10,7 @@ mod notmun;
 mod shenanigans;
 mod spaceapi;
 mod wolfram;
+mod webterface;
 
 pub use crate::botmanager::BotManager;
 use crate::notmun::NotMunError;
