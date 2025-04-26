@@ -1,4 +1,4 @@
-{ mkShell, callPackage, rust-analyzer, rustfmt, clippy, cargo-mommy, cargo-udeps
+{ mkShell, callPackage, rust-analyzer, rustfmt, clippy, cargo-mommy, cargo-udeps, tokio-console
 , cargo-depgraph, graphviz, ... }:
 mkShell {
   # Get dependencies from the main package
@@ -12,5 +12,6 @@ mkShell {
     cargo-udeps
     cargo-depgraph
     graphviz
+    tokio-console
   ];
 }

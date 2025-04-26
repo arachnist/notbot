@@ -1,0 +1,24 @@
+default_target_addr = 'http://127.0.0.1:6669/'
+log = 'off'
+warnings = [
+    'self-wakes',
+    'lost-waker',
+    'never-yielded',
+    'auto-boxed-future',
+    'large-future',
+]
+log_directory = './logs'
+# retention = 6
+
+[charset]
+lang = 'en_US.UTF-8'
+ascii_only = false
+
+[colors]
+enabled = true
+truecolor = true
+palette = 'all'
+
+[colors.enable]
+durations = true
+terminated = true
