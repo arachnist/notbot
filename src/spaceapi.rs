@@ -118,7 +118,10 @@ async fn presence_observer(client: Client, module_config: ModuleConfig) {
             };
 
             if !also_there.is_empty() {
-                response_parts.push(["also there: ", &also_there.join(", ")].concat());
+                // When people have both left and arrived, using the "also" form makes more
+                // grammatical sense, hence the priority decoding below.
+                let qualifier = if !arrived.is_empty() { "also" } else { "still" };
+                response_parts.push([qualifier, " there: ", &also_there.join(", ")].concat());
             };
 
             if arrived.is_empty() && left.is_empty() {
