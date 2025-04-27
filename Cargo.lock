@@ -2946,8 +2946,6 @@ dependencies = [
  "sha2 0.10.8",
  "subtle",
  "thiserror 1.0.69",
- "tracing",
- "tracing-subscriber",
  "url",
 ]
 
