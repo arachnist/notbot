@@ -1,10 +1,8 @@
 use crate::{Config, WorkerStarter, WORKERS};
-use anyhow::Context;
-use core::{error::Error as StdError, fmt};
-use std::str::FromStr;
-use std::{convert::Infallible, env};
+use anyhow::{anyhow, Context};
+use std::convert::Infallible;
 
-use tracing::{debug, error, info, trace, warn};
+use tracing::error;
 
 use matrix_sdk::Client;
 
@@ -12,30 +10,23 @@ use linkme::distributed_slice;
 use serde_derive::{Deserialize, Serialize};
 
 use axum::{
-    error_handling::HandleErrorLayer,
     extract::{FromRef, FromRequestParts, OptionalFromRequestParts, Query, State},
-    http::{header::SET_COOKIE, HeaderMap, Uri},
     response::{IntoResponse, Redirect, Response},
     routing::get,
-    RequestPartsExt, Router,
+    Router,
 };
-use axum_extra::{headers, typed_header::TypedHeaderRejectionReason, TypedHeader};
-use http::{header, request::Parts, StatusCode};
+use http::{request::Parts, StatusCode};
 use oauth2::{
     basic::{BasicClient, BasicErrorResponseType, BasicTokenType},
-    AuthUrl, AuthorizationCode, AuthorizationRequest, ClientId, ClientSecret, CsrfToken,
-    EmptyExtraTokenFields, EndpointMaybeSet, EndpointNotSet, EndpointSet, RedirectUrl,
-    RevocationErrorResponseType, Scope, StandardErrorResponse, StandardRevocableToken,
-    StandardTokenIntrospectionResponse, StandardTokenResponse, TokenResponse, TokenUrl,
+    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EmptyExtraTokenFields,
+    EndpointNotSet, EndpointSet, RedirectUrl, RevocationErrorResponseType, Scope,
+    StandardErrorResponse, StandardRevocableToken, StandardTokenIntrospectionResponse,
+    StandardTokenResponse, TokenResponse, TokenUrl,
 };
 use tokio::net::TcpListener;
 use tokio::task::AbortHandle;
-use tower_sessions::{
-    cookie::time::Duration, session, Expiry, MemoryStore, Session, SessionManagerLayer,
-    SessionStore,
-};
+use tower_sessions::{cookie::time::Duration, Expiry, MemoryStore, Session, SessionManagerLayer};
 
-static COOKIE_NAME: &str = "SESSION";
 static CSRF_TOKEN: &str = "csrf_token";
 
 type O2Client = oauth2::Client<
@@ -91,6 +82,7 @@ pub struct ModuleConfig {
 struct AppState {
     store: MemoryStore,
     oauth_client: O2Client,
+    http_client: reqwest::Client,
     matrix_client: Client,
     config: ModuleConfig,
 }
@@ -104,6 +96,12 @@ impl FromRef<AppState> for MemoryStore {
 impl FromRef<AppState> for O2Client {
     fn from_ref(state: &AppState) -> Self {
         state.oauth_client.clone()
+    }
+}
+
+impl FromRef<AppState> for reqwest::Client {
+    fn from_ref(state: &AppState) -> Self {
+        state.http_client.clone()
     }
 }
 
@@ -135,10 +133,12 @@ async fn worker_entrypoint(mx: Client, config: ModuleConfig) -> anyhow::Result<(
         .with_expiry(Expiry::OnInactivity(Duration::new(60 * 60, 0)));
 
     let oauth_client = oauth_client(config.clone())?;
+    let http_client = reqwest::Client::new();
 
     let app_state = AppState {
         store: session_store,
         oauth_client,
+        http_client,
         matrix_client: mx,
         config: config.clone(),
     };
@@ -146,6 +146,9 @@ async fn worker_entrypoint(mx: Client, config: ModuleConfig) -> anyhow::Result<(
     let app = Router::new()
         .route("/", get(index))
         .route("/auth/login", get(oauth_auth))
+        .route("/auth/authorized", get(login_authorized))
+        .route("/protected", get(protected))
+        .route("/logout", get(logout))
         .layer(session_layer)
         .with_state(app_state);
 
@@ -297,4 +300,56 @@ where
             Err(AuthRedirect) => Ok(None),
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct AuthRequest {
+    code: String,
+    state: String,
+}
+
+async fn csrf_token_validation_workflow(
+    auth_request: &AuthRequest,
+    session: &Session,
+) -> anyhow::Result<()> {
+    let Ok(Some(stored_csrf_token)) = session.get::<CsrfToken>(CSRF_TOKEN).await else {
+        return Err(anyhow!("CSRF token not found"));
+    };
+
+    session.delete().await?;
+
+    // Validate CSRF token is the same as the one in the auth request
+    if *stored_csrf_token.secret() != auth_request.state {
+        return Err(anyhow!("CSRF token mismatch").into());
+    }
+
+    Ok(())
+}
+
+async fn login_authorized(
+    Query(query): Query<AuthRequest>,
+    session: Session,
+    State(oauth_client): State<O2Client>,
+    State(http_client): State<reqwest::Client>,
+    State(config): State<ModuleConfig>,
+) -> Result<impl IntoResponse, AppError> {
+    csrf_token_validation_workflow(&query, &session).await?;
+
+    let token = oauth_client
+        .exchange_code(AuthorizationCode::new(query.code.clone()))
+        .request_async(&http_client)
+        .await?;
+
+    let user_data: UserData = http_client
+        .get(config.userinfo_endpoint)
+        .bearer_auth(token.access_token().secret())
+        .send()
+        .await?
+        .json::<UserData>()
+        .await?;
+
+    User::update_session(&session, &user_data).await;
+
+    Ok(Redirect::to("/"))
 }
