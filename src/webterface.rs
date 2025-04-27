@@ -2,6 +2,7 @@ use crate::{Config, WorkerStarter, WORKERS};
 use anyhow::Context;
 use core::{error::Error as StdError, fmt};
 use std::str::FromStr;
+use std::{convert::Infallible, env};
 
 use tracing::{debug, error, info, trace, warn};
 
@@ -88,9 +89,16 @@ pub struct ModuleConfig {
 
 #[derive(Clone)]
 struct AppState {
+    store: MemoryStore,
     oauth_client: O2Client,
     matrix_client: Client,
     config: ModuleConfig,
+}
+
+impl FromRef<AppState> for MemoryStore {
+    fn from_ref(state: &AppState) -> Self {
+        state.store.clone()
+    }
 }
 
 impl FromRef<AppState> for O2Client {
@@ -122,13 +130,14 @@ fn worker_starter(client: &Client, config: &Config) -> anyhow::Result<AbortHandl
 
 async fn worker_entrypoint(mx: Client, config: ModuleConfig) -> anyhow::Result<()> {
     let session_store = MemoryStore::default();
-    let session_layer = SessionManagerLayer::new(session_store)
+    let session_layer = SessionManagerLayer::new(session_store.clone())
         .with_secure(false)
         .with_expiry(Expiry::OnInactivity(Duration::new(60 * 60, 0)));
 
     let oauth_client = oauth_client(config.clone())?;
 
     let app_state = AppState {
+        store: session_store,
         oauth_client,
         matrix_client: mx,
         config: config.clone(),
@@ -188,8 +197,7 @@ impl User {
     }
 }
 
-async fn index(user: User) -> impl IntoResponse {
-    /*
+async fn index(user: Option<User>) -> impl IntoResponse {
     match user {
         Some(u) => format!(
             "Hey {}! You're logged in!\nYou may now access `/protected`.\nLog out with `/logout`.",
@@ -197,11 +205,6 @@ async fn index(user: User) -> impl IntoResponse {
         ),
         None => "You're not logged in.\nVisit `/auth/oauth2` to do so.".to_string(),
     }
-    */
-    format!(
-        "Hey {}! You're logged in!\nYou may now access `/protected`.\nLog out with `/logout`.",
-        user.sub()
-    )
 }
 
 async fn oauth_auth(
@@ -275,5 +278,23 @@ where
         Self::update_session(&session, &user_data).await;
 
         Ok(Self { session, user_data })
+    }
+}
+
+impl<S> OptionalFromRequestParts<S> for User
+where
+    MemoryStore: FromRef<S>,
+    S: Send + Sync,
+{
+    type Rejection = Infallible;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &S,
+    ) -> Result<Option<Self>, Self::Rejection> {
+        match <User as FromRequestParts<S>>::from_request_parts(parts, state).await {
+            Ok(res) => Ok(Some(res)),
+            Err(AuthRedirect) => Ok(None),
+        }
     }
 }
