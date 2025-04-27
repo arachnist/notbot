@@ -2,7 +2,7 @@ use crate::{Config, WorkerStarter, WORKERS};
 use anyhow::{anyhow, Context};
 use std::convert::Infallible;
 
-use tracing::error;
+use tracing::{error, trace};
 
 use matrix_sdk::Client;
 
@@ -130,7 +130,7 @@ async fn worker_entrypoint(mx: Client, config: ModuleConfig) -> anyhow::Result<(
     let session_store = MemoryStore::default();
     let session_layer = SessionManagerLayer::new(session_store.clone())
         .with_secure(false)
-        .with_expiry(Expiry::OnInactivity(Duration::new(60 * 60, 0)));
+        .with_expiry(Expiry::OnInactivity(Duration::new(24 * 60 * 60, 0)));
 
     let oauth_client = oauth_client(config.clone())?;
     let http_client = reqwest::Client::new();
@@ -146,9 +146,9 @@ async fn worker_entrypoint(mx: Client, config: ModuleConfig) -> anyhow::Result<(
     let app = Router::new()
         .route("/", get(index))
         .route("/auth/login", get(oauth_auth))
+        .route("/auth/logout", get(logout))
         .route("/auth/authorized", get(login_authorized))
         .route("/protected", get(protected))
-        .route("/logout", get(logout))
         .layer(session_layer)
         .with_state(app_state);
 
@@ -175,7 +175,7 @@ struct User {
     user_data: UserData,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct UserData {
     sub: String,
     email: String,
@@ -203,10 +203,10 @@ impl User {
 async fn index(user: Option<User>) -> impl IntoResponse {
     match user {
         Some(u) => format!(
-            "Hey {}! You're logged in!\nYou may now access `/protected`.\nLog out with `/logout`.",
+            "Hey {}! You're logged in!\nYou may now access `/protected`.\nLog out with `/auth/logout`.",
             u.sub()
         ),
-        None => "You're not logged in.\nVisit `/auth/oauth2` to do so.".to_string(),
+        None => "You're not logged in.\nVisit `/auth/login` to do so.".to_string(),
     }
 }
 
@@ -222,7 +222,7 @@ async fn oauth_auth(
 
     let (auth_url, csrf_token) = client
         .authorize_url(CsrfToken::new_random)
-        .add_scope(Scope::new("identify".to_string()))
+        .add_scope(Scope::new("profile:read".to_string()))
         .url();
 
     // Create session to store csrf_token
@@ -230,6 +230,8 @@ async fn oauth_auth(
         .insert(CSRF_TOKEN, &csrf_token)
         .await
         .context("failed in inserting CSRF token into session")?;
+
+    trace!("[oauth_auth] session: {session:#?}");
 
     session.save().await?;
 
@@ -272,11 +274,21 @@ where
             }
         };
 
-        let user_data: UserData = session
-            .get(Self::USER_DATA_KEY)
-            .await
-            .unwrap()
-            .unwrap_or_default();
+        let user_data: UserData = match session.get(Self::USER_DATA_KEY).await {
+            Err(e) => {
+                error!("error getting user data from session: {e}");
+                return Err(AuthRedirect);
+            }
+            Ok(maybedata) => {
+                trace!("maybe we got user data from session: {maybedata:#?}");
+                match maybedata {
+                    None => return Err(AuthRedirect),
+                    Some(d) => d,
+                }
+            }
+        };
+
+        trace!("request parts -> user, session: {session:#?}, user_data: {user_data:#?}");
 
         Self::update_session(&session, &user_data).await;
 
@@ -313,14 +325,30 @@ async fn csrf_token_validation_workflow(
     auth_request: &AuthRequest,
     session: &Session,
 ) -> anyhow::Result<()> {
-    let Ok(Some(stored_csrf_token)) = session.get::<CsrfToken>(CSRF_TOKEN).await else {
-        return Err(anyhow!("CSRF token not found"));
+    trace!("[csrf_token_validation_workflow] session: {session:#?}");
+    let stored_csrf_token_str: String = match session.get(CSRF_TOKEN).await {
+        Ok(maybe_token) => {
+            trace!("token maybe exists: {maybe_token:#?}");
+            match maybe_token {
+                None => {
+                    return Err(anyhow!("token doesn't exist"));
+                }
+                Some(token) => {
+                    trace!("token exists");
+                    token
+                }
+            }
+        }
+        _ => return Err(anyhow!("CSRF token not found")),
     };
+
+    // let stored_csrf_token: CsrfToken = CsrfToken::try_from(stored_csrf_token_str)?;
 
     session.delete().await?;
 
     // Validate CSRF token is the same as the one in the auth request
-    if *stored_csrf_token.secret() != auth_request.state {
+    // if *stored_csrf_token.secret() != auth_request.state {
+    if stored_csrf_token_str != auth_request.state {
         return Err(anyhow!("CSRF token mismatch").into());
     }
 
@@ -333,21 +361,31 @@ async fn login_authorized(
     State(oauth_client): State<O2Client>,
     State(http_client): State<reqwest::Client>,
     State(config): State<ModuleConfig>,
+    State(store): State<MemoryStore>,
 ) -> Result<impl IntoResponse, AppError> {
+    trace!("[login_authorized] query: {query:#?}");
+    trace!("[login_authorized] session: {session:#?}");
+    trace!("[login_authorized] store: {store:#?}");
     csrf_token_validation_workflow(&query, &session).await?;
 
+    trace!("[login_authorized] getting token using code: {query:#?}");
     let token = oauth_client
         .exchange_code(AuthorizationCode::new(query.code.clone()))
         .request_async(&http_client)
         .await?;
 
-    let user_data: UserData = http_client
+    trace!("[login_authorized] getting user data");
+    let user_data_response = http_client
         .get(config.userinfo_endpoint)
         .bearer_auth(token.access_token().secret())
         .send()
-        .await?
-        .json::<UserData>()
         .await?;
+
+    trace!("[login_authorized] user_data_response: {user_data_response:#?}");
+    let response_str = user_data_response.text().await?;
+    trace!("[login_authorized] content: {}", response_str);
+    // let user_data: UserData = user_data_response.json::<UserData>().await?;
+    let user_data: UserData = serde_json::from_str(&response_str).unwrap();
 
     User::update_session(&session, &user_data).await;
 
