@@ -16,7 +16,6 @@ path = "src/bin/main.rs"
 
 [patch.crates-io]
 openidconnect = { git = 'https://github.com/arachnist/openidconnect-rs.git', branch = 'v3.5.0-defaulted-two-required-fields' }
-axum-oidc = { path = '../axum-oidc' }
 
 [dependencies]
 anyhow = "1.0.95"

@@ -319,6 +319,8 @@ dependencies = [
 [[package]]
 name = "axum-oidc"
 version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "504bbdd5b08d1383d64d96cfcf0d9518f935c6dab7bee729ee92ecbdef644a13"
 dependencies = [
  "axum 0.8.3",
  "axum-core 0.5.2",
