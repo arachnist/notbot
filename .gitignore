@@ -4,3 +4,4 @@ notbot.prod.toml
 .notbot-data
 result
 /logs
+heaptrack.*

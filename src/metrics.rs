@@ -5,9 +5,10 @@ use hyper::body::Body;
 use lazy_static::lazy_static;
 
 use axum::{extract::Request, http::StatusCode, middleware::Next, response::IntoResponse};
+use tracing::error;
+
 use prometheus::{opts, register_histogram_vec, register_int_counter_vec};
 use prometheus::{HistogramVec, IntCounterVec, TextEncoder};
-use tracing::error;
 
 lazy_static! {
     static ref HTTP_COUNTER: IntCounterVec = register_int_counter_vec!(
@@ -62,8 +63,7 @@ pub(crate) async fn track_metrics(req: Request, next: Next) -> impl IntoResponse
         .with_label_values(&[method.clone(), status.clone()])
         .observe(latency);
     HTTP_BODY_HISTOGRAM
-        .with_label_values(&[method.clone(), status.clone()])
+        .with_label_values(&[method, status])
         .observe(response_size);
-
     response
 }

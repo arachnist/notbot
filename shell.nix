@@ -12,6 +12,7 @@
   treefmt,
   nixfmt-rfc-style,
   graphviz,
+  heaptrack,
   ...
 }:
 mkShell {
@@ -28,5 +29,6 @@ mkShell {
     treefmt
     cargo-unused-features
     nixfmt-rfc-style
+    heaptrack
   ];
 }
