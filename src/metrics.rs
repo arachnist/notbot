@@ -1,107 +1,70 @@
-use crate::{Config, WorkerStarter, WORKERS};
+use std::time::Instant;
 
-use std::net::SocketAddr;
+use hyper::body::Body;
 
-use serde::Deserialize;
-use tokio::task::AbortHandle;
 
-use matrix_sdk::Client;
-
-use linkme::distributed_slice;
-
-use hyper::body::Incoming;
-use hyper::header::CONTENT_TYPE;
-use hyper::server::conn::http1;
-use hyper::service::service_fn;
-use hyper::Request;
-use hyper::Response;
-use hyper_util::rt::TokioIo;
 use lazy_static::lazy_static;
-use prometheus::{labels, opts, register_counter, register_gauge, register_histogram_vec};
-use prometheus::{Counter, Encoder, Gauge, HistogramVec, TextEncoder};
-use tokio::net::TcpListener;
-use tracing::{error, info, warn};
 
-type BoxedErr = Box<dyn std::error::Error + Send + Sync + 'static>;
+use prometheus::{opts, register_int_counter_vec, register_int_gauge_vec, register_histogram_vec};
+use prometheus::{IntCounterVec, IntGaugeVec, HistogramVec, TextEncoder};
+use tracing::error;
+use axum::{
+    http::StatusCode,
+    extract::Request,
+    middleware::Next,
+    response::IntoResponse,
+};
+
 
 lazy_static! {
-    static ref HTTP_COUNTER: Counter = register_counter!(opts!(
-        "example_http_requests_total",
-        "Number of HTTP requests made.",
-        labels! {"handler" => "all",}
-    ))
+    static ref HTTP_COUNTER: IntCounterVec = register_int_counter_vec!(
+        opts!("http_requests_total", "Number of HTTP requests made."),
+        &["method", "status"]
+    )
     .unwrap();
-    static ref HTTP_BODY_GAUGE: Gauge = register_gauge!(opts!(
-        "example_http_response_size_bytes",
-        "The HTTP response sizes in bytes.",
-        labels! {"handler" => "all",}
-    ))
+    static ref HTTP_BODY_GAUGE: IntGaugeVec = register_int_gauge_vec!(opts!(
+        "http_response_size_bytes",
+        "The HTTP response lower bound sizes in bytes."),
+        &["method", "status"]
+    )
     .unwrap();
     static ref HTTP_REQ_HISTOGRAM: HistogramVec = register_histogram_vec!(
-        "example_http_request_duration_seconds",
+        "http_request_duration_seconds",
         "The HTTP request latencies in seconds.",
-        &["handler"]
+        &["method", "status"]
     )
     .unwrap();
 }
 
-async fn serve_req(_req: Request<Incoming>) -> Result<Response<String>, BoxedErr> {
+pub(crate) async fn serve_metrics(
+) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
     let encoder = TextEncoder::new();
-
-    HTTP_COUNTER.inc();
-    let timer = HTTP_REQ_HISTOGRAM.with_label_values(&["all"]).start_timer();
-
     let metric_families = prometheus::gather();
-    let body = encoder.encode_to_string(&metric_families)?;
-    HTTP_BODY_GAUGE.set(body.len() as f64);
+    let body = encoder.encode_to_string(&metric_families).map_err(|err| {
+        error!("Failed encoding metrics as text: {:?}", err);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed encoding metrics as text.",
+        )
+    })?;
 
-    let response = Response::builder()
-        .status(200)
-        .header(CONTENT_TYPE, encoder.format_type())
-        .body(body)?;
-
-    timer.observe_duration();
-
-    Ok(response)
+    Ok(body)
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
-pub struct ModuleConfig {
-    listen_address: String,
-}
+pub(crate) async fn track_metrics(req: Request, next: Next) -> impl IntoResponse {
+    let method: String = req.method().clone().to_string();
+    let timer = Instant::now();
 
-#[distributed_slice(WORKERS)]
-static WORKER_STARTER: WorkerStarter = (module_path!(), worker_starter);
+    let response = next.run(req).await;
 
-fn worker_starter(_: &Client, config: &Config) -> anyhow::Result<AbortHandle> {
-    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
-    let worker = tokio::task::spawn(worker_entrypoint(module_config));
-    Ok(worker.abort_handle())
-}
+    let latency = timer.elapsed().as_secs_f64();
 
-async fn worker_entrypoint(module_config: ModuleConfig) -> anyhow::Result<()> {
-    let addr: SocketAddr = module_config.listen_address.parse()?;
+    let status = response.status().as_u16().to_string();
+    let response_size: i64 = response.body().size_hint().lower().try_into().unwrap();
 
-    let listener = TcpListener::bind(addr).await?;
+    HTTP_COUNTER.with_label_values(&[method.clone(), status.clone()]).inc();
+    HTTP_REQ_HISTOGRAM.with_label_values(&[method.clone(), status.clone()]).observe(latency);
+    HTTP_BODY_GAUGE.with_label_values(&[method.clone(), status.clone()]).set(response_size);
 
-    info!("listening on {addr}");
-
-    loop {
-        let (stream, _) = match listener.accept().await {
-            Ok(s) => s,
-            Err(e) => {
-                warn!("accepting socket failed: {e}");
-                continue;
-            }
-        };
-
-        tokio::task::spawn(async move {
-            if let Err(err) = http1::Builder::new()
-                .serve_connection(TokioIo::new(stream), service_fn(serve_req))
-                .await
-            {
-                error!("Failed to serve connection: {:?}", err);
-            }
-        });
-    }
+    response
 }

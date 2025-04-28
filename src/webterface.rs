@@ -1,7 +1,10 @@
 use std::str::FromStr;
 use tracing::{error, trace};
 
-use crate::{Config, WorkerStarter, WORKERS};
+use crate::{
+    metrics::{serve_metrics, track_metrics},
+    Config, WorkerStarter, WORKERS,
+};
 
 use matrix_sdk::Client;
 
@@ -12,7 +15,7 @@ use axum::{
     error_handling::HandleErrorLayer,
     extract::State,
     http::{StatusCode, Uri},
-    response,
+    middleware, response,
     response::IntoResponse,
     routing::get,
     Router,
@@ -23,7 +26,7 @@ use axum_oidc::{
 use tokio::net::TcpListener;
 use tokio::task::AbortHandle;
 use tower::ServiceBuilder;
-use tower_http::services::{ServeDir, ServeFile};
+use tower_http::services::ServeDir;
 use tower_sessions::{
     cookie::{time::Duration, SameSite},
     Expiry, MemoryStore, Session, SessionManagerLayer,
@@ -87,6 +90,8 @@ async fn worker_entrypoint(_mx: Client, module_config: ModuleConfig) -> anyhow::
         .layer(oidc_auth_service)
         .layer(session_layer)
         .nest_service("/static", ServeDir::new("webui/static"))
+        .route("/metrics", get(serve_metrics))
+        .route_layer(middleware::from_fn(track_metrics))
         .with_state(module_config.clone());
 
     let listener = TcpListener::bind(listen_address).await.unwrap();
