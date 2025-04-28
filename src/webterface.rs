@@ -12,17 +12,18 @@ use axum::{
     error_handling::HandleErrorLayer,
     extract::State,
     http::{StatusCode, Uri},
+    response,
     response::IntoResponse,
     routing::get,
     Router,
 };
 use axum_oidc::{
     error::MiddlewareError, EmptyAdditionalClaims, OidcAuthLayer, OidcClaims, OidcLoginLayer,
-    OidcRpInitiatedLogout,
 };
 use tokio::net::TcpListener;
 use tokio::task::AbortHandle;
 use tower::ServiceBuilder;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_sessions::{
     cookie::{time::Duration, SameSite},
     Expiry, MemoryStore, Session, SessionManagerLayer,
@@ -32,11 +33,9 @@ use tower_sessions::{
 pub struct ModuleConfig {
     listen_address: String,
     app_url: String,
-    logout_url: String,
     issuer: String,
     client_id: String,
     client_secret: Option<String>,
-    userinfo_endpoint: String,
 }
 
 #[distributed_slice(WORKERS)]
@@ -81,18 +80,18 @@ async fn worker_entrypoint(_mx: Client, module_config: ModuleConfig) -> anyhow::
     let listen_address = module_config.clone().listen_address;
 
     let app = Router::new()
-        .route("/logout", get(logout))
+        .route("/login", get(login))
         .layer(oidc_login_service)
-        .route("/blabla", get(maybe_authenticated))
+        .route("/", get(maybe_authenticated))
+        .route("/logout", get(logout))
         .layer(oidc_auth_service)
         .layer(session_layer)
+        .nest_service("/static", ServeDir::new("webui/static"))
         .with_state(module_config.clone());
 
     let listener = TcpListener::bind(listen_address).await.unwrap();
 
-    axum::serve(listener, app.into_make_service())
-        .await
-        .unwrap();
+    axum::serve(listener, app.into_make_service()).await?;
 
     Ok(())
 }
@@ -111,10 +110,13 @@ async fn maybe_authenticated(
     }
 }
 
+async fn login() -> impl IntoResponse {
+    response::Redirect::to("/")
+}
+
 pub async fn logout(
     State(config): State<ModuleConfig>,
     session: Session,
-    logout: OidcRpInitiatedLogout,
 ) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
     trace!("clearing session");
     session.clear().await;
@@ -127,14 +129,6 @@ pub async fn logout(
         )
     })?;
 
-    trace!("constructing post-logout redirect url");
-    let url: Uri = config.logout_url.parse().map_err(|err| {
-        error!("Failed to parse redirect URL: {:?}", err);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Failed to parse redirect URL, your session has been cleared on our end.",
-        )
-    })?;
     trace!("aaaand we're done");
-    Ok(logout.with_post_logout_redirect(url))
+    Ok(response::Redirect::to(&config.app_url))
 }

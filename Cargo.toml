@@ -15,13 +15,12 @@ name = "notbot"
 path = "src/bin/main.rs"
 
 [patch.crates-io]
-openidconnect = { path = '../openidconnect-rs' }
+openidconnect = { git = 'https://github.com/arachnist/openidconnect-rs.git', branch = 'v3.5.0-defaulted-two-required-fields' }
+axum-oidc = { path = '../axum-oidc' }
 
 [dependencies]
 anyhow = "1.0.95"
-async-session = "3.0.0"
 axum = { version = "0.8.3", features = ["macros"] }
-axum-extra = { version = "0.10.1", features = ["typed-header", "typed-routing"] }
 axum-oidc = "0.6.0"
 bytes = { version = "1.10.1", features = ["serde"] }
 console-subscriber = "0.4.1"
@@ -46,6 +45,7 @@ tokio-postgres = "0.7.13"
 tokio-stream = { version = "0.1.17", features = ["full"] }
 toml = "0.8.19"
 tower = "0.5.2"
+tower-http = { version = "0.6.2", features = ["fs"] }
 tower-sessions = "0.14.0"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
