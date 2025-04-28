@@ -3,8 +3,8 @@ use notbot::BotManager;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // tracing_subscriber::fmt::init();
-    console_subscriber::init();
+    tracing_subscriber::fmt::init();
+    // console_subscriber::init();
 
     let config_path: String = std::env::args().nth(1).expect("no config path provided");
 
