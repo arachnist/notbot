@@ -1,9 +1,21 @@
-{ mkShell, callPackage, rust-analyzer, rustfmt, clippy, cargo-mommy, cargo-udeps, tokio-console
-, cargo-depgraph, graphviz, ... }:
+{
+  mkShell,
+  callPackage,
+  rust-analyzer,
+  rustfmt,
+  clippy,
+  cargo-mommy,
+  cargo-udeps,
+  tokio-console,
+  cargo-depgraph,
+  cargo-unused-features,
+  treefmt,
+  nixfmt-rfc-style,
+  graphviz,
+  ...
+}:
 mkShell {
-  # Get dependencies from the main package
   inputsFrom = [ (callPackage ./default.nix { }) ];
-  # Additional tooling
   buildInputs = [
     rust-analyzer
     rustfmt
@@ -13,5 +25,8 @@ mkShell {
     cargo-depgraph
     graphviz
     tokio-console
+    treefmt
+    cargo-unused-features
+    nixfmt-rfc-style
   ];
 }
