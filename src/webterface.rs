@@ -103,7 +103,6 @@ async fn worker_entrypoint(_mx: Client, module_config: ModuleConfig) -> anyhow::
     Ok(())
 }
 
-#[axum::debug_handler]
 async fn maybe_authenticated(
     claims: Result<OidcClaims<EmptyAdditionalClaims>, axum_oidc::error::ExtractorError>,
 ) -> impl IntoResponse {
@@ -142,21 +141,16 @@ async fn login(
         .send()
         .await
     {
-        Err(e) => {
-            error!("Failed to fetch user info: {:?}", e);
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to fetch user info.",
-            ));
-        }
-        Ok(r) => r.json().await.map_err(|err| {
-            error!("Failed to decode user info.: {:?}", err);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to decode user info..",
-            )
-        })?,
-    };
+        Err(e) => Err(e),
+        Ok(r) => r.json().await,
+    }
+    .map_err(|err| {
+        error!("Failed to decode user info.: {:?}", err);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to decode user info..",
+        )
+    })?;
 
     session.insert("user.data", userinfo).await.map_err(|err| {
         error!("Failed to store user info: {:?}", err);
