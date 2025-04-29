@@ -137,10 +137,10 @@ async fn login(
         Err(e) => Err(e),
     }
     .map_err(|err| {
-        error!("Failed to decode user info.: {:?}", err);
+        error!("Failed to decode user info: {:?}", err);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            "Failed to decode user info..",
+            "Failed to decode user info",
         )
     })?;
 
