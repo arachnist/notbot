@@ -17,15 +17,13 @@ use matrix_sdk::{
             reaction::OriginalSyncReactionEvent,
             room::message::{MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent},
             Mentions,
-        }, OwnedEventId, OwnedRoomAliasId, OwnedRoomId, OwnedUserId,
+        },
+        OwnedEventId, OwnedRoomAliasId, OwnedRoomId, OwnedUserId,
     },
     Client, Room,
 };
 
-use axum::{
-    extract::State,
-    response::IntoResponse,
-};
+use axum::{extract::State, response::IntoResponse};
 use tower_sessions::Session;
 
 use serde_derive::Deserialize;
