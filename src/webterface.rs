@@ -122,33 +122,30 @@ async fn login(
     session: Session,
     State(config): State<ModuleConfig>,
 ) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
-    let userinfo: UserInfo = async {
-        let u: UserInfo = reqwest::ClientBuilder::new()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()?
-            .get(config.userinfo_endpoint)
-            .bearer_auth(token.0)
-            .send()
-            .await?
-            .json()
+    async {
+        session
+            .insert(
+                "user.data",
+                reqwest::ClientBuilder::new()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()?
+                    .get(config.userinfo_endpoint)
+                    .bearer_auth(token.0)
+                    .send()
+                    .await?
+                    .json::<UserInfo>()
+                    .await?,
+            )
             .await?;
 
-        Ok(u)
+        Ok(())
     }
     .await
     .map_err(|err: anyhow::Error| {
-        error!("Failed to decode user info: {:?}", err);
+        error!("Failed to handle user info: {:?}", err);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            "Failed to decode user info",
-        )
-    })?;
-
-    session.insert("user.data", userinfo).await.map_err(|err| {
-        error!("Failed to store user info: {:?}", err);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Failed to store user info.",
+            "Failed to handle user info",
         )
     })?;
 
