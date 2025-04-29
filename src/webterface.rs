@@ -121,28 +121,20 @@ async fn login(
     session: Session,
     State(config): State<ModuleConfig>,
 ) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
-    let http_client = reqwest::ClientBuilder::new()
+    let userinfo: UserInfo = match reqwest::ClientBuilder::new()
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|err| {
-            error!(
-                "Failed to build http client for fetching extra user info: {:?}",
-                err
-            );
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to build http client.",
-            )
-        })?;
-
-    let userinfo: UserInfo = match http_client
-        .get(config.userinfo_endpoint)
-        .bearer_auth(token.0)
-        .send()
-        .await
     {
+        Ok(h) => match h
+            .get(config.userinfo_endpoint)
+            .bearer_auth(token.0)
+            .send()
+            .await
+        {
+            Ok(r) => r.json().await,
+            Err(e) => Err(e),
+        },
         Err(e) => Err(e),
-        Ok(r) => r.json().await,
     }
     .map_err(|err| {
         error!("Failed to decode user info.: {:?}", err);
