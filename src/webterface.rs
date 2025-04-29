@@ -52,7 +52,7 @@ fn worker_starter(client: &Client, config: &Config) -> anyhow::Result<AbortHandl
     Ok(worker.abort_handle())
 }
 
-async fn worker_entrypoint(_mx: Client, module_config: ModuleConfig) -> anyhow::Result<()> {
+async fn worker_entrypoint(mx: Client, module_config: ModuleConfig) -> anyhow::Result<()> {
     let session_store = MemoryStore::default();
     let session_layer = SessionManagerLayer::new(session_store)
         .with_secure(false)
@@ -94,7 +94,8 @@ async fn worker_entrypoint(_mx: Client, module_config: ModuleConfig) -> anyhow::
         .nest_service("/static", ServeDir::new("webui/static"))
         .route("/metrics", get(serve_metrics))
         .route_layer(middleware::from_fn(track_metrics))
-        .with_state(module_config.clone());
+        .with_state(module_config.clone())
+        .with_state(mx);
 
     let listener = TcpListener::bind(listen_address).await.unwrap();
 
@@ -121,22 +122,21 @@ async fn login(
     session: Session,
     State(config): State<ModuleConfig>,
 ) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
-    let userinfo: UserInfo = match reqwest::ClientBuilder::new()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-    {
-        Ok(h) => match h
+    let userinfo: UserInfo = async {
+        let u: UserInfo = reqwest::ClientBuilder::new()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?
             .get(config.userinfo_endpoint)
             .bearer_auth(token.0)
             .send()
-            .await
-        {
-            Ok(r) => r.json().await,
-            Err(e) => Err(e),
-        },
-        Err(e) => Err(e),
+            .await?
+            .json()
+            .await?;
+
+        Ok(u)
     }
-    .map_err(|err| {
+    .await
+    .map_err(|err: anyhow::Error| {
         error!("Failed to decode user info: {:?}", err);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
