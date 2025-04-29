@@ -9,7 +9,7 @@ use crate::{
 use matrix_sdk::Client;
 
 use linkme::distributed_slice;
-use serde_derive::Deserialize;
+use serde_derive::{Deserialize, Serialize};
 
 use axum::{
     error_handling::HandleErrorLayer,
@@ -21,7 +21,8 @@ use axum::{
     Router,
 };
 use axum_oidc::{
-    error::MiddlewareError, EmptyAdditionalClaims, OidcAuthLayer, OidcClaims, OidcLoginLayer,
+    error::MiddlewareError, EmptyAdditionalClaims, OidcAccessToken, OidcAuthLayer, OidcClaims,
+    OidcLoginLayer,
 };
 use tokio::net::TcpListener;
 use tokio::task::AbortHandle;
@@ -36,6 +37,7 @@ use tower_sessions::{
 pub struct ModuleConfig {
     listen_address: String,
     app_url: String,
+    userinfo_endpoint: String,
     issuer: String,
     client_id: String,
     client_secret: Option<String>,
@@ -74,7 +76,7 @@ async fn worker_entrypoint(_mx: Client, module_config: ModuleConfig) -> anyhow::
                 module_config.clone().issuer,
                 module_config.clone().client_id,
                 module_config.clone().client_secret,
-                vec![],
+                vec!["profile:read".to_string()],
             )
             .await
             .unwrap(),
@@ -115,8 +117,56 @@ async fn maybe_authenticated(
     }
 }
 
-async fn login() -> impl IntoResponse {
-    response::Redirect::to("/")
+async fn login(
+    token: OidcAccessToken,
+    session: Session,
+    State(config): State<ModuleConfig>,
+) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
+    let http_client = reqwest::ClientBuilder::new()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|err| {
+            error!(
+                "Failed to build http client for fetching extra user info: {:?}",
+                err
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to build http client.",
+            )
+        })?;
+
+    let userinfo: UserInfo = match http_client
+        .get(config.userinfo_endpoint)
+        .bearer_auth(token.0)
+        .send()
+        .await
+    {
+        Err(e) => {
+            error!("Failed to fetch user info: {:?}", e);
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to fetch user info.",
+            ));
+        }
+        Ok(r) => r.json().await.map_err(|err| {
+            error!("Failed to decode user info.: {:?}", err);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to decode user info..",
+            )
+        })?,
+    };
+
+    session.insert("user.data", userinfo).await.map_err(|err| {
+        error!("Failed to store user info: {:?}", err);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to store user info.",
+        )
+    })?;
+
+    Ok(response::Redirect::to("/"))
 }
 
 pub async fn logout(
@@ -136,4 +186,14 @@ pub async fn logout(
 
     trace!("aaaand we're done");
     Ok(response::Redirect::to(&config.app_url))
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UserInfo {
+    pub email: String,
+    pub groups: Vec<String>,
+    pub name: String,
+    pub nickname: String,
+    pub preferred_username: String,
+    pub sub: String,
 }
