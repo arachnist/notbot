@@ -14,9 +14,6 @@ lto = true
 name = "notbot"
 path = "src/bin/main.rs"
 
-[patch.crates-io]
-openidconnect = { git = 'https://github.com/arachnist/openidconnect-rs.git', branch = 'v3.5.0-defaulted-two-required-fields' }
-
 [dependencies]
 anyhow = "1.0.95"
 axum = { version = "0.8.3", features = ["macros"] }
