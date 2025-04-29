@@ -211,10 +211,10 @@ impl BotManager {
         client.sync_once(sync_settings.clone()).await?;
 
         prometheus::default_registry()
-        .register(Box::new(
-            tokio_metrics_collector::default_runtime_collector(),
-        ))
-        .unwrap();
+            .register(Box::new(
+                tokio_metrics_collector::default_runtime_collector(),
+            ))
+            .unwrap();
 
         let mut modules: HashMap<String, Module> = Default::default();
 

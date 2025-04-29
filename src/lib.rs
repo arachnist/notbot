@@ -12,14 +12,17 @@ mod spaceapi;
 mod webterface;
 mod wolfram;
 
-pub use crate::botmanager::BotManager;
-use crate::notmun::NotMunError;
-
 pub use crate::db::{DBError, DBPools};
 
-use crate::botmanager::{ModuleStarter, WorkerStarter, MODULE_STARTERS, WORKERS};
+pub use crate::botmanager::BotManager;
+
 pub use crate::config::Config;
 pub use crate::config::ModuleConfig;
+pub(crate) use crate::{
+    botmanager::{ModuleStarter, WorkerStarter, MODULE_STARTERS, WORKERS},
+    notmun::NotMunError,
+    webterface::{OauthUserInfo, WebAppState},
+};
 
 use matrix_sdk::ruma::{OwnedRoomAliasId, OwnedRoomId};
 use matrix_sdk::{Client, Room};

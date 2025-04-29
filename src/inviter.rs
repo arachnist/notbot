@@ -1,8 +1,9 @@
+use std::convert::From;
 use std::time::{Duration, SystemTime};
 
 use crate::{
     notbottime::{NotBotTime, NOTBOT_EPOCH},
-    Config, ModuleStarter, MODULE_STARTERS,
+    Config, ModuleStarter, OauthUserInfo, WebAppState, MODULE_STARTERS,
 };
 
 use tracing::{error, info, trace};
@@ -12,14 +13,20 @@ use matrix_sdk::{
     event_handler::EventHandlerHandle,
     ruma::{
         events::{
+            direct::DirectUserIdentifier,
             reaction::OriginalSyncReactionEvent,
             room::message::{MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent},
             Mentions,
-        },
-        OwnedEventId, OwnedRoomAliasId, OwnedRoomId, OwnedUserId,
+        }, OwnedEventId, OwnedRoomAliasId, OwnedRoomId, OwnedUserId,
     },
     Client, Room,
 };
+
+use axum::{
+    extract::State,
+    response::IntoResponse,
+};
+use tower_sessions::Session;
 
 use serde_derive::Deserialize;
 
@@ -37,7 +44,7 @@ fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandl
 pub struct ModuleConfig {
     pub requests: String,
     pub approvers: Vec<String>,
-    pub homeservers_selfservice_allow: Vec<String>,
+    pub homeserver_selfservice_allow: String,
     pub invite_to: Vec<String>,
 }
 
@@ -176,10 +183,11 @@ async fn reaction_listener(
 async fn inviter(client: Client, invitee: OwnedUserId, rooms: Vec<String>) -> anyhow::Result<()> {
     trace!("rooms to invite to: {:#?}", rooms);
     for maybe_room in rooms {
+        trace!("inviting to {}", maybe_room.clone());
         let room_id: OwnedRoomId = match maybe_room.clone().try_into() {
             Ok(r) => r,
             Err(_) => {
-                let alias_id = OwnedRoomAliasId::try_from(maybe_room)?;
+                let alias_id = OwnedRoomAliasId::try_from(maybe_room.clone())?;
 
                 client.resolve_room_alias(&alias_id).await?.room_id
             }
@@ -190,7 +198,50 @@ async fn inviter(client: Client, invitee: OwnedUserId, rooms: Vec<String>) -> an
             None => continue,
         };
 
-        room.invite_user_by_id(&invitee).await?
+        match room.invite_user_by_id(&invitee).await {
+            Ok(_) => trace!("invitation ok: {maybe_room}"),
+            Err(e) => error!("some error occured while inviting to {maybe_room}: {e}"),
+        };
     }
+    Ok(())
+}
+
+pub(crate) async fn web_inviter(
+    State(app_state): State<WebAppState>,
+    session: Session,
+) -> Result<impl IntoResponse, (axum::http::StatusCode, &'static str)> {
+    async {
+        let module_config: ModuleConfig = app_state
+            .bot_config
+            .module_config_value(module_path!())?
+            .try_into()?;
+
+        let user_data: OauthUserInfo = session.get("user.data").await.unwrap().unwrap();
+
+        let user_id_str = format!(
+            "@{username}:{homeserver}",
+            username = user_data.sub,
+            homeserver = module_config.homeserver_selfservice_allow
+        );
+
+        let bdui: Box<DirectUserIdentifier> = From::<String>::from(user_id_str);
+        let user_id: OwnedUserId = match bdui.as_user_id() {
+            None => return Err(anyhow::Error::msg("couldn't get user id")),
+            Some(u) => u.to_owned(),
+        };
+
+        inviter(app_state.mx, user_id, module_config.invite_to).await?;
+
+        Ok(())
+    }
+    .await
+    .map_err(|err: anyhow::Error| {
+        error!("Failed to invite user: {:?}", err);
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to invite user",
+        )
+    })?;
+
     Ok(())
 }

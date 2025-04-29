@@ -33,7 +33,7 @@ use tower_sessions::{
     Expiry, MemoryStore, Session, SessionManagerLayer,
 };
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Debug)]
 pub struct ModuleConfig {
     listen_address: String,
     app_url: String,
@@ -47,12 +47,19 @@ pub struct ModuleConfig {
 static WORKER_STARTER: WorkerStarter = (module_path!(), worker_starter);
 
 fn worker_starter(client: &Client, config: &Config) -> anyhow::Result<AbortHandle> {
-    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
-    let worker = tokio::task::spawn(worker_entrypoint(client.clone(), module_config));
+    let worker = tokio::task::spawn(worker_entrypoint(client.clone(), config.clone()));
     Ok(worker.abort_handle())
 }
 
-async fn worker_entrypoint(mx: Client, module_config: ModuleConfig) -> anyhow::Result<()> {
+async fn worker_entrypoint(mx: Client, bot_config: Config) -> anyhow::Result<()> {
+    let module_config: ModuleConfig = bot_config.module_config_value(module_path!())?.try_into()?;
+
+    let app_state = WebAppState {
+        mx: mx.clone(),
+        web_config: module_config.clone(),
+        bot_config: bot_config.clone(),
+    };
+
     let session_store = MemoryStore::default();
     let session_layer = SessionManagerLayer::new(session_store)
         .with_secure(false)
@@ -86,6 +93,7 @@ async fn worker_entrypoint(mx: Client, module_config: ModuleConfig) -> anyhow::R
 
     let app = Router::new()
         .route("/login", get(login))
+        .route("/mx/inviter/invite", get(crate::inviter::web_inviter))
         .layer(oidc_login_service)
         .route("/", get(maybe_authenticated))
         .route("/logout", get(logout))
@@ -94,8 +102,7 @@ async fn worker_entrypoint(mx: Client, module_config: ModuleConfig) -> anyhow::R
         .nest_service("/static", ServeDir::new("webui/static"))
         .route("/metrics", get(serve_metrics))
         .route_layer(middleware::from_fn(track_metrics))
-        .with_state(module_config.clone())
-        .with_state(mx);
+        .with_state(app_state);
 
     let listener = TcpListener::bind(listen_address).await.unwrap();
 
@@ -120,7 +127,7 @@ async fn maybe_authenticated(
 async fn login(
     token: OidcAccessToken,
     session: Session,
-    State(config): State<ModuleConfig>,
+    State(app_state): State<WebAppState>,
 ) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
     async {
         session
@@ -129,11 +136,11 @@ async fn login(
                 reqwest::ClientBuilder::new()
                     .redirect(reqwest::redirect::Policy::none())
                     .build()?
-                    .get(config.userinfo_endpoint)
+                    .get(app_state.web_config.userinfo_endpoint)
                     .bearer_auth(token.0)
                     .send()
                     .await?
-                    .json::<UserInfo>()
+                    .json::<OauthUserInfo>()
                     .await?,
             )
             .await?;
@@ -153,7 +160,7 @@ async fn login(
 }
 
 pub async fn logout(
-    State(config): State<ModuleConfig>,
+    State(app_state): State<WebAppState>,
     session: Session,
 ) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
     trace!("clearing session");
@@ -168,15 +175,22 @@ pub async fn logout(
     })?;
 
     trace!("aaaand we're done");
-    Ok(response::Redirect::to(&config.app_url))
+    Ok(response::Redirect::to(&app_state.web_config.app_url))
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct UserInfo {
-    pub email: String,
-    pub groups: Vec<String>,
-    pub name: String,
-    pub nickname: String,
-    pub preferred_username: String,
-    pub sub: String,
+#[derive(Debug, Clone)]
+pub(crate) struct WebAppState {
+    pub(crate) mx: Client,
+    web_config: ModuleConfig,
+    pub(crate) bot_config: Config,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct OauthUserInfo {
+    pub(crate) email: String,
+    pub(crate) groups: Vec<String>,
+    pub(crate) name: String,
+    pub(crate) nickname: String,
+    pub(crate) preferred_username: String,
+    pub(crate) sub: String,
 }
