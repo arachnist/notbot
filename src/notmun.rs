@@ -120,7 +120,7 @@ async fn lua_dispatcher(
         irc:HandleCommand(...)
     });
 
-    debug!("attempting to match event");
+    trace!("attempting to match event");
     match event {
         AnyTimelineEvent::MessageLike(AnyMessageLikeEvent::RoomMessage(
             RoomMessageEvent::Original(event),

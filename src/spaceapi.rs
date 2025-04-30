@@ -72,7 +72,7 @@ async fn presence_observer(client: Client, module_config: ModuleConfig) {
         interval.tick().await;
 
         for (url, rooms) in &module_config.presence_map {
-            debug!("fetching spaceapi url: {}", url);
+            trace!("fetching spaceapi url: {}", url);
             let data = match fetch_and_decode_json::<SpaceAPI>(url.to_owned()).await {
                 Ok(d) => d,
                 Err(fe) => {
