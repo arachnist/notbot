@@ -1,15 +1,4 @@
-use crate::{Config, ModuleStarter, MODULE_STARTERS};
-
-use tracing::{error, trace};
-
-use linkme::distributed_slice;
-use matrix_sdk::{
-    event_handler::EventHandlerHandle,
-    ruma::events::room::message::{
-        MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
-    },
-    Client, Room,
-};
+use crate::prelude::*;
 
 #[distributed_slice(MODULE_STARTERS)]
 static MODULE_STARTER: ModuleStarter = (module_path!(), module_starter);

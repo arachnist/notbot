@@ -1,35 +1,14 @@
-use crate::Config;
+use crate::prelude::*;
 
 use futures::lock::Mutex;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
 use tokio::task::AbortHandle;
 
-use tracing::{debug, error, info, trace, warn};
-
-use matrix_sdk::event_handler::EventHandlerHandle;
-use matrix_sdk::Client;
-
 use matrix_sdk::{
-    authentication::matrix::MatrixSession,
-    config::SyncSettings,
-    ruma::events::room::message::{
-        MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
-    },
-    Error as MatrixError, LoopCtrl, Room,
+    authentication::matrix::MatrixSession, config::SyncSettings, Error as MatrixError, LoopCtrl,
 };
 
 use tokio::sync::broadcast::{channel, Receiver, Sender};
 
-use serde::{Deserialize, Serialize};
-
-use linkme::distributed_slice;
-
-use lazy_static::lazy_static;
 use prometheus::Counter;
 use prometheus::{opts, register_counter};
 

@@ -1,27 +1,8 @@
-use std::convert::From;
-use std::time::{Duration, SystemTime};
+use crate::prelude::*;
 
-use crate::{
-    notbottime::{NotBotTime, NOTBOT_EPOCH},
-    Config, ModuleStarter, OauthUserInfo, WebAppState, MODULE_STARTERS,
-};
+use crate::notbottime::{NotBotTime, NOTBOT_EPOCH};
 
-use tracing::{error, info, trace};
-
-use linkme::distributed_slice;
-use matrix_sdk::{
-    event_handler::EventHandlerHandle,
-    ruma::{
-        events::{
-            direct::DirectUserIdentifier,
-            reaction::OriginalSyncReactionEvent,
-            room::message::{MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent},
-            Mentions,
-        },
-        OwnedEventId, OwnedRoomAliasId, OwnedRoomId, OwnedUserId,
-    },
-    Client, Room,
-};
+use matrix_sdk::ruma::events::{direct::DirectUserIdentifier, reaction::OriginalSyncReactionEvent};
 
 use axum::{extract::State, response::IntoResponse};
 use tower_sessions::Session;

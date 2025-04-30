@@ -1,22 +1,7 @@
-use crate::{Config, ModuleStarter, MODULE_STARTERS};
+use crate::prelude::*;
 
-use core::{error::Error as StdError, fmt};
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-
-use tracing::{error, info, trace};
-
-use linkme::distributed_slice;
-use matrix_sdk::{
-    event_handler::EventHandlerHandle,
-    ruma::events::room::message::OriginalSyncRoomMessageEvent,
-    ruma::events::room::message::{MessageType, RoomMessageEventContent},
-    Client, Room,
-};
 use prometheus::Counter;
 use prometheus::{opts, register_counter};
-
-use lazy_static::lazy_static;
 
 use deadpool_postgres::{
     Client as DBClient, Config as PGConfig, ManagerConfig, Pool, RecyclingMethod, Runtime,

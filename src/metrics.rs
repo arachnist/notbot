@@ -1,11 +1,8 @@
-use std::time::Instant;
+use crate::prelude::*;
 
-use hyper::body::Body;
-
-use lazy_static::lazy_static;
-
-use axum::{extract::Request, http::StatusCode, middleware::Next, response::IntoResponse};
-use tracing::error;
+use axum::{
+    body::HttpBody, extract::Request, http::StatusCode, middleware::Next, response::IntoResponse,
+};
 
 use prometheus::{opts, register_histogram_vec, register_int_counter_vec};
 use prometheus::{HistogramVec, IntCounterVec, TextEncoder};

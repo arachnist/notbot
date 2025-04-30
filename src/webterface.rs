@@ -1,15 +1,6 @@
-use std::str::FromStr;
-use tracing::{error, trace};
+use crate::prelude::*;
 
-use crate::{
-    metrics::{serve_metrics, track_metrics},
-    Config, WorkerStarter, WORKERS,
-};
-
-use matrix_sdk::Client;
-
-use linkme::distributed_slice;
-use serde_derive::{Deserialize, Serialize};
+use crate::metrics::{serve_metrics, track_metrics};
 
 use axum::{
     error_handling::HandleErrorLayer,
@@ -179,18 +170,18 @@ pub async fn logout(
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct WebAppState {
-    pub(crate) mx: Client,
+pub struct WebAppState {
+    pub mx: Client,
     web_config: ModuleConfig,
-    pub(crate) bot_config: Config,
+    pub bot_config: Config,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct OauthUserInfo {
-    pub(crate) email: String,
-    pub(crate) groups: Vec<String>,
-    pub(crate) name: String,
-    pub(crate) nickname: String,
-    pub(crate) preferred_username: String,
-    pub(crate) sub: String,
+pub struct OauthUserInfo {
+    pub email: String,
+    pub groups: Vec<String>,
+    pub name: String,
+    pub nickname: String,
+    pub preferred_username: String,
+    pub sub: String,
 }

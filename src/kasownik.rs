@@ -1,29 +1,11 @@
-use crate::{
-    fetch_and_decode_json, notbottime::NotBotTime, Config, ModuleStarter, MODULE_STARTERS,
-};
+use crate::prelude::*;
 
-use std::time::{Duration, SystemTime};
+use crate::notbottime::NotBotTime;
 
-use tracing::{debug, error, trace};
-
-use linkme::distributed_slice;
-use matrix_sdk::{
-    event_handler::EventHandlerHandle,
-    ruma::events::{
-        room::message::{MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent},
-        Mentions,
-    },
-    Client, Room,
-};
-
-use serde_derive::Deserialize;
 use serde_json::Value;
-
-use reqwest::Client as RClient;
 
 use leon::{vals, Template};
 
-use lazy_static::lazy_static;
 use prometheus::Counter;
 use prometheus::{opts, register_counter};
 

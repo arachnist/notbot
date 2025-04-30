@@ -1,24 +1,7 @@
-use crate::{
-    fetch_and_decode_json, Config, ModuleStarter, WorkerStarter, MODULE_STARTERS, WORKERS,
-};
+use crate::prelude::*;
 
 use tokio::task::AbortHandle;
-use tracing::{debug, error, trace};
 
-use linkme::distributed_slice;
-use matrix_sdk::{
-    event_handler::EventHandlerHandle,
-    ruma::{
-        events::room::message::{
-            MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
-        },
-        OwnedRoomAliasId, OwnedRoomId,
-    },
-    Client, Room, RoomState,
-};
-
-use serde::Deserialize;
-use std::collections::HashMap;
 use tokio::time::{interval, Duration};
 
 use lazy_static::lazy_static;

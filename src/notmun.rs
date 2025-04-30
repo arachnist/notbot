@@ -1,27 +1,6 @@
-use crate::{maybe_get_room, Config, DBPools, ModuleStarter, MODULE_STARTERS};
-
-use core::{error::Error as StdError, fmt};
-use std::{fs, path::Path};
-use tracing::{debug, error, info, trace, warn};
+use crate::prelude::*;
 
 use tokio::sync::mpsc::{channel, Receiver};
-
-use linkme::distributed_slice;
-use matrix_sdk::{
-    event_handler::{Ctx, EventHandlerHandle},
-    ruma::{
-        events::{
-            room::{
-                member::{MembershipChange, RoomMemberEvent, RoomMemberEventContent},
-                message::{MessageType, RoomMessageEvent, RoomMessageEventContent},
-            },
-            AnyMessageLikeEvent, AnyStateEvent, AnySyncTimelineEvent, AnyTimelineEvent,
-        },
-        OwnedUserId, UserId,
-    },
-    Client, Room,
-};
-use serde_derive::Deserialize;
 
 use futures::pin_mut;
 use tokio_postgres::{types::Type, Row};
@@ -197,7 +176,8 @@ async fn consume(client: &Client, action: &NotMunAction) -> anyhow::Result<()> {
             None => {
                 room.send(RoomMessageEventContent::text_plain(
                     "sorry fam, don't know 'em",
-                )).await?;
+                ))
+                .await?;
             }
         },
         NotMunAction::Ban(_, _, _) => match target {
@@ -205,7 +185,8 @@ async fn consume(client: &Client, action: &NotMunAction) -> anyhow::Result<()> {
             None => {
                 room.send(RoomMessageEventContent::text_plain(
                     "sorry fam, don't know 'em",
-                )).await?;
+                ))
+                .await?;
             }
         },
         NotMunAction::SetNick(_, _roomnick) => {
@@ -383,7 +364,7 @@ async fn async_fetch_http(lua: Lua, uri: String) -> anyhow::Result<(String, u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-pub(crate) enum NotMunAction {
+pub enum NotMunAction {
     Say(String, String),
     Html(String, String, String),
     Notice(String, String),
@@ -510,7 +491,7 @@ impl TryFrom<Vec<String>> for NotMunAction {
 }
 
 #[derive(Debug)]
-pub(crate) enum NotMunError {
+pub enum NotMunError {
     NoRoom(String),
     UnknownAction,
     UnhandledAction(NotMunAction),

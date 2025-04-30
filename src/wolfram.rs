@@ -1,21 +1,9 @@
-use crate::{fetch_and_decode_json, Config, ModuleStarter, MODULE_STARTERS};
+use crate::prelude::*;
 
-use tracing::{error, trace};
-
-use linkme::distributed_slice;
-use matrix_sdk::{
-    event_handler::EventHandlerHandle,
-    ruma::events::room::message::{
-        MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
-    },
-    Client, Room,
-};
-
-use serde_derive::Deserialize;
 use serde_json::Value;
+
 use urlencoding::encode as uencode;
 
-use lazy_static::lazy_static;
 use prometheus::Counter;
 use prometheus::{opts, register_counter};
 

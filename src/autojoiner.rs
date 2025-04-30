@@ -1,17 +1,7 @@
-use crate::{Config, ModuleStarter, MODULE_STARTERS};
+use crate::prelude::*;
 
-use linkme::distributed_slice;
-
-use matrix_sdk::{
-    event_handler::EventHandlerHandle, ruma::events::room::member::StrippedRoomMemberEvent, Client,
-    Room,
-};
-
-use serde_derive::Deserialize;
 use tokio::time::{sleep, Duration};
-use tracing::{error, info, trace};
 
-use lazy_static::lazy_static;
 use prometheus::Counter;
 use prometheus::{opts, register_counter};
 
