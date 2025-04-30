@@ -192,8 +192,22 @@ async fn consume(client: &Client, action: &NotMunAction) -> anyhow::Result<()> {
             room.send(action.get_message()?).await?;
             return Ok(());
         }
-        NotMunAction::Kick(_, _, _) => room.kick_user(&target.unwrap(), reason).await?,
-        NotMunAction::Ban(_, _, _) => room.ban_user(&target.clone().unwrap(), reason).await?,
+        NotMunAction::Kick(_, _, _) => match target {
+            Some(t) => room.kick_user(&t, reason).await?,
+            None => {
+                room.send(RoomMessageEventContent::text_plain(
+                    "sorry fam, don't know 'em",
+                )).await?;
+            }
+        },
+        NotMunAction::Ban(_, _, _) => match target {
+            Some(t) => room.ban_user(&t, reason).await?,
+            None => {
+                room.send(RoomMessageEventContent::text_plain(
+                    "sorry fam, don't know 'em",
+                )).await?;
+            }
+        },
         NotMunAction::SetNick(_, _roomnick) => {
             let _member_event = room
                 .get_state_event_static_for_key::<RoomMemberEventContent, UserId>(
