@@ -2,7 +2,7 @@ use crate::prelude::*;
 
 use crate::notbottime::{NotBotTime, NOTBOT_EPOCH};
 
-use matrix_sdk::ruma::events::{direct::DirectUserIdentifier, reaction::OriginalSyncReactionEvent};
+use matrix_sdk::ruma::events::reaction::OriginalSyncReactionEvent;
 
 use axum::{extract::State, response::IntoResponse};
 use tower_sessions::Session;
@@ -196,17 +196,11 @@ pub(crate) async fn web_inviter(
 
         let user_data: OauthUserInfo = session.get("user.data").await.unwrap().unwrap();
 
-        let user_id_str = format!(
+        let user_id: OwnedUserId = UserId::parse(format!(
             "@{username}:{homeserver}",
             username = user_data.sub,
             homeserver = module_config.homeserver_selfservice_allow
-        );
-
-        let bdui: Box<DirectUserIdentifier> = From::<String>::from(user_id_str);
-        let user_id: OwnedUserId = match bdui.as_user_id() {
-            None => return Err(anyhow::Error::msg("couldn't get user id")),
-            Some(u) => u.to_owned(),
-        };
+        ))?;
 
         inviter(app_state.mx, user_id, module_config.invite_to).await?;
 
