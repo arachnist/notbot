@@ -18,6 +18,8 @@ rustPlatform.buildRustPackage {
   src = lib.cleanSource ./.;
   nativeBuildInputs = [ pkg-config ];
 
+  RUSTFLAGS = "--cfg tokio_unstable";
+
   buildInputs = [
     openssl
     sqlite
