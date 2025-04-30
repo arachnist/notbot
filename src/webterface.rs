@@ -34,8 +34,9 @@ pub struct ModuleConfig {
     client_secret: Option<String>,
 }
 
-#[distributed_slice(WORKERS)]
-static WORKER_STARTER: WorkerStarter = (module_path!(), worker_starter);
+pub(crate) fn workers() -> Vec<WorkerStarter> {
+    vec![(module_path!(), worker_starter)]
+}
 
 fn worker_starter(client: &Client, config: &Config) -> anyhow::Result<AbortHandle> {
     let worker = tokio::task::spawn(worker_entrypoint(client.clone(), config.clone()));

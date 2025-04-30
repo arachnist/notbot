@@ -66,8 +66,9 @@ impl DBPools {
     }
 }
 
-#[distributed_slice(MODULE_STARTERS)]
-static MODULE_STARTER: ModuleStarter = (module_path!(), module_starter);
+pub(crate) fn modules() -> Vec<ModuleStarter> {
+    vec![(module_path!(), module_starter)]
+}
 
 fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
     info!("registering database connections");

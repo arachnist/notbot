@@ -21,17 +21,18 @@ lazy_static! {
         register_counter!(opts!("nags_total", "Number of times members were nagged",)).unwrap();
 }
 
-#[distributed_slice(MODULE_STARTERS)]
-static MODULE_STARTER_NAG: ModuleStarter = ("notbot::kasownik_nag", module_starter_nag);
+pub(crate) fn modules() -> Vec<ModuleStarter> {
+    vec![
+        (module_path!(), module_starter),
+        ("notbot::kasownik_nag", module_starter_nag),
+    ]
+}
 
 fn module_starter_nag(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
     Ok(client
         .add_event_handler(move |ev, room, c| module_entrypoint_nag(ev, room, c, module_config)))
 }
-
-#[distributed_slice(MODULE_STARTERS)]
-static MODULE_STARTER: ModuleStarter = (module_path!(), module_starter);
 
 fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;

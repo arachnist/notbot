@@ -28,7 +28,6 @@ hyper = { version = "1.6.0", features = ["server", "http1"] }
 hyper-util = "0.1.11"
 lazy_static = "1.5.0"
 leon = "3.0.2"
-linkme = "0.3.31"
 matrix-sdk = { version = "0.11.0", features = ["sqlite", "e2e-encryption", "anyhow", "markdown"] }
 mlua = { version = "0.10.3", features = ["async", "serialize", "send", "anyhow", "userdata-wrappers", "luajit", "macros"] }
 prometheus = { version = "0.14.0", features = ["process"] }

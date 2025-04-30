@@ -16,8 +16,13 @@ lazy_static! {
     .unwrap();
 }
 
-#[distributed_slice(MODULE_STARTERS)]
-static MODULE_STARTER: ModuleStarter = (module_path!(), module_starter);
+pub(crate) fn modules() -> Vec<ModuleStarter> {
+    vec![(module_path!(), module_starter)]
+}
+
+pub(crate) fn workers() -> Vec<WorkerStarter> {
+    vec![(module_path!(), worker_starter)]
+}
 
 fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
@@ -30,9 +35,6 @@ pub struct ModuleConfig {
     presence_map: HashMap<String, Vec<String>>,
     presence_interval: u64,
 }
-
-#[distributed_slice(WORKERS)]
-static WORKER_STARTER: WorkerStarter = (module_path!(), worker_starter);
 
 fn worker_starter(client: &Client, config: &Config) -> anyhow::Result<AbortHandle> {
     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;

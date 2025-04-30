@@ -11,8 +11,9 @@ use mlua::{
     Variadic,
 };
 
-#[distributed_slice(MODULE_STARTERS)]
-static MODULE_STARTER: ModuleStarter = (module_path!(), module_starter);
+pub(crate) fn modules() -> Vec<ModuleStarter> {
+    vec![(module_path!(), module_starter)]
+}
 
 fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;

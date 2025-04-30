@@ -3,7 +3,7 @@ pub use crate::config::ModuleConfig;
 
 pub use crate::db::{DBError, DBPools};
 
-pub use crate::botmanager::{ModuleStarter, WorkerStarter, MODULE_STARTERS, WORKERS};
+pub use crate::botmanager::{Module, ModuleStarter, Worker, WorkerStarter};
 pub use crate::webterface::{OauthUserInfo, WebAppState};
 
 pub use crate::notmun::NotMunError;
@@ -38,8 +38,7 @@ pub use reqwest::Client as RClient;
 
 pub use tracing::{debug, error, info, trace, warn};
 
-pub use serde_derive::{Deserialize, Serialize};
 pub use serde::de;
+pub use serde_derive::{Deserialize, Serialize};
 
 pub use lazy_static::lazy_static;
-pub use linkme::distributed_slice;

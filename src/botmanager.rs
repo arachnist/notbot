@@ -25,12 +25,9 @@ pub type WorkerStarter = (
     fn(&Client, &Config) -> anyhow::Result<AbortHandle>,
 );
 
-#[distributed_slice]
-pub static WORKERS: [WorkerStarter] = [..];
-
 pub struct Worker {
-    handle: Option<AbortHandle>,
-    starter: fn(&Client, &Config) -> anyhow::Result<AbortHandle>,
+    pub handle: Option<AbortHandle>,
+    pub starter: fn(&Client, &Config) -> anyhow::Result<AbortHandle>,
 }
 
 pub type ModuleStarter = (
@@ -38,12 +35,9 @@ pub type ModuleStarter = (
     fn(&Client, &Config) -> anyhow::Result<EventHandlerHandle>,
 );
 
-#[distributed_slice]
-pub static MODULE_STARTERS: [ModuleStarter] = [..];
-
 pub struct Module {
-    handle: Option<EventHandlerHandle>,
-    starter: fn(&Client, &Config) -> anyhow::Result<EventHandlerHandle>,
+    pub handle: Option<EventHandlerHandle>,
+    pub starter: fn(&Client, &Config) -> anyhow::Result<EventHandlerHandle>,
 }
 
 struct BotManagerInner {
@@ -68,56 +62,14 @@ impl BotManagerInner {
             }
         };
 
-        let mut failed_modules: Vec<String> = vec![];
-        let mut failed_workers: Vec<String> = vec![];
-
         trace!("config: {:#?}", self.config);
 
-        for (name, module) in &mut self.modules {
-            match &module.handle {
-                Some(handle) => {
-                    info!("unregistering\t{name}");
-                    self.client.remove_event_handler(handle.to_owned());
-                }
-                None => info!("module was previously not registerd: {name}"),
-            };
-
-            info!("registering:\t{name}");
-
-            let handle = match (module.starter)(&self.client, &self.config) {
-                Ok(h) => Some(h),
-                Err(e) => {
-                    error!("initializing module failed: {name} {e}");
-                    failed_modules.push(name.to_owned());
-                    None
-                }
-            };
-
-            module.handle = handle;
-        }
-
-        for (name, worker) in &mut self.workers {
-            match &worker.handle {
-                Some(handle) => {
-                    info!("stopping: {name}");
-                    handle.abort();
-                }
-                None => info!("worker was previously not started: {name}"),
-            };
-
-            info!("starting: {name}");
-
-            let handle = match (worker.starter)(&self.client, &self.config) {
-                Ok(h) => Some(h),
-                Err(e) => {
-                    error!("initializing worker failed: {name} {e}");
-                    failed_workers.push(name.to_owned());
-                    None
-                }
-            };
-
-            worker.handle = handle;
-        }
+        let (registered_modules, failed_modules) =
+            crate::init_modules(&self.client, &self.config, &self.modules);
+        self.modules = registered_modules;
+        let (registered_workers, failed_workers) =
+            crate::init_workers(&self.client, &self.config, &self.workers);
+        self.workers = registered_workers;
 
         let mut status: String = "configuration reloaded".to_string();
 
@@ -195,52 +147,10 @@ impl BotManager {
             ))
             .unwrap();
 
-        let mut modules: HashMap<String, Module> = Default::default();
-
-        for (name, starter) in MODULE_STARTERS {
-            let handle: Option<EventHandlerHandle> = match starter(&client, &config) {
-                Ok(h) => Some(h),
-                Err(e) => {
-                    error!("initializing module {name} failed: {e}");
-                    None
-                }
-            };
-
-            info!("registering: {name}");
-
-            modules.insert(
-                name.to_string(),
-                Module {
-                    handle,
-                    starter: *starter,
-                },
-            );
-        }
-
-        let mut workers: HashMap<String, Worker> = Default::default();
-
-        for (name, starter) in WORKERS {
-            let handle: Option<AbortHandle> = match starter(&client, &config) {
-                Ok(h) => Some(h),
-                Err(e) => {
-                    error!("initializing worker {name} failed: {e}");
-                    None
-                }
-            };
-
-            info!("registering worker: {name}");
-
-            workers.insert(
-                name.to_string(),
-                Worker {
-                    handle,
-                    starter: *starter,
-                },
-            );
-        }
+        let (modules, _) = crate::init_modules(&client, &config, &Default::default());
+        let (workers, _) = crate::init_workers(&client, &config, &Default::default());
 
         let (tx, _) = channel::<Room>(1);
-
         let tx2 = tx.clone();
 
         // this config will not be reloadable :(

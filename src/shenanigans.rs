@@ -1,7 +1,8 @@
 use crate::prelude::*;
 
-#[distributed_slice(MODULE_STARTERS)]
-static MODULE_STARTER: ModuleStarter = (module_path!(), module_starter);
+pub(crate) fn modules() -> Vec<ModuleStarter> {
+    vec![(module_path!(), module_starter)]
+}
 
 fn module_starter(client: &Client, _: &Config) -> anyhow::Result<EventHandlerHandle> {
     Ok(client.add_event_handler(shenanigans))
