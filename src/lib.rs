@@ -60,20 +60,18 @@ pub(crate) fn init_modules(
         };
     }
 
-    register_modules(mx, config, &mut modules, &mut failed, autojoiner::modules());
-    register_modules(mx, config, &mut modules, &mut failed, db::modules());
-    register_modules(mx, config, &mut modules, &mut failed, inviter::modules());
-    register_modules(mx, config, &mut modules, &mut failed, kasownik::modules());
-    register_modules(mx, config, &mut modules, &mut failed, notmun::modules());
-    register_modules(
-        mx,
-        config,
-        &mut modules,
-        &mut failed,
-        shenanigans::modules(),
-    );
-    register_modules(mx, config, &mut modules, &mut failed, spaceapi::modules());
-    register_modules(mx, config, &mut modules, &mut failed, wolfram::modules());
+    for initializer in vec![
+        autojoiner::modules,
+        db::modules,
+        inviter::modules,
+        kasownik::modules,
+        notmun::modules,
+        spaceapi::modules,
+        wolfram::modules,
+        shenanigans::modules,
+    ] {
+        register_modules(mx, config, &mut modules, &mut failed, initializer());
+    }
 
     (modules, failed)
 }
@@ -92,7 +90,7 @@ fn register_workers(
         let handle: Option<AbortHandle> = match starter(mx, config) {
             Ok(h) => Some(h),
             Err(e) => {
-                error!("initializing module {name} failed: {e}");
+                error!("initializing worker {name} failed: {e}");
                 failed.push(name.to_owned());
                 None
             }
@@ -120,8 +118,12 @@ pub(crate) fn init_workers(
         };
     }
 
-    register_workers(mx, config, &mut workers, &mut failed, spaceapi::workers());
-    register_workers(mx, config, &mut workers, &mut failed, webterface::workers());
+    for initializer in vec![
+        spaceapi::workers,
+        webterface::workers,
+    ] {
+        register_workers(mx, config, &mut workers, &mut failed, initializer());
+    }
 
     (workers, failed)
 }
