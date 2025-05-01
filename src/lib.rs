@@ -1,4 +1,5 @@
 mod botmanager;
+mod commands;
 mod config;
 mod db;
 mod metrics;
@@ -69,6 +70,7 @@ pub(crate) fn init_modules(
         spaceapi::modules,
         wolfram::modules,
         shenanigans::modules,
+        commands::modules,
     ] {
         register_modules(mx, config, &mut modules, &mut failed, initializer());
     }
@@ -118,10 +120,7 @@ pub(crate) fn init_workers(
         };
     }
 
-    for initializer in vec![
-        spaceapi::workers,
-        webterface::workers,
-    ] {
+    for initializer in vec![spaceapi::workers, webterface::workers] {
         register_workers(mx, config, &mut workers, &mut failed, initializer());
     }
 
