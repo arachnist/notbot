@@ -13,6 +13,7 @@ mod inviter;
 mod kasownik;
 mod notbottime;
 mod notmun;
+mod sage;
 mod shenanigans;
 mod spaceapi;
 mod webterface;
@@ -71,6 +72,7 @@ pub(crate) fn init_modules(
         wolfram::modules,
         shenanigans::modules,
         commands::modules,
+        sage::modules,
     ] {
         register_modules(mx, config, &mut modules, &mut failed, initializer());
     }
