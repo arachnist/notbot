@@ -18,7 +18,7 @@ fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandl
     }))
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct ModuleConfig {
     pub requests: String,
     pub approvers: Vec<String>,

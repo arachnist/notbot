@@ -61,7 +61,7 @@ pub(crate) fn init_modules(
         };
     }
 
-    for initializer in vec![
+    for initializer in [
         autojoiner::modules,
         db::modules,
         inviter::modules,
@@ -120,7 +120,7 @@ pub(crate) fn init_workers(
         };
     }
 
-    for initializer in vec![spaceapi::workers, webterface::workers] {
+    for initializer in [spaceapi::workers, webterface::workers] {
         register_workers(mx, config, &mut workers, &mut failed, initializer());
     }
 

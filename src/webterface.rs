@@ -177,7 +177,7 @@ pub struct WebAppState {
     pub bot_config: Config,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct OauthUserInfo {
     pub email: String,
     pub groups: Vec<String>,

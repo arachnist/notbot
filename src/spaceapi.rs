@@ -25,15 +25,53 @@ pub(crate) fn workers() -> Vec<WorkerStarter> {
 }
 
 fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
-    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
-    Ok(client.add_event_handler(move |ev, room| module_entrypoint(ev, room, module_config)))
+    let command_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+    Ok(client.add_event_handler(move |ev, room| {
+        simple_command_wrapper(ev, room, command_config, vec![".at".to_string()], at)
+    }))
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+async fn at(
+    room: Room,
+    _sender: OwnedUserId,
+    _keyword: String,
+    _argv: Vec<String>,
+    config: ModuleConfig,
+) -> anyhow::Result<String> {
+    CHECKINATOR_CALLS.inc();
+
+    let room_name = match room.canonical_alias() {
+        Some(name) => name.to_string(),
+        None => room.room_id().to_string(),
+    };
+
+    let url = match config.room_map.get(&room_name) {
+        Some(url) => url,
+        None => {
+            debug!("no spaceapi url found, using default");
+            match config.room_map.get("default") {
+                None => return Err(anyhow::Error::msg("no spaceapi url found")),
+                Some(u) => u,
+            }
+        }
+    };
+
+    let data = fetch_and_decode_json::<SpaceAPI>(url.to_owned()).await?;
+    let present: Vec<String> = names_dehighlighted(data.sensors.people_now_present);
+
+    if present.is_empty() {
+        Ok(config.empty_response)
+    } else {
+        Ok(present.join(", "))
+    }
+}
+
+#[derive(Clone, Deserialize)]
 pub struct ModuleConfig {
     room_map: HashMap<String, String>,
     presence_map: HashMap<String, Vec<String>>,
     presence_interval: u64,
+    empty_response: String,
 }
 
 fn worker_starter(client: &Client, config: &Config) -> anyhow::Result<AbortHandle> {
@@ -43,7 +81,6 @@ fn worker_starter(client: &Client, config: &Config) -> anyhow::Result<AbortHandl
 }
 
 async fn presence_observer(client: Client, module_config: ModuleConfig) {
-    // let  = tokio::task::spawn(async move {
     let mut interval = interval(Duration::from_secs(module_config.presence_interval));
     let mut present: HashMap<String, Vec<String>> = Default::default();
     let mut first_loop: HashMap<String, bool> = Default::default();
@@ -149,71 +186,6 @@ async fn presence_observer(client: Client, module_config: ModuleConfig) {
     }
 }
 
-async fn module_entrypoint(
-    ev: OriginalSyncRoomMessageEvent,
-    room: Room,
-    module_config: ModuleConfig,
-) -> anyhow::Result<()> {
-    trace!("in at_response");
-    if room.state() != RoomState::Joined {
-        return Ok(());
-    }
-
-    trace!("checking message type");
-    let MessageType::Text(text) = ev.content.msgtype else {
-        return Ok(());
-    };
-
-    trace!("checking if message starts with .at: {:#?}", text.body);
-    if text.body.trim().starts_with(".at") {
-        CHECKINATOR_CALLS.inc();
-
-        let room_name = match room.canonical_alias() {
-            Some(name) => name.to_string(),
-            None => room.room_id().to_string(),
-        };
-
-        let url = match module_config.room_map.get(&room_name) {
-            Some(url) => url,
-            None => {
-                debug!("no spaceapi url found, using default");
-                match module_config.room_map.get("default") {
-                    None => return Ok(()),
-                    Some(u) => u,
-                }
-            }
-        };
-
-        let data = match fetch_and_decode_json::<SpaceAPI>(url.to_owned()).await {
-            Ok(d) => d,
-            Err(fe) => {
-                error!("error fetching data: {fe}");
-                if let Err(se) = room
-                    .send(RoomMessageEventContent::text_plain("couldn't fetch data"))
-                    .await
-                {
-                    error!("error sending response: {se}");
-                };
-                return Ok(());
-            }
-        };
-
-        let present: Vec<String> = names_dehighlighted(data.sensors.people_now_present);
-
-        debug!("present: {:#?}", present);
-
-        let response = if !present.is_empty() {
-            RoomMessageEventContent::text_plain(present.join(", "))
-        } else {
-            RoomMessageEventContent::text_plain("Nikdo není doma...")
-        };
-
-        room.send(response).await?;
-    };
-
-    Ok(())
-}
-
 fn names_dehighlighted(present: Vec<PeopleNowPresent>) -> Vec<String> {
     let mut dehighlighted: Vec<String> = vec![];
 
@@ -230,7 +202,8 @@ fn names_dehighlighted(present: Vec<PeopleNowPresent>) -> Vec<String> {
     dehighlighted
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+#[allow(dead_code)]
+#[derive(Clone, Deserialize)]
 pub struct SpaceAPI {
     pub api_compatibility: Vec<String>,
     pub space: String,
@@ -244,27 +217,31 @@ pub struct SpaceAPI {
     pub sensors: Sensors,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+#[allow(dead_code)]
+#[derive(Clone, Deserialize)]
 pub struct Location {
     pub lat: f64,
     pub lon: f64,
     pub address: String,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+#[allow(dead_code)]
+#[derive(Clone, Deserialize)]
 pub struct State {
     pub open: bool,
     pub message: String,
     pub icon: Icon,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+#[allow(dead_code)]
+#[derive(Clone, Deserialize)]
 pub struct Icon {
     pub open: String,
     pub closed: String,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+#[allow(dead_code)]
+#[derive(Clone, Deserialize)]
 pub struct Contact {
     pub facebook: String,
     pub irc: String,
@@ -274,40 +251,46 @@ pub struct Contact {
     pub twitter: String,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+#[allow(dead_code)]
+#[derive(Clone, Deserialize)]
 pub struct Feeds {
     pub blog: Blog,
     pub calendar: Calendar,
     pub wiki: Wiki,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+#[allow(dead_code)]
+#[derive(Clone, Deserialize)]
 pub struct Blog {
     #[serde(rename = "type")]
     pub type_field: String,
     pub url: String,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+#[allow(dead_code)]
+#[derive(Clone, Deserialize)]
 pub struct Calendar {
     #[serde(rename = "type")]
     pub type_field: String,
     pub url: String,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+#[allow(dead_code)]
+#[derive(Clone, Deserialize)]
 pub struct Wiki {
     #[serde(rename = "type")]
     pub type_field: String,
     pub url: String,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+#[allow(dead_code)]
+#[derive(Clone, Deserialize)]
 pub struct Sensors {
     pub people_now_present: Vec<PeopleNowPresent>,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+#[allow(dead_code)]
+#[derive(Clone, Deserialize)]
 pub struct PeopleNowPresent {
     pub value: u32,
     pub names: Vec<String>,

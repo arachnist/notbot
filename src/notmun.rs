@@ -49,7 +49,7 @@ fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandl
 
     let startmun = Path::new(&module_config.mun_path).join("start.lua");
     info!("startmun: {}", startmun.display());
-    // info!("globals.LUA_PATH: {}", lua_globals.get::<String>("LUA_PATH")?);
+
     lua.load(fs::read_to_string(startmun)?)
         .set_name("mun start.lua")
         .exec()?;
@@ -72,10 +72,9 @@ fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandl
     }))
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct ModuleConfig {
     mun_path: String,
-    lua_path: String,
 }
 
 async fn lua_dispatcher(

@@ -20,41 +20,33 @@ lazy_static! {
     .unwrap();
 }
 
+#[derive(Clone, Deserialize)]
+pub struct ModuleConfig {
+    pub app_id: String,
+}
+
 pub(crate) fn modules() -> Vec<ModuleStarter> {
     vec![(module_path!(), module_starter)]
 }
 
 fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
-    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
-    Ok(client.add_event_handler(move |ev, room| module_entrypoint(ev, room, module_config)))
+    let command_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+    Ok(client.add_event_handler(move |ev, room| {
+        simple_command_wrapper(ev, room, command_config, vec![".c".to_string()], wolfram)
+    }))
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
-pub struct ModuleConfig {
-    pub app_id: String,
-}
-
-async fn module_entrypoint(
-    ev: OriginalSyncRoomMessageEvent,
-    room: Room,
+async fn wolfram(
+    _room: Room,
+    _sender: OwnedUserId,
+    _keyword: String,
+    argv: Vec<String>,
     config: ModuleConfig,
-) -> anyhow::Result<()> {
-    trace!("in wolfram");
-
-    trace!("checking message type");
-    let MessageType::Text(text) = ev.content.msgtype else {
-        return Ok(());
-    };
-
-    trace!("checking if message starts with .c: {:#?}", text.body);
-    if !text.body.trim().starts_with(".c ") {
-        return Ok(());
-    };
-
+) -> anyhow::Result<String> {
     WOLFRAM_CALLS.inc();
 
-    let text_query = text.body.trim().strip_prefix(".c ").unwrap();
-    let query = uencode(text_query);
+    let text_query = argv.join(" ");
+    let query = uencode(text_query.as_str());
 
     let url: String = "http://api.wolframalpha.com/v2/query?input=".to_owned()
         + query.as_ref()
@@ -62,25 +54,13 @@ async fn module_entrypoint(
         + config.app_id.as_str()
         + "&output=json";
 
-    let data = match fetch_and_decode_json::<WolframAlpha>(url).await {
-        Ok(d) => d,
-        Err(fe) => {
-            error!("error fetching data: {fe}");
-            room.send(RoomMessageEventContent::text_plain(
-                "couldn't fetch data from wolfram",
-            ))
-            .await?;
-            return Ok(());
-        }
+    let Ok(data) = fetch_and_decode_json::<WolframAlpha>(url).await else {
+        return Err(anyhow::Error::msg("couldn't fetch data from wolfram"));
     };
 
     if !data.queryresult.success || data.queryresult.numpods == 0 {
-        room.send(RoomMessageEventContent::text_plain("no results"))
-            .await?;
-        return Ok(());
+        return Ok("no results".to_string());
     };
-
-    trace!("wolfram data: {:#?}", data);
 
     let mut response_parts: Vec<String> = vec![];
 
@@ -90,18 +70,16 @@ async fn module_entrypoint(
         }
     }
 
-    let response = RoomMessageEventContent::text_plain(response_parts.join("\n"));
-    room.send(response).await?;
-
-    Ok(())
+    Ok(response_parts.join("\n"))
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct WolframAlpha {
     pub queryresult: Queryresult,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+#[allow(dead_code)]
+#[derive(Clone, Deserialize)]
 pub struct Queryresult {
     pub success: bool,
     pub error: bool,
@@ -122,7 +100,8 @@ pub struct Queryresult {
     pub pods: Vec<Pod>,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+#[allow(dead_code)]
+#[derive(Clone, Deserialize)]
 pub struct Pod {
     pub title: String,
     pub scanner: String,
@@ -137,14 +116,16 @@ pub struct Pod {
     pub states: Vec<State>,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+#[allow(dead_code)]
+#[derive(Clone, Deserialize)]
 pub struct Subpod {
     pub title: String,
     pub img: Img,
     pub plaintext: String,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+#[allow(dead_code)]
+#[derive(Clone, Deserialize)]
 pub struct Img {
     pub src: String,
     pub alt: String,
@@ -158,7 +139,8 @@ pub struct Img {
     pub contenttype: String,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+#[allow(dead_code)]
+#[derive(Clone, Deserialize)]
 pub struct State {
     pub name: String,
     pub input: String,

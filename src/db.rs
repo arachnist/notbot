@@ -97,66 +97,42 @@ fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandl
         dbc.insert(name.to_owned(), pool);
     }
 
-    Ok(client.add_event_handler(move |ev, client, room| {
-        module_entrypoint(ev, client, room, module_config)
+    Ok(client.add_event_handler(move |ev, room| {
+        simple_command_wrapper(ev, room, module_config, vec![".db".to_string()], status)
     }))
 }
 
-async fn module_entrypoint(
-    ev: OriginalSyncRoomMessageEvent,
-    client: Client,
-    room: Room,
+async fn status(
+    _room: Room,
+    _sender: OwnedUserId,
+    _keyword: String,
+    _argv: Vec<String>,
     config: DBConfig,
-) -> anyhow::Result<()> {
-    if client.user_id().unwrap() == ev.sender {
-        return Ok(());
-    };
+) -> anyhow::Result<String> {
+    let mut wip_response: String = "database status:".to_string();
 
-    let MessageType::Text(text) = ev.content.msgtype else {
-        return Ok(());
-    };
+    trace!("attempting to grab dbc lock");
+    for name in config.keys() {
+        trace!("checking connection: {name}");
+        let dbpool = DBPools::get_pool(name).await?;
 
-    if !text.body.trim().starts_with(".db") {
-        return Ok(());
-    };
+        if dbpool.is_closed() {
+            wip_response.push_str(format!(" {name}: closed;").as_str());
+        } else {
+            wip_response.push_str(format!(" {name}: open,").as_str());
 
-    DB_STATUS.inc();
-
-    trace!("building response");
-    let response = {
-        let mut wip_response: String = "database status:".to_string();
-
-        trace!("attempting to grab dbc lock");
-        // let dbc = DB_CONNECTIONS.0.lock().unwrap();
-        // for (name, pool) in dbc.iter() {
-        for name in config.keys() {
-            trace!("checking connection: {name}");
-            let dbpool = DBPools::get_pool(name).await?;
-
-            if dbpool.is_closed() {
-                wip_response.push_str(format!(" {name}: closed;").as_str());
+            let client = dbpool.get().await?;
+            let stmt = client.prepare_cached("SELECT 'foo' || $1").await?;
+            if (client.query(&stmt, &[&"bar"]).await).is_err() {
+                wip_response.push_str(" broken: {e}");
             } else {
-                wip_response.push_str(format!(" {name}: open,").as_str());
-
-                let client = dbpool.get().await?;
-                let stmt = client.prepare_cached("SELECT 'foo' || $1").await?;
-                if (client.query(&stmt, &[&"bar"]).await).is_err() {
-                    wip_response.push_str(" broken: {e}");
-                } else {
-                    wip_response.push_str(" functional");
-                };
+                wip_response.push_str(" functional");
             };
-        }
+        };
+    }
 
-        trace!("returning response part: {wip_response}");
-        wip_response
-    };
-
-    trace!("sending response");
-    room.send(RoomMessageEventContent::text_plain(response))
-        .await?;
-
-    Ok(())
+    trace!("returning response part: {wip_response}");
+    Ok(wip_response)
 }
 
 #[derive(Debug)]

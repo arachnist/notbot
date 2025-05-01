@@ -34,49 +34,55 @@ fn module_starter_nag(client: &Client, config: &Config) -> anyhow::Result<EventH
         .add_event_handler(move |ev, room, c| module_entrypoint_nag(ev, room, c, module_config)))
 }
 
-fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
-    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
-    Ok(client.add_event_handler(move |ev, room| module_entrypoint(ev, room, module_config)))
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct ModuleConfig {
     pub url_template: String,
     pub nag_channels: Vec<String>,
     pub nag_late_fees: i64,
 }
 
-async fn module_entrypoint(
-    ev: OriginalSyncRoomMessageEvent,
-    room: Room,
-    module_config: ModuleConfig,
-) -> anyhow::Result<()> {
-    let MessageType::Text(text) = ev.content.msgtype else {
-        return Ok(());
-    };
+fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
+    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+    Ok(client.add_event_handler(move |ev, room| {
+        simple_command_wrapper(
+            ev,
+            room,
+            module_config,
+            vec!["~due", ".due", "~due-me", ".due-me"]
+                .into_iter()
+                .map(|x| x.to_string())
+                .collect(),
+            due,
+        )
+    }))
+}
 
-    if !text.body.trim().starts_with(".due") && !text.body.starts_with("~due") {
-        return Ok(());
-    };
+async fn due(
+    _room: Room,
+    sender: OwnedUserId,
+    keyword: String,
+    argv: Vec<String>,
+    config: ModuleConfig,
+) -> anyhow::Result<String> {
+    let member: String = match keyword.as_str() {
+        ".due" | "~due" => {
+            let Some(m) = argv.first() else {
+                return Err(anyhow::Error::msg("missing argument: member"));
+            };
 
-    let member: String = if text.body.starts_with(".due-me") || text.body.starts_with("~due-me") {
-        ev.sender
-            .localpart()
-            .trim_start_matches("libera_")
-            .to_string()
-    } else if text.body.starts_with(".due ") || text.body.starts_with("~due ") {
-        text.body
-            .trim_start_matches(".due ")
-            .trim_start_matches("~due ")
-            .to_string()
-    } else {
-        error!("malformed message: {}", text.body);
-        return Ok(());
+            m.to_owned()
+        }
+        ".due-me" | "~due-me" => sender.localpart().trim_start_matches("libera_").to_string(),
+        _ => {
+            return Err(anyhow::Error::msg(
+                "wtf? unmatched keyword passed somehow. we shouldn't be here",
+            ))
+        }
     };
 
     DUE_CHECKS.inc();
 
-    let url_template = Template::parse(&module_config.url_template)?;
+    let url_template = Template::parse(&config.url_template)?;
 
     let url = url_template.render(&&vals(|key| {
         if key == "member" {
@@ -90,33 +96,21 @@ async fn module_entrypoint(
     let response = client.get(url).send().await?;
 
     match response.status().as_u16() {
-        404 => {
-            _ = room
-                .send(RoomMessageEventContent::text_plain("No such member."))
-                .await?
-        }
-        410 => {
-            _ = room
-                .send(RoomMessageEventContent::text_plain("HTTP 410 Gone."))
-                .await?
-        }
-        420 => {
-            _ = room
-                .send(RoomMessageEventContent::text_plain("HTTP 420 Stoned."))
-                .await?
-        }
+        404 => Ok("No such member.".to_string()),
+        410 => Ok("HTTP 410 Gone.".to_string()),
+        420 => Ok("HTTP 420 Stoned.".to_string()),
         200 => {
             let data = response.json::<Kasownik>().await?;
 
             if data.status != "ok" {
-                error!("no such member? {:#?}", data);
-                return Ok(());
+                return Ok("No such member.".to_string());
             };
 
             let response = match data.content.as_i64() {
                 None => {
-                    error!("we should not be here: {:#?}", data);
-                    return Ok(());
+                    return Err(anyhow::Error::msg(format!(
+                        "content returned from kasownik doesn't parse as integer: {data:#?}"
+                    )))
                 }
                 Some(months) => match months {
                     i64::MIN..0 => format!("{member} is {} months ahead. Cool!", 0 - months),
@@ -128,17 +122,12 @@ async fn module_entrypoint(
 
             DUE_CHECKS_SUCCESSFUL.inc();
 
-            room.send(RoomMessageEventContent::text_plain(response))
-                .await?;
+            Ok(response)
         }
-        _ => {
-            _ = room
-                .send(RoomMessageEventContent::text_plain("wrong status code"))
-                .await?
-        }
-    };
-
-    Ok(())
+        _ => Err(anyhow::Error::msg(
+            "kasownik responded with weird status code",
+        )),
+    }
 }
 
 async fn module_entrypoint_nag(
@@ -146,17 +135,17 @@ async fn module_entrypoint_nag(
     room: Room,
     c: Client,
     module_config: ModuleConfig,
-) {
+) -> anyhow::Result<()> {
     if let Some(alias) = room.canonical_alias() {
         if !module_config
             .nag_channels
             .iter()
             .any(|x| x == alias.as_str())
         {
-            return;
+            return Ok(());
         };
     } else {
-        return;
+        return Ok(());
     };
 
     let sender_str: &str = ev.sender.as_str();
@@ -164,29 +153,21 @@ async fn module_entrypoint_nag(
 
     trace!("getting client store");
     let store = c.state_store();
-    // let maybe_next_nag_time = store.get_custom_value(ev.sender.as_bytes()).await;
     let next_nag_time = match store.get_custom_value(ev.sender.as_bytes()).await {
         Ok(maybe_result) => match maybe_result {
             None => {
                 let nag_time = NotBotTime(SystemTime::now() - Duration::new(60 * 60 * 24, 0));
                 let nag_time_bytes: Vec<u8> = nag_time.into();
 
-                if let Err(e) = store
+                store
                     .set_custom_value_no_read(ev.sender.as_bytes(), nag_time_bytes)
-                    .await
-                {
-                    error!("error setting nag time value for the first time: {e}");
-                    return;
-                };
+                    .await?;
 
                 nag_time
             }
             Some(nag_time_bytes) => nag_time_bytes.into(),
         },
-        Err(e) => {
-            error!("error fetching nag time: {e}");
-            return;
-        }
+        Err(e) => return Err(anyhow::Error::msg(format!("error fetching nag time: {e}"))),
     };
 
     trace!("next_nag_time: {:#?}", next_nag_time);
@@ -195,97 +176,80 @@ async fn module_entrypoint_nag(
         debug!("member not checked recently: {sender_str}");
         let next_nag_time = NotBotTime(SystemTime::now() + Duration::new(60 * 60 * 24, 0));
 
-        if let Err(e) = store
+        store
             .set_custom_value_no_read(ev.sender.as_bytes(), next_nag_time.into())
-            .await
-        {
-            error!("error setting nag time value for the first time: {e}");
-            return;
-        };
+            .await?;
     } else {
         debug!("member checked recently, ignoring: {sender_str}");
-        return;
+        return Ok(());
     };
 
-    let url_template = match Template::parse(&module_config.url_template) {
-        Ok(t) => t,
-        Err(e) => {
-            error!("Couldn't parse url template: {e}");
-            return;
-        }
-    };
+    let url_template = Template::parse(&module_config.url_template)?;
 
-    let url = match url_template.render(&&vals(|key| {
+    let url = url_template.render(&&vals(|key| {
         if key == "member" {
             Some(member.clone().into())
         } else {
             None
         }
-    })) {
-        Ok(u) => u,
-        Err(e) => {
-            error!("error rendering url template: {e}");
-            return;
-        }
-    };
+    }))?;
 
-    let data: Kasownik = match fetch_and_decode_json(url).await {
-        Ok(d) => d,
-        Err(e) => {
-            error!("couldn't fetch kasownik data: {e}");
-            return;
-        }
-    };
+    let data: Kasownik = fetch_and_decode_json(url).await?;
     trace!("returned data: {:#?}", data);
 
-    if let Some(months) = data.content.as_i64() {
-        if months < module_config.nag_late_fees {
-            debug!("too early to nag: {months}");
-            return;
-        };
+    let Some(months) = data.content.as_i64() else {
+        return Err(anyhow::Error::msg(format!(
+            "kasownik returned weird data: {data:#?}"
+        )));
+    };
 
-        NAGS.inc();
+    if months < module_config.nag_late_fees {
+        debug!("too early to nag: {months}");
+        return Ok(());
+    };
 
-        let period = match months {
-            i64::MIN..=0 => {
-                return;
-            }
-            1 => "month",
-            _ => "months",
-        };
+    NAGS.inc();
 
-        let member_display_name: String = match room.get_member(&ev.sender).await {
-            Ok(Some(rm)) => match rm.display_name() {
-                Some(d) => d.to_owned(),
-                None => sender_str.to_owned(),
-            },
-            _ => sender_str.to_owned(),
-        };
-
-        let msg_text = format!("pay your membership fees! you are {months} {period} behind!");
-        let plain_message = format!(
-            r#"{display_name}: {text}"#,
-            display_name = member_display_name,
-            text = msg_text
-        );
-
-        let html_message = format!(
-            r#"<a href="{uri}">{display_name}</a>: {text}"#,
-            uri = ev.sender.matrix_to_uri(),
-            display_name = member_display_name,
-            text = msg_text
-        );
-
-        let msg = RoomMessageEventContent::text_html(plain_message, html_message)
-            .add_mentions(Mentions::with_user_ids(vec![ev.sender]));
-
-        if let Err(e) = room.send(msg).await {
-            error!("error sending message: {e}")
+    let period = match months {
+        i64::MIN..=0 => {
+            return Ok(());
         }
-    }
+        1 => "month",
+        _ => "months",
+    };
+
+    let member_display_name: String = match room.get_member(&ev.sender).await {
+        Ok(Some(rm)) => match rm.display_name() {
+            Some(d) => d.to_owned(),
+            None => sender_str.to_owned(),
+        },
+        _ => sender_str.to_owned(),
+    };
+
+    let msg_text = format!("pay your membership fees! you are {months} {period} behind!");
+    let plain_message = format!(
+        r#"{display_name}: {text}"#,
+        display_name = member_display_name,
+        text = msg_text
+    );
+
+    let html_message = format!(
+        r#"<a href="{uri}">{display_name}</a>: {text}"#,
+        uri = ev.sender.matrix_to_uri(),
+        display_name = member_display_name,
+        text = msg_text
+    );
+
+    let msg = RoomMessageEventContent::text_html(plain_message, html_message)
+        .add_mentions(Mentions::with_user_ids(vec![ev.sender]));
+
+    room.send(msg).await?;
+
+    Ok(())
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Kasownik {
     pub status: String,
     pub content: Value,

@@ -3,14 +3,14 @@ use crate::prelude::*;
 use futures::Future;
 
 pub async fn simple_command_wrapper<
-    C: de::DeserializeOwned,
+    C: de::DeserializeOwned + Clone,
     Fut: Future<Output = anyhow::Result<String>>,
 >(
     ev: OriginalSyncRoomMessageEvent,
     room: Room,
     command_config: C,
     keywords: Vec<String>,
-    command: impl Fn(String, String, Vec<String>, C) -> Fut,
+    command: impl Fn(Room, OwnedUserId, String, Vec<String>, C) -> Fut,
 ) -> anyhow::Result<()> {
     if room.state() != RoomState::Joined {
         return Ok(());
@@ -24,12 +24,7 @@ pub async fn simple_command_wrapper<
         return Ok(());
     };
 
-    let room_name = match room.canonical_alias() {
-        Some(name) => name.to_string(),
-        None => room.room_id().to_string(),
-    };
-
-    let mut iter = text.body.trim().split_whitespace();
+    let mut iter = text.body.split_whitespace();
 
     let Some(keyword) = iter.next() else {
         return Ok(());
@@ -41,7 +36,15 @@ pub async fn simple_command_wrapper<
 
     let argv: Vec<String> = iter.map(|x| x.to_string()).collect();
 
-    match command(room_name, keyword.to_string(), argv, command_config).await {
+    match command(
+        room.clone(),
+        ev.sender,
+        keyword.to_string(),
+        argv,
+        command_config,
+    )
+    .await
+    {
         Ok(response) => {
             room.send(RoomMessageEventContent::text_plain(response))
                 .await?
@@ -61,7 +64,7 @@ pub(crate) fn modules() -> Vec<ModuleStarter> {
     vec![("demo response", demo_module_starter)]
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct ModuleConfig {
     demo_response: String,
 }
@@ -80,7 +83,8 @@ fn demo_module_starter(client: &Client, config: &Config) -> anyhow::Result<Event
 }
 
 async fn demo_function(
-    _room: String,
+    _room: Room,
+    _sender: OwnedUserId,
     _keyword: String,
     _argv: Vec<String>,
     config: ModuleConfig,

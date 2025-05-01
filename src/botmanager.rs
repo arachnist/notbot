@@ -341,7 +341,7 @@ impl BotManager {
     }
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct ReloaderConfig {
     admins: Vec<String>,
 }

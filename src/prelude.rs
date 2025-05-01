@@ -1,6 +1,8 @@
 pub use crate::config::Config;
 pub use crate::config::ModuleConfig;
 
+pub use crate::commands::simple_command_wrapper;
+
 pub use crate::db::{DBError, DBPools};
 
 pub use crate::botmanager::{Module, ModuleStarter, Worker, WorkerStarter};
