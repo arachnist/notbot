@@ -7,7 +7,8 @@ autobins = true
 [lib]
 name = "notbot"
 
-[profile.release]
+[profile.release-lto]
+inherits = "release"
 lto = true
 
 [[bin]]
