@@ -24,3 +24,10 @@ pub async fn maybe_get_room(c: &Client, maybe_room: &str) -> anyhow::Result<Room
         None => Err(NotMunError::NoRoom(maybe_room.to_string()).into()),
     }
 }
+
+pub fn get_room_name(room: &Room) -> String {
+    match room.canonical_alias() {
+        Some(a) => a.to_string(),
+        None => room.room_id().to_string(),
+    }
+}

@@ -57,7 +57,7 @@ async fn module_entrypoint(
             };
         };
 
-        Err(anyhow::Error::msg("no target found"))
+        Err(anyhow!("no target found"))
     })() {
         Ok(u) => u,
         Err(_) => {

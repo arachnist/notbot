@@ -21,6 +21,8 @@ axum = { version = "0.8.3", features = ["macros"] }
 axum-oidc = "0.6.0"
 bytes = { version = "1.10.1", features = ["serde"] }
 console-subscriber = "0.4.1"
+convert_case = { version = "0.8.0", features = ["random"] }
+crc32fast = "1.4.2"
 deadpool-postgres = { version = "0.14.1", features = ["serde", "rt_tokio_1"] }
 futures = "0.3.31"
 http = "1.3.1"

@@ -9,7 +9,7 @@ pub use crate::botmanager::{Module, ModuleStarter, Worker, WorkerStarter};
 pub use crate::webterface::{OauthUserInfo, WebAppState};
 
 pub use crate::notmun::NotMunError;
-pub use crate::tools::{fetch_and_decode_json, maybe_get_room};
+pub use crate::tools::*;
 
 pub use std::collections::HashMap;
 pub use std::convert::{From, TryFrom};
@@ -22,6 +22,8 @@ pub use std::{
 };
 
 pub use core::{error::Error as StdError, fmt};
+
+pub use anyhow::{anyhow, bail};
 
 pub use matrix_sdk::event_handler::{Ctx, EventHandlerHandle};
 pub use matrix_sdk::ruma::events::room::{

@@ -40,17 +40,14 @@ async fn at(
 ) -> anyhow::Result<String> {
     CHECKINATOR_CALLS.inc();
 
-    let room_name = match room.canonical_alias() {
-        Some(name) => name.to_string(),
-        None => room.room_id().to_string(),
-    };
+    let room_name = get_room_name(&room);
 
     let url = match config.room_map.get(&room_name) {
         Some(url) => url,
         None => {
             debug!("no spaceapi url found, using default");
             match config.room_map.get("default") {
-                None => return Err(anyhow::Error::msg("no spaceapi url found")),
+                None => bail!("no spaceapi url found"),
                 Some(u) => u,
             }
         }

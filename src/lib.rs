@@ -74,7 +74,7 @@ pub(crate) fn init_modules(
         shenanigans::modules,
         commands::modules,
         sage::modules,
-        oodkb::modules,
+        klaczdb::modules,
     ] {
         register_modules(mx, config, &mut modules, &mut failed, initializer());
     }

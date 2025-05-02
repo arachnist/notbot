@@ -55,10 +55,7 @@ fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandl
         .exec()?;
 
     for room in client.joined_rooms() {
-        let room_name = match room.canonical_alias() {
-            Some(a) => a.to_string(),
-            None => room.room_id().to_string(),
-        };
+        let room_name = get_room_name(&room);
         lua.load(chunk! {
             irc:Join($room_name)
         })

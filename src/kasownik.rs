@@ -24,7 +24,7 @@ lazy_static! {
 pub(crate) fn modules() -> Vec<ModuleStarter> {
     vec![
         (module_path!(), module_starter),
-        ("notbot::kasownik_nag", module_starter_nag),
+        ("notbot::kasownik::nag", module_starter_nag),
     ]
 }
 
@@ -67,16 +67,16 @@ async fn due(
     let member: String = match keyword.as_str() {
         ".due" | "~due" => {
             let Some(m) = argv.first() else {
-                return Err(anyhow::Error::msg("missing argument: member"));
+                bail!("missing argument: member")
             };
 
             m.to_owned()
         }
         ".due-me" | "~due-me" => sender.localpart().trim_start_matches("libera_").to_string(),
         _ => {
-            return Err(anyhow::Error::msg(
+            bail!(
                 "wtf? unmatched keyword passed somehow. we shouldn't be here",
-            ))
+            )
         }
     };
 
@@ -103,14 +103,14 @@ async fn due(
             let data = response.json::<Kasownik>().await?;
 
             if data.status != "ok" {
-                return Ok("No such member.".to_string());
+                bail!("No such member.".to_string());
             };
 
             let response = match data.content.as_i64() {
                 None => {
-                    return Err(anyhow::Error::msg(format!(
+                    bail!(
                         "content returned from kasownik doesn't parse as integer: {data:#?}"
-                    )))
+                    )
                 }
                 Some(months) => match months {
                     i64::MIN..0 => format!("{member} is {} months ahead. Cool!", 0 - months),
@@ -124,9 +124,9 @@ async fn due(
 
             Ok(response)
         }
-        _ => Err(anyhow::Error::msg(
+        _ => bail!(
             "kasownik responded with weird status code",
-        )),
+        ),
     }
 }
 
@@ -167,7 +167,7 @@ async fn module_entrypoint_nag(
             }
             Some(nag_time_bytes) => nag_time_bytes.into(),
         },
-        Err(e) => return Err(anyhow::Error::msg(format!("error fetching nag time: {e}"))),
+        Err(e) => bail!("error fetching nag time: {e}")
     };
 
     trace!("next_nag_time: {:#?}", next_nag_time);
@@ -198,9 +198,7 @@ async fn module_entrypoint_nag(
     trace!("returned data: {:#?}", data);
 
     let Some(months) = data.content.as_i64() else {
-        return Err(anyhow::Error::msg(format!(
-            "kasownik returned weird data: {data:#?}"
-        )));
+        bail!("kasownik returned weird data: {data:#?}")
     };
 
     if months < module_config.nag_late_fees {

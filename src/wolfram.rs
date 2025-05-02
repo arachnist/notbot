@@ -55,7 +55,7 @@ async fn wolfram(
         + "&output=json";
 
     let Ok(data) = fetch_and_decode_json::<WolframAlpha>(url).await else {
-        return Err(anyhow::Error::msg("couldn't fetch data from wolfram"));
+        bail!("couldn't fetch data from wolfram")
     };
 
     if !data.queryresult.success || data.queryresult.numpods == 0 {
