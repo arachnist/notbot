@@ -1,7 +1,7 @@
 use crate::prelude::*;
 
 use crc32fast::hash as crc32;
-use std::{fmt, usize};
+use std::fmt;
 use convert_case::{Case, Casing};
 use tokio_postgres::types::Type as dbtype;
 
@@ -107,8 +107,9 @@ use tokio_postgres::types::Type as dbtype;
  * => "111111110010110001110000011110000110110"
  * ```
  */
+#[derive(Clone)]
 pub struct klaczdb {
-    handle: str,
+    pub(crate) handle: &'static str,
 }
 
 impl klaczdb {
@@ -197,10 +198,51 @@ impl klaczdb {
             _ => Err(KlaczError::DBInconsistency.into()),
         }
     }
+
+    const INSERT_TERM: &str = r#"INSERT INTO _term (_oid, _name, _visible)
+        VALUES ($1, $2, true)"#;
+    const INSERT_ENTRY: &str = r#"INSERT INTO _entry (_oid, _term_oid, _added_by, _text, _added_at, _visible)
+        VALUES ($1, $2, $3, $4, now(), true)"#;
+    pub async fn add_entry(&self, user: &UserId, term: &str, entry: &str)->anyhow::Result<KlaczAddEntryResult> {
+        let mut client = DBPools::get_client(&self.handle).await?;
+        let mut ok_result = KlaczAddEntryResult::AddedEntry;
+        let user_name = user.as_str();
+
+        let get_term_statement = client.prepare_typed_cached(Self::GET_TERM_OID, &[dbtype::VARCHAR]).await?;
+        let insert_term_statement = client.prepare_typed_cached(Self::INSERT_TERM, &[dbtype::INT8, dbtype::VARCHAR]).await?;
+        let insert_entry_statement = client.prepare_typed_cached(Self::INSERT_ENTRY, &[dbtype::INT8, dbtype::INT8, dbtype::VARCHAR, dbtype::VARCHAR]).await?;
+
+        let transaction = client.transaction().await?;
+
+        let term_rows = transaction.query(&get_term_statement, &[&term]).await?;
+        let term_oid: i64 = match term_rows.len() {
+            2.. =>return Err(KlaczError::DBInconsistency.into()),
+            1 => term_rows.first().unwrap().try_get(0)?,
+            0 => {
+                let term_oid = KlaczClass::Term.make_oid(self.get_instance_id().await?);
+                transaction.execute(&insert_term_statement, &[&term_oid, &term]).await?;
+                ok_result = KlaczAddEntryResult::CreatedTerm;
+
+                term_oid
+            }
+        };
+
+        let entry_oid = KlaczClass::Entry.make_oid(self.get_instance_id().await?);
+        transaction.execute(&insert_entry_statement, &[&entry_oid, &term_oid, &user_name, &term]).await?;
+
+        transaction.commit().await?;
+        Ok(ok_result)
+    }
 }
 
 const OID_MAXIMUM_CLASS_ID: u32 = 65535;
 const OID_MAXIMUM_INSTANCE_ID: i64 = 281474976710655;
+
+#[derive(Debug)]
+pub enum KlaczAddEntryResult {
+    CreatedTerm,
+    AddedEntry,
+}
 
 #[derive(Debug)]
 pub enum KlaczClass {
@@ -287,6 +329,7 @@ async fn add(
     ev: OriginalSyncRoomMessageEvent,
     room: Room,
     config: ModuleConfig,
+    klacz: Ctx<klaczdb>,
 ) -> anyhow::Result<()> {
     if room.state() != RoomState::Joined {
         return Ok(());

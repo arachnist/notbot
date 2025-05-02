@@ -147,6 +147,13 @@ impl BotManager {
             ))
             .unwrap();
 
+        // this is, surprisingly, core functionality
+        let klacz = klaczdb {
+            handle: "main",
+        };
+
+        client.add_event_handler_context(klacz);
+
         let (modules, _) = crate::init_modules(&client, &config, &Default::default());
         let (workers, _) = crate::init_workers(&client, &config, &Default::default());
 
