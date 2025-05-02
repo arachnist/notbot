@@ -1,8 +1,8 @@
 use crate::prelude::*;
 
+use convert_case::{Case, Casing};
 use crc32fast::hash as crc32;
 use std::fmt;
-use convert_case::{Case, Casing};
 use tokio_postgres::types::Type as dbtype;
 
 /*
@@ -108,87 +108,112 @@ use tokio_postgres::types::Type as dbtype;
  * ```
  */
 #[derive(Clone)]
-pub struct klaczdb {
+pub struct KlaczDB {
     pub(crate) handle: &'static str,
 }
 
-impl klaczdb {
+impl KlaczDB {
     const GET_INSTANCE_ID: &str = "select nextval('_instance_id')";
     async fn get_instance_id(&self) -> anyhow::Result<i64> {
-        let client = DBPools::get_client(&self.handle).await?;
+        let client = DBPools::get_client(self.handle).await?;
         let statement = client.prepare_cached(Self::GET_INSTANCE_ID).await?;
 
         let row = client.query_one(&statement, &[]).await?;
-        row.try_get(0).map_err(|e: tokio_postgres::Error|
-            anyhow!(e)
-        )
+        row.try_get(0)
+            .map_err(|e: tokio_postgres::Error| anyhow!(e))
     }
 
-    const GET_LEVEL: &str = "select _level::bigint from _level where _channel = $1 and _account = $2 limit 1";
-    pub async fn get_level(&self, room: &Room, user: &UserId) ->anyhow::Result<i64> {
+    const GET_LEVEL: &str =
+        "select _level::bigint from _level where _channel = $1 and _account = $2 limit 1";
+    pub async fn get_level(&self, room: &Room, user: &UserId) -> anyhow::Result<i64> {
         let room_name = get_room_name(room);
         let user_name = user.as_str();
 
-        let client = DBPools::get_client(&self.handle).await?;
-        let statement = client.prepare_typed_cached(Self::GET_LEVEL, &[dbtype::VARCHAR, dbtype::VARCHAR]).await?;
+        let client = DBPools::get_client(self.handle).await?;
+        let statement = client
+            .prepare_typed_cached(Self::GET_LEVEL, &[dbtype::VARCHAR, dbtype::VARCHAR])
+            .await?;
 
         // limit in the statement handles (and potentially hides) the case of too many records,
         // while the explicit error handling handles the default case
-        let Ok(row) = client.query_one(&statement, &[&room_name, &user_name]).await else {
+        let Ok(row) = client
+            .query_one(&statement, &[&room_name, &user_name])
+            .await
+        else {
             return Ok(0);
         };
 
-        row.try_get(0).map_err(|e: tokio_postgres::Error|
-            anyhow!(e)
-        )
+        row.try_get(0)
+            .map_err(|e: tokio_postgres::Error| anyhow!(e))
     }
 
     // the schema has no unique constraints, so can't do `insert on conflict update`
     const DELETE_LEVELS: &str = "DELETE FROM _level WHERE _channel = $1 and _account = $2";
     const INSERT_LEVELS: &str = r#"INSERT INTO _level (_oid, _channel, _account, _level)
         VALUES ($1, $2, $3, $4)"#;
-    pub async fn add_level(&self, room: &Room, user: &UserId, level: i64) ->anyhow::Result<()> {
+    pub async fn add_level(&self, room: &Room, user: &UserId, level: i64) -> anyhow::Result<()> {
         let room_name = get_room_name(room);
         let user_name = user.as_str();
 
         let id = self.get_instance_id().await?;
         let oid = KlaczClass::Level.make_oid(id);
 
-        let mut client = DBPools::get_client(&self.handle).await?;
+        let mut client = DBPools::get_client(self.handle).await?;
         let transaction = client.transaction().await?;
 
-        let delete = transaction.prepare_typed_cached(Self::DELETE_LEVELS, &[dbtype::VARCHAR, dbtype::VARCHAR]).await?;
-        let insert = transaction.prepare_typed_cached(Self::INSERT_LEVELS, &[dbtype::INT8, dbtype::VARCHAR, dbtype::VARCHAR, dbtype::INT8]).await?;
+        let delete = transaction
+            .prepare_typed_cached(Self::DELETE_LEVELS, &[dbtype::VARCHAR, dbtype::VARCHAR])
+            .await?;
+        let insert = transaction
+            .prepare_typed_cached(
+                Self::INSERT_LEVELS,
+                &[dbtype::INT8, dbtype::VARCHAR, dbtype::VARCHAR, dbtype::INT8],
+            )
+            .await?;
 
-        if transaction.execute(&delete, &[&room_name, &user_name]).await? > 1 {
+        if transaction
+            .execute(&delete, &[&room_name, &user_name])
+            .await?
+            > 1
+        {
             transaction.rollback().await?;
             bail!("too many deleted levels")
         };
 
-        if transaction.execute(&insert, &[&oid, &room_name, &user_name, &level]).await? != 1 {
+        if transaction
+            .execute(&insert, &[&oid, &room_name, &user_name, &level])
+            .await?
+            != 1
+        {
             transaction.rollback().await?;
             bail!("too many inserted levels")
         };
 
-        transaction.commit().await.map_err(|e: tokio_postgres::Error|
-            anyhow!(e)
-        )
+        transaction
+            .commit()
+            .await
+            .map_err(|e: tokio_postgres::Error| anyhow!(e))
     }
 
     // this could be done in a single query, but i want better errors
     const GET_TERM_OID: &str = "select _oid from _term where _name = $1";
-    const GET_TERM_ENTRY: &str = "select _text from _entry where _term_oid = $1 order by random() limit 1";
-    pub async fn get_entry(&self, term: &str)->anyhow::Result<String> {
-        let client = DBPools::get_client(&self.handle).await?;
+    const GET_TERM_ENTRY: &str =
+        "select _text from _entry where _term_oid = $1 order by random() limit 1";
+    pub async fn get_entry(&self, term: &str) -> anyhow::Result<String> {
+        let client = DBPools::get_client(self.handle).await?;
 
-        let term_statement = client.prepare_typed_cached(Self::GET_TERM_OID, &[dbtype::VARCHAR]).await?;
-        let entry_statement = client.prepare_typed_cached(Self::GET_TERM_ENTRY, &[dbtype::INT8]).await?;
+        let term_statement = client
+            .prepare_typed_cached(Self::GET_TERM_OID, &[dbtype::VARCHAR])
+            .await?;
+        let entry_statement = client
+            .prepare_typed_cached(Self::GET_TERM_ENTRY, &[dbtype::INT8])
+            .await?;
 
         let term_rows = client.query(&term_statement, &[&term]).await?;
 
         let term_oid: i64 = match term_rows.len() {
             0 => return Err(KlaczError::EntryNotFound.into()),
-            2.. =>return Err(KlaczError::DBInconsistency.into()),
+            2.. => return Err(KlaczError::DBInconsistency.into()),
             1 => term_rows.first().unwrap().try_get(0)?,
         };
 
@@ -199,24 +224,91 @@ impl klaczdb {
         }
     }
 
-    const INSERT_TERM: &str = r#"INSERT INTO _term (_oid, _name, _visible)
-        VALUES ($1, $2, true)"#;
-    const INSERT_ENTRY: &str = r#"INSERT INTO _entry (_oid, _term_oid, _added_by, _text, _added_at, _visible)
-        VALUES ($1, $2, $3, $4, now(), true)"#;
-    pub async fn add_entry(&self, user: &UserId, term: &str, entry: &str)->anyhow::Result<KlaczAddEntryResult> {
-        let mut client = DBPools::get_client(&self.handle).await?;
-        let mut ok_result = KlaczAddEntryResult::AddedEntry;
-        let user_name = user.as_str();
-
-        let get_term_statement = client.prepare_typed_cached(Self::GET_TERM_OID, &[dbtype::VARCHAR]).await?;
-        let insert_term_statement = client.prepare_typed_cached(Self::INSERT_TERM, &[dbtype::INT8, dbtype::VARCHAR]).await?;
-        let insert_entry_statement = client.prepare_typed_cached(Self::INSERT_ENTRY, &[dbtype::INT8, dbtype::INT8, dbtype::VARCHAR, dbtype::VARCHAR]).await?;
+    const REMOVE_TERM: &str = r#"DELETE FROM _term WHERE _oid = $1"#;
+    const REMOVE_ENTRY: &str = r#"DELETE FROM _entry
+        WHERE _oid = (
+            SELECT max(_oid) from _entry where _term_oid = $1 and _text = $2
+        )"#;
+    const COUNT_ENTRIES: &str = r#"select count(*) from _entry where _term_oid = $1"#;
+    pub async fn remove_entry(&self, term: &str, entry: &str) -> anyhow::Result<KlaczKBChange> {
+        let mut response = KlaczKBChange::Unchanged;
+        let mut client = DBPools::get_client(self.handle).await?;
+        let get_term_statement = client
+            .prepare_typed_cached(Self::GET_TERM_OID, &[dbtype::VARCHAR])
+            .await?;
+        let remove_term_statement = client
+            .prepare_typed_cached(Self::REMOVE_TERM, &[dbtype::INT8])
+            .await?;
+        let remove_entry_statement = client
+            .prepare_typed_cached(Self::REMOVE_ENTRY, &[dbtype::INT8, dbtype::VARCHAR])
+            .await?;
+        let count_entries_statement = client
+            .prepare_typed_cached(Self::COUNT_ENTRIES, &[dbtype::INT8])
+            .await?;
 
         let transaction = client.transaction().await?;
 
         let term_rows = transaction.query(&get_term_statement, &[&term]).await?;
         let term_oid: i64 = match term_rows.len() {
-            2.. =>return Err(KlaczError::DBInconsistency.into()),
+            0 => return Err(KlaczError::TermNotFound.into()),
+            2.. => return Err(KlaczError::DBInconsistency.into()),
+            1 => term_rows.first().unwrap().try_get(0)?,
+        };
+
+        let deleted = transaction.execute(&remove_entry_statement, &[&term_oid, &entry]).await?;
+        if deleted == 0 {
+            return Ok(response);
+        };
+
+        response = KlaczKBChange::RemovedEntry;
+
+        let left: i64 = transaction.query_one(&count_entries_statement, &[&term_oid]).await?.try_get(0)?;
+        if left == 0 {
+            let deleted = transaction.execute(&remove_term_statement, &[&term_oid]).await?;
+            if deleted > 1 {
+                transaction.rollback().await?;
+                return Err(KlaczError::DBInconsistency.into());
+            };
+
+            response = KlaczKBChange::RemovedTerm;
+        };
+
+        transaction.commit().await?;
+        Ok(response)
+    }
+
+    const INSERT_TERM: &str = r#"INSERT INTO _term (_oid, _name, _visible)
+        VALUES ($1, $2, true)"#;
+    const INSERT_ENTRY: &str = r#"INSERT INTO _entry (_oid, _term_oid, _added_by, _text, _added_at, _visible)
+        VALUES ($1, $2, $3, $4, now(), true)"#;
+    pub async fn add_entry(
+        &self,
+        user: &UserId,
+        term: &str,
+        entry: &str,
+    ) -> anyhow::Result<KlaczKBChange> {
+        let mut client = DBPools::get_client(self.handle).await?;
+        let mut ok_result = KlaczKBChange::AddedEntry;
+        let user_name = user.as_str();
+
+        let get_term_statement = client
+            .prepare_typed_cached(Self::GET_TERM_OID, &[dbtype::VARCHAR])
+            .await?;
+        let insert_term_statement = client
+            .prepare_typed_cached(Self::INSERT_TERM, &[dbtype::INT8, dbtype::VARCHAR])
+            .await?;
+        let insert_entry_statement = client
+            .prepare_typed_cached(
+                Self::INSERT_ENTRY,
+                &[dbtype::INT8, dbtype::INT8, dbtype::VARCHAR, dbtype::VARCHAR],
+            )
+            .await?;
+
+        let transaction = client.transaction().await?;
+
+        let term_rows = transaction.query(&get_term_statement, &[&term]).await?;
+        let term_oid: i64 = match term_rows.len() {
+            2.. => return Err(KlaczError::DBInconsistency.into()),
             1 => term_rows.first().unwrap().try_get(0)?,
             0 => {
                 let term_instance_id = self.get_instance_id().await?;
@@ -224,8 +316,10 @@ impl klaczdb {
 
                 trace!("term: instance_id: {term_instance_id}, oid: {term_oid_new}");
 
-                transaction.execute(&insert_term_statement, &[&term_oid_new, &term]).await?;
-                ok_result = KlaczAddEntryResult::CreatedTerm;
+                transaction
+                    .execute(&insert_term_statement, &[&term_oid_new, &term])
+                    .await?;
+                ok_result = KlaczKBChange::CreatedTerm;
 
                 term_oid_new
             }
@@ -235,20 +329,35 @@ impl klaczdb {
         let entry_oid = KlaczClass::Entry.make_oid(entry_instance_id);
 
         trace!("entry: instance_id: {entry_instance_id}, oid: {entry_oid}");
-        transaction.execute(&insert_entry_statement, &[&entry_oid, &term_oid, &user_name, &entry]).await?;
+        transaction
+            .execute(
+                &insert_entry_statement,
+                &[&entry_oid, &term_oid, &user_name, &entry],
+            )
+            .await?;
 
         transaction.commit().await?;
         Ok(ok_result)
     }
 }
 
-const OID_MAXIMUM_CLASS_ID: u32 = 65535;
+#[allow(dead_code)]
 const OID_MAXIMUM_INSTANCE_ID: i64 = 281474976710655;
+const OID_MAXIMUM_CLASS_ID: u32 = 65535;
 
-#[derive(Debug, PartialEq)]
-pub enum KlaczAddEntryResult {
+#[derive(Clone, Debug, PartialEq)]
+pub enum KlaczKBChange {
     CreatedTerm,
     AddedEntry,
+    Unchanged,
+    RemovedEntry,
+    RemovedTerm,
+}
+
+impl fmt::Display for KlaczKBChange {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 #[derive(Debug)]
@@ -297,7 +406,7 @@ impl KlaczClass {
     }
 
     pub fn class_id(&self) -> i64 {
-        (crc32(&self.class_name().as_bytes()) % OID_MAXIMUM_CLASS_ID).into()
+        (crc32(self.class_name().as_bytes()) % OID_MAXIMUM_CLASS_ID).into()
     }
 
     pub fn make_oid(&self, instance_id: i64) -> i64 {
@@ -312,8 +421,9 @@ impl KlaczClass {
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum KlaczError {
     UnknownClass,
+    TermNotFound,
     EntryNotFound,
-    DBInconsistency
+    DBInconsistency,
 }
 
 impl fmt::Display for KlaczError {
@@ -323,78 +433,26 @@ impl fmt::Display for KlaczError {
 }
 
 #[derive(Clone, Deserialize)]
-pub struct ModuleConfig {
-    pub handle: String,
-}
+pub struct ModuleConfig {}
 
 pub(crate) fn modules() -> Vec<ModuleStarter> {
     vec![
         ("notbot::oodkb::add", module_starter_add),
-        ("notbot::oodkb::testfunctions", module_starter_testfunctions),
-        ("notbot::oodkb::add", module_starter_debug),
+        ("notbot::oodkb::remove", module_starter_remove),
     ]
 }
 
-fn module_starter_debug(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
-    Ok(client.add_event_handler(move |ev, room, klacz| klacz_debug(ev, room, klacz)))
+fn module_starter_add(client: &Client, _: &Config) -> anyhow::Result<EventHandlerHandle> {
+    Ok(client.add_event_handler(add))
 }
-
-async fn klacz_debug(
-    ev: OriginalSyncRoomMessageEvent,
-    room: Room,
-    klacz: Ctx<klaczdb>,
-) -> anyhow::Result<()> {
-    if room.state() != RoomState::Joined {
-        return Ok(());
-    };
-
-    if ev.sender == room.client().user_id().unwrap() {
-        return Ok(());
-    };
-
-    let MessageType::Text(text) = ev.content.msgtype else {
-        return Ok(());
-    };
-
-    let mut args = text.body.splitn(2, [' ', '\n']);
-
-    let Some(keyword) = args.next() else {
-        return Ok(());
-    };
-
-    if keyword != ".class" {
-        return Ok(());
-    };
-
-    let Some(klaczclassstr) = args.next() else {
-        trace!("no class arg");
-        return Ok(());
-    };
-
-    trace!("klaczclassstr: {klaczclassstr}");
-
-    let klaczclass: KlaczClass = klaczclassstr.parse()?;
-
-    room.send(RoomMessageEventContent::text_plain(
-        format!(r#" class_name: {}
-        class_id: {}"#,
-            klaczclass.class_name(),
-            klaczclass.class_id(),
-        )
-    )).await?;
-    Ok(())
-}
-
-fn module_starter_add(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
-    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
-    Ok(client.add_event_handler(move |ev, room, klacz| add(ev, room, klacz, module_config)))
+fn module_starter_remove(client: &Client, _: &Config) -> anyhow::Result<EventHandlerHandle> {
+    Ok(client.add_event_handler(remove))
 }
 
 async fn add(
     ev: OriginalSyncRoomMessageEvent,
     room: Room,
-    klacz: Ctx<klaczdb>,
-    config: ModuleConfig,
+    klacz: Ctx<KlaczDB>,
 ) -> anyhow::Result<()> {
     if room.state() != RoomState::Joined {
         return Ok(());
@@ -417,115 +475,92 @@ async fn add(
     if keyword != ".add" {
         return Ok(());
     };
-    
+
     let Some(term) = args.next() else {
-        room.send(RoomMessageEventContent::text_plain("missing arguments: term, definition")).await?;
-        bail!("missing arguments")
-    };
-    
-    let Some(definition) = args.next() else {
-        room.send(RoomMessageEventContent::text_plain("missing arguments: definition")).await?;
+        room.send(RoomMessageEventContent::text_plain(
+            "missing arguments: term, definition",
+        ))
+        .await?;
         bail!("missing arguments")
     };
 
-    trace!("attempting to add: add: term: {term}: definition: {definition}");
+    let Some(definition) = args.next() else {
+        room.send(RoomMessageEventContent::text_plain(
+            "missing arguments: definition",
+        ))
+        .await?;
+        bail!("missing arguments")
+    };
+
+    trace!("attempting to add: term: {term}: definition: {definition}");
 
     let mut response = String::new();
     let result = klacz.add_entry(&ev.sender, term, definition).await?;
-    if result == KlaczAddEntryResult::CreatedTerm {
+    if result == KlaczKBChange::CreatedTerm {
         response.push_str(format!("Created term \"{term}\"\n").as_str());
-        // room.send(RoomMessageEventContent::text_plain(format!(r#"Created term "{term}""#))).await?;
     };
 
     response.push_str(format!(r#"Added one entry to term "{term}""#).as_str());
-    room.send(RoomMessageEventContent::text_plain(response)).await?;
+    room.send(RoomMessageEventContent::text_plain(response))
+        .await?;
 
     Ok(())
 }
 
-fn module_starter_testfunctions(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
-    let command_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
-    Ok(client.add_event_handler(move |ev, room| {
-        simple_command_wrapper(
-            ev,
-            room,
-            command_config,
-            vec![".crc32", ".class-id", ".ash", ".logior"]
-                .into_iter()
-                .map(|x| x.to_string())
-                .collect(),
-            testfunctions,
-        )
-    }))
-}
+async fn remove(
+    ev: OriginalSyncRoomMessageEvent,
+    room: Room,
+    klacz: Ctx<KlaczDB>,
+) -> anyhow::Result<()> {
+    if room.state() != RoomState::Joined {
+        return Ok(());
+    };
 
-async fn testfunctions(
-    _room: Room,
-    _sender: OwnedUserId,
-    keyword: String,
-    argv: Vec<String>,
-    _config: ModuleConfig,
-) -> anyhow::Result<String> {
-    match keyword.as_str() {
-        ".crc32" => {
-            let Some(value) = argv.iter().next() else {
-                bail!("missing argument: value")
-            };
-            Ok(crc32(value.as_bytes()).to_string())
-        },
-        ".class-id" => {
-            let Some(value) = argv.iter().next() else {
-                bail!("missing argument: value")
-            };
-            Ok((crc32(value.to_uppercase().as_bytes()) % 65535).to_string())
-        },
-        ".class" => Ok(KlaczClass::TopicChange.class_name()),
-        ".ash" => {
-            let mut iter = argv.iter();
+    if ev.sender == room.client().user_id().unwrap() {
+        return Ok(());
+    };
 
-            let Some(value_str) = iter.next() else {
-                bail!("missing argument: value, shift")
-            };
+    let MessageType::Text(text) = ev.content.msgtype else {
+        return Ok(());
+    };
 
-            let Ok(value) = value_str.parse::<i64>() else {
-                bail!("value didn't parse as i64: {value_str}")
-            };
+    let mut args = text.body.splitn(3, [' ', '\n']);
 
-            let Some(shift_str) = iter.next() else {
-                bail!("missing argument: shift")
-            };
+    let Some(keyword) = args.next() else {
+        return Ok(());
+    };
 
-            let Ok(shift) = shift_str.parse::<i8>() else {
-                bail!("shift didn't parse as i8: {shift_str}")
-            };
+    if keyword != ".remove" {
+        return Ok(());
+    };
 
-            let shifted = value << shift;
+    let Some(term) = args.next() else {
+        room.send(RoomMessageEventContent::text_plain(
+            "missing arguments: term, definition",
+        ))
+        .await?;
+        bail!("missing arguments")
+    };
 
-            Ok(shifted.to_string())
-        }
-        ".logior" => {
-            let mut iter = argv.iter();
+    let Some(definition) = args.next() else {
+        room.send(RoomMessageEventContent::text_plain(
+            "missing arguments: definition",
+        ))
+        .await?;
+        bail!("missing arguments")
+    };
 
-            let Some(value_l_str) = iter.next() else {
-                bail!("missing argument: value, shift")
-            };
+    trace!("attempting to remove: term: {term}: definition: {definition}");
 
-            let Ok(value_l) = value_l_str.parse::<i64>() else {
-                bail!("value didn't parse as i64: {value_l_str}")
-            };
+    let response = klacz.remove_entry(term, definition).await?;
+    let message = match response {
+        KlaczKBChange::Unchanged => format!("entry not found in {term}"),
+        KlaczKBChange::RemovedEntry => format!("removed entry from {term}"),
+        KlaczKBChange::RemovedTerm => format!("last entry, removed {term}"),
+        _ => format!("unexpected response from klacz, no error: {response}"),
+    };
 
-            let Some(value_r_str) = iter.next() else {
-                bail!("missing argument: shift")
-            };
+    room.send(RoomMessageEventContent::text_plain(message)).await?;
 
-            let Ok(value_r) = value_r_str.parse::<i64>() else {
-                bail!("shift didn't parse as i64: {value_r_str}")
-            };
-
-            let ored = value_l | value_r;
-
-            Ok(ored.to_string())
-        }
-        _ => Ok("wtf?".to_string()),
-    }
+    Ok(())
 }

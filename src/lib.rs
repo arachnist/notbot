@@ -11,6 +11,7 @@ pub mod prelude;
 mod autojoiner;
 mod inviter;
 mod kasownik;
+mod klaczdb;
 mod notbottime;
 mod notmun;
 mod sage;
@@ -18,7 +19,6 @@ mod shenanigans;
 mod spaceapi;
 mod webterface;
 mod wolfram;
-mod klaczdb;
 
 use crate::prelude::*;
 

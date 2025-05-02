@@ -74,9 +74,7 @@ async fn due(
         }
         ".due-me" | "~due-me" => sender.localpart().trim_start_matches("libera_").to_string(),
         _ => {
-            bail!(
-                "wtf? unmatched keyword passed somehow. we shouldn't be here",
-            )
+            bail!("wtf? unmatched keyword passed somehow. we shouldn't be here",)
         }
     };
 
@@ -108,9 +106,7 @@ async fn due(
 
             let response = match data.content.as_i64() {
                 None => {
-                    bail!(
-                        "content returned from kasownik doesn't parse as integer: {data:#?}"
-                    )
+                    bail!("content returned from kasownik doesn't parse as integer: {data:#?}")
                 }
                 Some(months) => match months {
                     i64::MIN..0 => format!("{member} is {} months ahead. Cool!", 0 - months),
@@ -124,9 +120,7 @@ async fn due(
 
             Ok(response)
         }
-        _ => bail!(
-            "kasownik responded with weird status code",
-        ),
+        _ => bail!("kasownik responded with weird status code",),
     }
 }
 
@@ -167,7 +161,7 @@ async fn module_entrypoint_nag(
             }
             Some(nag_time_bytes) => nag_time_bytes.into(),
         },
-        Err(e) => bail!("error fetching nag time: {e}")
+        Err(e) => bail!("error fetching nag time: {e}"),
     };
 
     trace!("next_nag_time: {:#?}", next_nag_time);

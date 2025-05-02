@@ -148,9 +148,7 @@ impl BotManager {
             .unwrap();
 
         // this is, surprisingly, core functionality
-        let klacz = klaczdb {
-            handle: "main",
-        };
+        let klacz = KlaczDB { handle: "main" };
 
         client.add_event_handler_context(klacz);
 
