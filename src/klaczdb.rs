@@ -1,7 +1,7 @@
 use crate::prelude::*;
 
 use crc32fast::hash as crc32;
-use std::fmt;
+use std::{fmt, usize};
 use convert_case::{Case, Casing};
 use tokio_postgres::types::Type as dbtype;
 
@@ -111,24 +111,93 @@ pub struct klaczdb {
     handle: str,
 }
 
-/*
 impl klaczdb {
-    const GET_LEVEL_QUERY: &str = "select _level::bigint from _level where _account = $1 and _channel = $2";
+    const GET_INSTANCE_ID: &str = "select nextval(_instance_id)";
+    async fn get_instance_id(&self) -> anyhow::Result<i64> {
+        let client = DBPools::get_client(&self.handle).await?;
+        let statement = client.prepare_cached(Self::GET_INSTANCE_ID).await?;
 
+        let row = client.query_one(&statement, &[]).await?;
+        row.try_get(0).map_err(|e: tokio_postgres::Error|
+            anyhow!(e)
+        )
+    }
+
+    const GET_LEVEL: &str = "select _level::bigint from _level where _channel = $1 and _account = $2 limit 1";
     pub async fn get_level(&self, room: &Room, user: &UserId) ->anyhow::Result<i64> {
         let room_name = get_room_name(room);
         let user_name = user.as_str();
 
         let client = DBPools::get_client(&self.handle).await?;
-        let statement = client.prepare_typed(Self::GET_LEVEL_QUERY, &[dbtype::VARCHAR, dbtype::VARCHAR]).await?;
+        let statement = client.prepare_typed_cached(Self::GET_LEVEL, &[dbtype::VARCHAR, dbtype::VARCHAR]).await?;
 
-        let row = client.query_one(&statement, &[&room_name, &user_name]).await?;
-        // let statement = client.query_one(Self::GET_LEVEL_QUERY, &[&room_name.as_str(), &user_name.as_str()]).await?;
+        // limit in the statement handles (and potentially hides) the case of too many records,
+        // while the explicit error handling handles the default case
+        let Ok(row) = client.query_one(&statement, &[&room_name, &user_name]).await else {
+            return Ok(0);
+        };
 
-        row.try_get(0).
+        row.try_get(0).map_err(|e: tokio_postgres::Error|
+            anyhow!(e)
+        )
+    }
+
+    // the schema has no unique constraints, so can't do `insert on conflict update`
+    const DELETE_LEVELS: &str = "DELETE FROM _level WHERE _channel = $1 and _account = $2";
+    const INSERT_LEVELS: &str = r#"INSERT INTO _level (_oid, _channel, _account, _level)
+        VALUES ($1, $2, $3, $4)"#;
+    pub async fn add_level(&self, room: &Room, user: &UserId, level: i64) ->anyhow::Result<()> {
+        let room_name = get_room_name(room);
+        let user_name = user.as_str();
+
+        let id = self.get_instance_id().await?;
+        let oid = KlaczClass::Level.make_oid(id);
+
+        let mut client = DBPools::get_client(&self.handle).await?;
+        let transaction = client.transaction().await?;
+
+        let delete = transaction.prepare_typed_cached(Self::DELETE_LEVELS, &[dbtype::VARCHAR, dbtype::VARCHAR]).await?;
+        let insert = transaction.prepare_typed_cached(Self::INSERT_LEVELS, &[dbtype::INT8, dbtype::VARCHAR, dbtype::VARCHAR, dbtype::INT8]).await?;
+
+        if transaction.execute(&delete, &[&room_name, &user_name]).await? > 1 {
+            transaction.rollback().await?;
+            bail!("too many deleted levels")
+        };
+
+        if transaction.execute(&insert, &[&oid, &room_name, &user_name, &level]).await? != 1 {
+            transaction.rollback().await?;
+            bail!("too many inserted levels")
+        };
+
+        transaction.commit().await.map_err(|e: tokio_postgres::Error|
+            anyhow!(e)
+        )
+    }
+
+    // this could be done in a single query, but i want better errors
+    const GET_TERM_OID: &str = "select _oid from term where _name = $1";
+    const GET_TERM_ENTRY: &str = "select _text from _entry where _term_oid = ? order by random() limit 1";
+    pub async fn get_entry(&self, term: &str)->anyhow::Result<String> {
+        let client = DBPools::get_client(&self.handle).await?;
+
+        let term_statement = client.prepare_typed_cached(Self::GET_TERM_OID, &[dbtype::VARCHAR]).await?;
+        let entry_statement = client.prepare_typed_cached(Self::GET_TERM_ENTRY, &[dbtype::INT8]).await?;
+
+        let term_rows = client.query(&term_statement, &[&term]).await?;
+
+        let term_oid: i64 = match term_rows.len() {
+            0 => return Err(KlaczError::EntryNotFound.into()),
+            2.. =>return Err(KlaczError::DBInconsistency.into()),
+            1 => term_rows.first().unwrap().try_get(0)?,
+        };
+
+        let entry_rows = client.query(&entry_statement, &[&term_oid]).await?;
+        match entry_rows.len() {
+            1 => Ok(entry_rows.first().unwrap().try_get(0)?),
+            _ => Err(KlaczError::DBInconsistency.into()),
+        }
     }
 }
-*/
 
 const OID_MAXIMUM_CLASS_ID: u32 = 65535;
 const OID_MAXIMUM_INSTANCE_ID: i64 = 281474976710655;
@@ -142,12 +211,6 @@ pub enum KlaczClass {
     Link,
     Memo,
     Seen,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum KlaczError {
-    UnknownClass,
-    NoResults,
 }
 
 impl fmt::Display for KlaczClass {
@@ -181,8 +244,25 @@ impl KlaczClass {
         self.to_string().to_case(Case::UpperKebab)
     }
 
-    pub fn class_id(&self) -> u32 {
-        crc32(&self.class_name().as_bytes()) % OID_MAXIMUM_CLASS_ID
+    pub fn class_id(&self) -> i64 {
+        (crc32(&self.class_name().as_bytes()) % OID_MAXIMUM_CLASS_ID).into()
+    }
+
+    pub fn make_oid(&self, instance_id: i64) -> i64 {
+        (self.class_id() << 16) | instance_id
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum KlaczError {
+    UnknownClass,
+    EntryNotFound,
+    DBInconsistency
+}
+
+impl fmt::Display for KlaczError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
     }
 }
 
@@ -251,7 +331,7 @@ fn module_starter_testfunctions(client: &Client, config: &Config) -> anyhow::Res
             ev,
             room,
             command_config,
-            vec![".crc32", ".class-id", ".class", ".ash"]
+            vec![".crc32", ".class-id", ".class", ".ash", ".logior"]
                 .into_iter()
                 .map(|x| x.to_string())
                 .collect(),
@@ -281,7 +361,52 @@ async fn testfunctions(
             Ok((crc32(value.to_uppercase().as_bytes()) % 65535).to_string())
         },
         ".class" => Ok(KlaczClass::TopicChange.class_name()),
+        ".ash" => {
+            let mut iter = argv.iter();
 
+            let Some(value_str) = iter.next() else {
+                bail!("missing argument: value, shift")
+            };
+
+            let Ok(value) = value_str.parse::<i64>() else {
+                bail!("value didn't parse as i64: {value_str}")
+            };
+
+            let Some(shift_str) = iter.next() else {
+                bail!("missing argument: shift")
+            };
+
+            let Ok(shift) = shift_str.parse::<i8>() else {
+                bail!("shift didn't parse as i8: {shift_str}")
+            };
+
+            let shifted = value << shift;
+
+            Ok(shifted.to_string())
+        }
+        ".logior" => {
+            let mut iter = argv.iter();
+
+            let Some(value_l_str) = iter.next() else {
+                bail!("missing argument: value, shift")
+            };
+
+            let Ok(value_l) = value_l_str.parse::<i64>() else {
+                bail!("value didn't parse as i64: {value_l_str}")
+            };
+
+            let Some(value_r_str) = iter.next() else {
+                bail!("missing argument: shift")
+            };
+
+            let Ok(value_r) = value_r_str.parse::<i64>() else {
+                bail!("shift didn't parse as i64: {value_r_str}")
+            };
+
+            let ored = value_l | value_r;
+
+            Ok(ored.to_string())
+        }
         _ => Ok("wtf?".to_string()),
     }
 }

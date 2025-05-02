@@ -38,6 +38,7 @@ reqwest = { version = "0.12.12", features = ["blocking", "json"] }
 serde = { version = "1.0.217", features = ["derive", "serde_derive"] }
 serde_derive = "1.0.217"
 serde_json = "1.0.137"
+thiserror = "2.0.12"
 tokio = { version = "1.43.0", features = ["macros", "rt-multi-thread", "full", "tracing"] }
 tokio-metrics-collector = "0.3.1"
 tokio-postgres = "0.7.13"
