@@ -255,16 +255,23 @@ impl KlaczDB {
             1 => term_rows.first().unwrap().try_get(0)?,
         };
 
-        let deleted = transaction.execute(&remove_entry_statement, &[&term_oid, &entry]).await?;
+        let deleted = transaction
+            .execute(&remove_entry_statement, &[&term_oid, &entry])
+            .await?;
         if deleted == 0 {
             return Ok(response);
         };
 
         response = KlaczKBChange::RemovedEntry;
 
-        let left: i64 = transaction.query_one(&count_entries_statement, &[&term_oid]).await?.try_get(0)?;
+        let left: i64 = transaction
+            .query_one(&count_entries_statement, &[&term_oid])
+            .await?
+            .try_get(0)?;
         if left == 0 {
-            let deleted = transaction.execute(&remove_term_statement, &[&term_oid]).await?;
+            let deleted = transaction
+                .execute(&remove_term_statement, &[&term_oid])
+                .await?;
             if deleted > 1 {
                 transaction.rollback().await?;
                 return Err(KlaczError::DBInconsistency.into());
@@ -534,6 +541,12 @@ async fn remove(
         return Ok(());
     };
 
+    if klacz.get_level(&room, &ev.sender).await? < 10 {
+        room.send(RoomMessageEventContent::text_plain("I can't do that, Dave"))
+            .await?;
+        return Ok(());
+    };
+
     let Some(term) = args.next() else {
         room.send(RoomMessageEventContent::text_plain(
             "missing arguments: term, definition",
@@ -560,7 +573,8 @@ async fn remove(
         _ => format!("unexpected response from klacz, no error: {response}"),
     };
 
-    room.send(RoomMessageEventContent::text_plain(message)).await?;
+    room.send(RoomMessageEventContent::text_plain(message))
+        .await?;
 
     Ok(())
 }

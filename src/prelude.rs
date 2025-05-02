@@ -8,7 +8,7 @@ pub use crate::db::{DBError, DBPools};
 pub use crate::botmanager::{Module, ModuleStarter, Worker, WorkerStarter};
 pub use crate::webterface::{OauthUserInfo, WebAppState};
 
-pub use crate::klaczdb::{KlaczDB, KlaczClass, KlaczError};
+pub use crate::klaczdb::{KlaczClass, KlaczDB, KlaczError};
 
 pub use crate::notmun::NotMunError;
 pub use crate::tools::*;
