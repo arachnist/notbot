@@ -113,7 +113,7 @@ pub struct klaczdb {
 }
 
 impl klaczdb {
-    const GET_INSTANCE_ID: &str = "select nextval(_instance_id)";
+    const GET_INSTANCE_ID: &str = "select nextval('_instance_id')";
     async fn get_instance_id(&self) -> anyhow::Result<i64> {
         let client = DBPools::get_client(&self.handle).await?;
         let statement = client.prepare_cached(Self::GET_INSTANCE_ID).await?;
@@ -176,8 +176,8 @@ impl klaczdb {
     }
 
     // this could be done in a single query, but i want better errors
-    const GET_TERM_OID: &str = "select _oid from term where _name = $1";
-    const GET_TERM_ENTRY: &str = "select _text from _entry where _term_oid = ? order by random() limit 1";
+    const GET_TERM_OID: &str = "select _oid from _term where _name = $1";
+    const GET_TERM_ENTRY: &str = "select _text from _entry where _term_oid = $1 order by random() limit 1";
     pub async fn get_entry(&self, term: &str)->anyhow::Result<String> {
         let client = DBPools::get_client(&self.handle).await?;
 
@@ -219,16 +219,23 @@ impl klaczdb {
             2.. =>return Err(KlaczError::DBInconsistency.into()),
             1 => term_rows.first().unwrap().try_get(0)?,
             0 => {
-                let term_oid = KlaczClass::Term.make_oid(self.get_instance_id().await?);
-                transaction.execute(&insert_term_statement, &[&term_oid, &term]).await?;
+                let term_instance_id = self.get_instance_id().await?;
+                let term_oid_new = KlaczClass::Term.make_oid(term_instance_id);
+
+                trace!("term: instance_id: {term_instance_id}, oid: {term_oid_new}");
+
+                transaction.execute(&insert_term_statement, &[&term_oid_new, &term]).await?;
                 ok_result = KlaczAddEntryResult::CreatedTerm;
 
-                term_oid
+                term_oid_new
             }
         };
 
-        let entry_oid = KlaczClass::Entry.make_oid(self.get_instance_id().await?);
-        transaction.execute(&insert_entry_statement, &[&entry_oid, &term_oid, &user_name, &term]).await?;
+        let entry_instance_id = self.get_instance_id().await?;
+        let entry_oid = KlaczClass::Entry.make_oid(entry_instance_id);
+
+        trace!("entry: instance_id: {entry_instance_id}, oid: {entry_oid}");
+        transaction.execute(&insert_entry_statement, &[&entry_oid, &term_oid, &user_name, &entry]).await?;
 
         transaction.commit().await?;
         Ok(ok_result)
@@ -238,7 +245,7 @@ impl klaczdb {
 const OID_MAXIMUM_CLASS_ID: u32 = 65535;
 const OID_MAXIMUM_INSTANCE_ID: i64 = 281474976710655;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum KlaczAddEntryResult {
     CreatedTerm,
     AddedEntry,
@@ -268,6 +275,9 @@ impl FromStr for KlaczClass {
         let binding = s.to_string().to_case(Case::Kebab);
         let unified = binding.as_str();
 
+        trace!("binding: {binding}");
+        trace!("unified: {unified}");
+
         match unified {
             "topic-change" => Ok(Self::TopicChange),
             "term" => Ok(Self::Term),
@@ -291,7 +301,11 @@ impl KlaczClass {
     }
 
     pub fn make_oid(&self, instance_id: i64) -> i64 {
-        (self.class_id() << 16) | instance_id
+        let class_id: i64 = self.class_id();
+        let shifted: i64 = instance_id << 16;
+        let oid = shifted | class_id;
+        trace!("class_id: {class_id}; shifted: {shifted}; instance_id: {instance_id}; oid: {oid}");
+        oid
     }
 }
 
@@ -316,20 +330,71 @@ pub struct ModuleConfig {
 pub(crate) fn modules() -> Vec<ModuleStarter> {
     vec![
         ("notbot::oodkb::add", module_starter_add),
-        ("notbot::oodkb::testfunctions", module_starter_testfunctions)
+        ("notbot::oodkb::testfunctions", module_starter_testfunctions),
+        ("notbot::oodkb::add", module_starter_debug),
     ]
+}
+
+fn module_starter_debug(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
+    Ok(client.add_event_handler(move |ev, room, klacz| klacz_debug(ev, room, klacz)))
+}
+
+async fn klacz_debug(
+    ev: OriginalSyncRoomMessageEvent,
+    room: Room,
+    klacz: Ctx<klaczdb>,
+) -> anyhow::Result<()> {
+    if room.state() != RoomState::Joined {
+        return Ok(());
+    };
+
+    if ev.sender == room.client().user_id().unwrap() {
+        return Ok(());
+    };
+
+    let MessageType::Text(text) = ev.content.msgtype else {
+        return Ok(());
+    };
+
+    let mut args = text.body.splitn(2, [' ', '\n']);
+
+    let Some(keyword) = args.next() else {
+        return Ok(());
+    };
+
+    if keyword != ".class" {
+        return Ok(());
+    };
+
+    let Some(klaczclassstr) = args.next() else {
+        trace!("no class arg");
+        return Ok(());
+    };
+
+    trace!("klaczclassstr: {klaczclassstr}");
+
+    let klaczclass: KlaczClass = klaczclassstr.parse()?;
+
+    room.send(RoomMessageEventContent::text_plain(
+        format!(r#" class_name: {}
+        class_id: {}"#,
+            klaczclass.class_name(),
+            klaczclass.class_id(),
+        )
+    )).await?;
+    Ok(())
 }
 
 fn module_starter_add(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
-    Ok(client.add_event_handler(move |ev, room| add(ev, room, module_config)))
+    Ok(client.add_event_handler(move |ev, room, klacz| add(ev, room, klacz, module_config)))
 }
 
 async fn add(
     ev: OriginalSyncRoomMessageEvent,
     room: Room,
-    config: ModuleConfig,
     klacz: Ctx<klaczdb>,
+    config: ModuleConfig,
 ) -> anyhow::Result<()> {
     if room.state() != RoomState::Joined {
         return Ok(());
@@ -363,7 +428,18 @@ async fn add(
         bail!("missing arguments")
     };
 
-    room.send(RoomMessageEventContent::text_plain(format!("would add: term: {term}: definition: {definition}"))).await?;
+    trace!("attempting to add: add: term: {term}: definition: {definition}");
+
+    let mut response = String::new();
+    let result = klacz.add_entry(&ev.sender, term, definition).await?;
+    if result == KlaczAddEntryResult::CreatedTerm {
+        response.push_str(format!("Created term \"{term}\"\n").as_str());
+        // room.send(RoomMessageEventContent::text_plain(format!(r#"Created term "{term}""#))).await?;
+    };
+
+    response.push_str(format!(r#"Added one entry to term "{term}""#).as_str());
+    room.send(RoomMessageEventContent::text_plain(response)).await?;
+
     Ok(())
 }
 
@@ -374,7 +450,7 @@ fn module_starter_testfunctions(client: &Client, config: &Config) -> anyhow::Res
             ev,
             room,
             command_config,
-            vec![".crc32", ".class-id", ".class", ".ash", ".logior"]
+            vec![".crc32", ".class-id", ".ash", ".logior"]
                 .into_iter()
                 .map(|x| x.to_string())
                 .collect(),
