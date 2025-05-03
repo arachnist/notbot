@@ -109,14 +109,14 @@ pub(crate) async fn dispatch(
         }
     };
 
-    let mut args = text.trim_start().splitn(2, [' ', '\t']);
+    let mut args = text.trim_start().splitn(2, [' ', ' ', '\t']);
     let first = args.next();
 
     let (keyword, remainder): (String, Option<String>) = {
         match first {
-            None => (String::new(), Some(String::new())),
+            None => (String::new(), None),
             Some(word) => {
-                let (mut kw_candidate, mut args_candidate) = (String::new(), Some(String::new()));
+                let (mut kw_candidate, mut remainder_candidate) = (String::new(), None);
                 for prefix in config.prefixes() {
                     match prefix.len() {
                         1 => {
@@ -124,24 +124,29 @@ pub(crate) async fn dispatch(
                                 None => continue,
                                 Some(w) => {
                                     kw_candidate = w.to_string();
-                                    args_candidate = args.next().map(|s| s.to_string());
+                                    remainder_candidate = args.next().map(|s| s.to_string());
                                     break;
                                 }
                             }
                         },
                         // meme command case
-                        _ => {
+                        2.. => {
                             if word == prefix {
-                                let mut new_args = 
-                                kw_candidate = prefix;
-                                let mut new_args
+                                if let Some(shifted_text) = args.next() {
+                                    let mut shifted_args = shifted_text.trim_start().splitn(2, [' ', ' ', '\t']);
+                                    if let Some(second) = shifted_args.next() {
+                                        kw_candidate = second.to_string();
+                                        remainder_candidate = shifted_args.next().map(|s| s.to_string());
+                                    };
+                                };
                                 break;
                             };
                         },
+                        0 => continue,
                     };
                 };
-                
-                (kw_candidate, args_candidate)
+
+                (kw_candidate, remainder_candidate)
             },
         }
     };
@@ -219,7 +224,7 @@ pub(crate) async fn dispatch(
 
     match consumption {
         Consumption::Inclusive | Consumption::Passthrough => {
-            debug!("running general passthrough modules");
+            debug!("running passthrough modules");
             let mut run_passthrough_modules: Vec<ModuleInfo> = vec![];
 
             use TriggerType::*;
@@ -228,6 +233,7 @@ pub(crate) async fn dispatch(
                 // we're in passthrough already, so we don't 
                 match module.0.trigger {
                     Keyword(ref keywords) => {
+                        // handle that on init?
                         error!("can't have keyword modules in passthrough!");
                         continue;
                     }
@@ -237,7 +243,7 @@ pub(crate) async fn dispatch(
                             continue;
                         }
                         Ok(Reject) => continue,
-                        Ok(_) => (),
+                        Ok(_) => run_passthrough_modules.push(module.0),
                     },
                 };
             }
@@ -245,7 +251,7 @@ pub(crate) async fn dispatch(
             for module in run_passthrough_modules {
                 if let Err(e) = dispatch_module(
                     false,
-                    &module.0,
+                    &module,
                     klacz_level,
                     ev.clone(),
                     sender.clone(),
@@ -253,12 +259,12 @@ pub(crate) async fn dispatch(
                 )
                 .await
                 {
-                    error!("dispatching catchall module failed: {e}");
+                    error!("dispatching passthrough module failed: {e}");
                 };
             }
         }
         _ => {
-            debug!("skipping general catchall modules");
+            debug!("skipping passthrough modules");
         }
     }
 
