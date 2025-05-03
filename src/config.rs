@@ -44,6 +44,7 @@ struct ConfigInner {
     device_id: String,
     #[allow(dead_code)]
     module: Table,
+    prefixes: Vec<String>
 }
 
 impl TryFrom<String> for ConfigInner {
@@ -115,6 +116,11 @@ impl Config {
     pub fn device_id(&self) -> String {
         let inner = &self.inner.lock().unwrap();
         inner.device_id.clone()
+    }
+
+    pub fn prefixes(&self) -> Vec<String> {
+        let inner = &self.inner.lock().unwrap();
+        inner.prefixes.clone()
     }
 
     pub(crate) fn module_config_value(&self, n: &str) -> Result<Value, ConfigError> {

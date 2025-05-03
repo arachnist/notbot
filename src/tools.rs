@@ -1,4 +1,10 @@
-use crate::prelude::*;
+use serde::de;
+use anyhow::anyhow;
+
+use matrix_sdk::{Client, Room};
+use matrix_sdk::ruma::{OwnedRoomId, OwnedRoomAliasId};
+
+use reqwest::Client as RClient;
 
 pub async fn fetch_and_decode_json<D: de::DeserializeOwned>(url: String) -> anyhow::Result<D> {
     let client = RClient::new();
@@ -17,17 +23,24 @@ pub async fn maybe_get_room(c: &Client, maybe_room: &str) -> anyhow::Result<Room
             c.resolve_room_alias(&alias_id).await?.room_id
         }
     };
-
-    match c.get_room(&room_id) {
-        Some(room) => Ok(room),
-        // FIXME: replace this with crate-wide errors?
-        None => Err(NotMunError::NoRoom(maybe_room.to_string()).into()),
-    }
+    
+    c.get_room(&room_id).ok_or(anyhow!("no room"))
 }
 
 pub fn get_room_name(room: &Room) -> String {
     match room.canonical_alias() {
         Some(a) => a.to_string(),
         None => room.room_id().to_string(),
+    }
+}
+
+pub mod sync {
+    use serde::de;
+    use reqwest::blocking::Client as RClient;
+
+    pub fn fetch_and_decode_json<D: de::DeserializeOwned>(url: String)->anyhow::Result<D> {
+        let client = RClient::new();
+        let data = client.get(url).send()?;
+        Ok(data.json::<D>()?)
     }
 }
