@@ -8,10 +8,12 @@ use tracing::{debug, error};
 use matrix_sdk::ruma::events::room::message::{
     MessageFormat, MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
 };
+use matrix_sdk::event_handler::{Ctx, EventHandlerHandle};
 use matrix_sdk::ruma::OwnedUserId;
 use matrix_sdk::{Client, Room};
 
 use tokio::sync::mpsc;
+use futures::Future;
 
 lazy_static! {
     static ref MODULE_EVENTS: IntCounterVec = register_int_counter_vec!(
@@ -59,6 +61,8 @@ pub enum TriggerType {
 
 #[derive(Clone)]
 pub enum ACL {
+    HswawMember,
+    ActiveMember,
     KlaczLevel(i64),
     Homeserver(Vec<String>),
     None,
@@ -78,10 +82,10 @@ pub(crate) async fn dispatch(
     ev: OriginalSyncRoomMessageEvent,
     room: Room,
     mx: Client,
-    config: Config,
-    modules: Vec<ModuleInfo>,
-    passthrough_modules: Vec<PassThroughModuleInfo>,
-    klacz: KlaczDB,
+    config: Ctx<Config>,
+    modules: Ctx<Vec<ModuleInfo>>,
+    passthrough_modules: Ctx<Vec<PassThroughModuleInfo>>,
+    klacz: Ctx<KlaczDB>,
 ) -> anyhow::Result<()> {
     use Consumption::*;
 
@@ -155,7 +159,7 @@ pub(crate) async fn dispatch(
     let mut consumption = Inclusive;
 
     // go through all the modules first to figure out consumption priority
-    for module in modules {
+    for module in modules.iter() {
         use TriggerType::*;
 
         let module_consumption: Consumption = match module.trigger {
@@ -194,7 +198,7 @@ pub(crate) async fn dispatch(
                 if consumption > module_consumption {
                     continue;
                 } else {
-                    run_modules.push((module_consumption, module));
+                    run_modules.push((module_consumption, module.clone()));
                 }
             }
             Reject => {
@@ -229,7 +233,7 @@ pub(crate) async fn dispatch(
 
             use TriggerType::*;
 
-            for module in passthrough_modules {
+            for module in passthrough_modules.iter() {
                 // we're in passthrough already, so we don't 
                 match module.0.trigger {
                     Keyword(ref keywords) => {
@@ -243,7 +247,7 @@ pub(crate) async fn dispatch(
                             continue;
                         }
                         Ok(Reject) => continue,
-                        Ok(_) => run_passthrough_modules.push(module.0),
+                        Ok(_) => run_passthrough_modules.push(module.0.clone()),
                     },
                 };
             }
@@ -305,6 +309,7 @@ async fn dispatch_module(
                 return Ok(());
             }
         }
+        _ => todo!(),
     };
 
     let reservation = match module.channel.clone().try_reserve_owned() {
@@ -321,19 +326,45 @@ async fn dispatch_module(
     Ok(())
 }
 
-/*
-pub(crate) async fn init_modules(mx: &Client, config: &Config) -> anyhow::Result<()> {
-    use TriggerType::*;
+pub type module_starter = fn(&Client, &Config)->anyhow::Result<(Vec<ModuleInfo>, Vec<String>)>;
+pub type passthrough_module_starter = fn(&Client, &Config)->anyhow::Result<(Vec<PassThroughModuleInfo>, Vec<String>)>;
 
-    let mut modules: Vec<ModuleInfo> = vec![];
+pub(crate) async fn init_modules(mx: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
+    let klacz = KlaczDB { handle: "main" };
+    // let module_starters: Vec<fn(&Client, &Config)->(Vec<ModuleInfo>, Vec<String>)> = vec![];
+    let module_starters: Vec<Box<module_starter>> = vec![];
+    let passthrough_module_starters: Vec<Box<passthrough_module_starter>> = vec![];
+    let mut live_modules: Vec<ModuleInfo> = vec![];
+    let mut live_passthrough_modules: Vec<PassThroughModuleInfo> = vec![];
+    let mut failed_modules: Vec<String> = vec![];
+    let mut failed_passthrough_modules: Vec<String> = vec![];
 
-    let m = modules.first().unwrap();
-
-    let decision: bool = match &m.trigger {
-        Keyword(keywords) => true,
-        Catchall(fun) => false,
+    // hmm: for fn() -> Vec<fn() -> ModuleInfo> in [ hardcoded list ]
+    // hmm: for … in Vec<fn(mx, config) -> (Vec<ModuleInfo>, Vec<String>)>
+    for starter in module_starters {
+        match starter(mx, config) {
+            Err(e) => error!("module initialization failed: {e}"),
+            Ok((m, f)) => {
+                live_modules.extend(m);
+                failed_modules.extend(f);
+            },
+        };
     };
 
-    Ok(())
+    for starter in passthrough_module_starters {
+        match starter(mx, config) {
+            Err(e) => error!("module initialization failed: {e}"),
+            Ok((m, f)) => {
+                live_passthrough_modules.extend(m);
+                failed_passthrough_modules.extend(f);
+            },
+        };
+    };
+    
+    mx.add_event_handler_context(klacz);
+    mx.add_event_handler_context(config.clone());
+    mx.add_event_handler_context(live_modules);
+    mx.add_event_handler_context(live_passthrough_modules);
+    
+    Ok(mx.add_event_handler(dispatch))
 }
-*/
