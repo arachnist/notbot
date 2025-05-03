@@ -1,5 +1,4 @@
 pub use crate::config::Config;
-pub use crate::config::ModuleConfig;
 
 pub use crate::commands::simple_command_wrapper;
 

@@ -35,8 +35,6 @@ impl fmt::Display for ConfigError {
     }
 }
 
-pub trait ModuleConfig: fmt::Debug + Clone + Send {}
-
 #[derive(Deserialize, Debug, Clone)]
 struct ConfigInner {
     homeserver: String,

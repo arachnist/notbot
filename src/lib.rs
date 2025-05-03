@@ -4,6 +4,7 @@ mod config;
 mod db;
 mod metrics;
 mod tools;
+mod webterface;
 
 pub use crate::botmanager::BotManager;
 pub mod prelude;
@@ -17,7 +18,6 @@ mod notmun;
 mod sage;
 mod shenanigans;
 mod spaceapi;
-mod webterface;
 mod wolfram;
 
 use crate::prelude::*;
