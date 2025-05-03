@@ -5,6 +5,7 @@ mod db;
 mod metrics;
 mod tools;
 mod webterface;
+mod module;
 
 pub use crate::botmanager::BotManager;
 pub mod prelude;
