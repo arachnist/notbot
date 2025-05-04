@@ -11,11 +11,82 @@ use mlua::{
     Variadic,
 };
 
-pub(crate) fn modules() -> Vec<ModuleStarter> {
-    vec![(module_path!(), module_starter)]
+#[derive(Clone, Deserialize)]
+pub struct ModuleConfig {
+    mun_path: String,
 }
 
-fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
+// leaving this here for now;
+pub(crate) fn modules() -> Vec<ModuleStarter> {
+    vec![(module_path!(), start_generic_dispatcher)]
+}
+
+pub(crate) fn start_generic_dispatcher(
+    client: &Client,
+    config: &Config,
+) -> anyhow::Result<EventHandlerHandle> {
+    Ok(client.add_event_handler(lua_generic_dispatcher))
+}
+
+async fn lua_generic_dispatcher(
+    ev: AnySyncTimelineEvent,
+    client: Client,
+    room: Room,
+    lua: Ctx<Lua>,
+) -> anyhow::Result<()> {
+    let event = ev.into_full_event(room.room_id().into());
+
+    let target = match room.canonical_alias() {
+        Some(a) => a.to_string(),
+        None => room.room_id().to_string(),
+    };
+
+    if client.user_id().unwrap() == event.sender() {
+        return Ok(());
+    };
+
+    let handle_command = lua.load(chunk! {
+        irc:HandleCommand(...)
+    });
+
+    // text-like events handled elsewhere
+    trace!("attempting to match event");
+    match event {
+        AnyTimelineEvent::State(AnyStateEvent::RoomMember(RoomMemberEvent::Original(event))) => {
+            info!(
+                "membership change: {target} {:#?} {}",
+                event.membership_change(),
+                event.state_key
+            );
+
+            match event.membership_change() {
+                MembershipChange::Invited => {
+                    trace!("membership content: {event:#?}");
+                    // needed to properly fill-up channel objects
+                    if event.state_key != client.user_id().unwrap() {
+                        debug!(
+                            "event not for us: {}, {}",
+                            event.state_key,
+                            client.user_id().unwrap()
+                        );
+                        return Ok(());
+                    };
+                    debug!("calling irc:Join for {target}");
+                    lua.load(chunk! {
+                        irc:Join($target)
+                    })
+                    .exec()?;
+
+                    Ok(())
+                }
+                _ => Ok(()),
+            }
+        }
+        _ => Ok(()),
+    }
+}
+
+pub(crate) fn module_starter(client: &Client, config: &Config) -> anyhow::Result<()> {
     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
 
     let lua: Lua = Lua::new();
@@ -55,94 +126,82 @@ fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandl
         .exec()?;
 
     for room in client.joined_rooms() {
-        let room_name = get_room_name(&room);
+        let name = room_name(&room);
         lua.load(chunk! {
-            irc:Join($room_name)
+            irc:Join($name)
         })
         .exec()?
     }
 
     client.add_event_handler_context(lua);
 
-    Ok(client.add_event_handler(move |ev, client, room, lua| {
-        lua_dispatcher(ev, client, room, lua, module_config)
-    }))
+    Ok(()) // Ok(client.add_event_handler(lua_dispatcher))
 }
 
-#[derive(Clone, Deserialize)]
-pub struct ModuleConfig {
-    mun_path: String,
+pub(crate) fn starter(mx: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
+    info!("registering modules");
+    let mut modules: Vec<ModuleInfo> = vec![];
+
+    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+
+    let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
+    tokio::task::spawn(incoming_consumer(rx, module_config));
+    let at = ModuleInfo {
+        name: "notmun".s(),
+        help: "run mun runtime for fun and questionable profit".s(),
+        acl: vec![],
+        trigger: TriggerType::Catchall(|_, _, _, _, _| Ok(Consumption::Inclusive)),
+        channel: Some(tx),
+    };
+    modules.push(at);
+
+    Ok(modules)
 }
 
-async fn lua_dispatcher(
-    ev: AnySyncTimelineEvent,
-    client: Client,
-    room: Room,
-    lua: Ctx<Lua>,
-    _module_config: ModuleConfig,
+async fn incoming_consumer(
+    mut rx: mpsc::Receiver<ConsumerEvent>,
+    config: ModuleConfig,
 ) -> anyhow::Result<()> {
-    let event = ev.into_full_event(room.room_id().into());
+    loop {
+        let event = match rx.recv().await {
+            Some(e) => e,
+            None => {
+                error!("channel closed, goodbye! :(");
+                bail!("channel closed");
+            }
+        };
 
-    let target = match room.canonical_alias() {
-        Some(a) => a.to_string(),
-        None => room.room_id().to_string(),
-    };
+        if let Err(e) = processor(event.clone(), config.clone()).await {
+            if let Err(e) = event
+                .room
+                .send(RoomMessageEventContent::text_plain(format!(
+                    "error getting wolfram response: {e}"
+                )))
+                .await
+            {
+                error!("error while sending wolfram response: {e}");
+            };
+        }
+    }
+}
 
-    if client.user_id().unwrap() == event.sender() {
-        return Ok(());
-    };
-
-    let handle_command = lua.load(chunk! {
+async fn processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
+    let target = room_name(&event.room);
+    let handle_command = event.lua.load(chunk! {
         irc:HandleCommand(...)
     });
 
-    trace!("attempting to match event");
-    match event {
-        AnyTimelineEvent::MessageLike(AnyMessageLikeEvent::RoomMessage(
-            RoomMessageEvent::Original(event),
-        )) => {
-            let (ev_type, content) = match &event.content.msgtype {
-                MessageType::Notice(content) => ("irc.Notice", content.body.as_str()),
-                MessageType::Text(content) => ("irc.Message", content.body.as_str()),
-                _ => return Ok(()),
-            };
-            handle_command
-                .call_async::<()>((ev_type, event.sender.as_str(), target.as_str(), content))
-                .await?;
-            Ok(())
-        }
-        AnyTimelineEvent::State(AnyStateEvent::RoomMember(RoomMemberEvent::Original(event))) => {
-            info!(
-                "membership change: {target} {:#?} {}",
-                event.membership_change(),
-                event.state_key
-            );
+    let (ev_type, content) = match &event.ev.content.msgtype {
+        MessageType::Notice(content) => ("irc.Notice", content.body.as_str()),
+        MessageType::Text(content) => ("irc.Message", content.body.as_str()),
+        _ => return Ok(()),
+    };
 
-            match event.membership_change() {
-                MembershipChange::Invited => {
-                    trace!("membership content: {event:#?}");
-                    // needed to properly fill-up channel objects
-                    if event.state_key != client.user_id().unwrap() {
-                        debug!(
-                            "event not for us: {}, {}",
-                            event.state_key,
-                            client.user_id().unwrap()
-                        );
-                        return Ok(());
-                    };
-                    debug!("calling irc:Join for {target}");
-                    lua.load(chunk! {
-                        irc:Join($target)
-                    })
-                    .exec()?;
+    handle_command
+        .call_async::<()>((ev_type, event.sender.as_str(), target.as_str(), content))
+        .await?;
 
-                    Ok(())
-                }
-                _ => Ok(()),
-            }
-        }
-        _ => Ok(()),
-    }
+    Ok(())
 }
 
 async fn consumer(client: Client, mut rx: Receiver<NotMunAction>) -> anyhow::Result<()> {

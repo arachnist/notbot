@@ -66,12 +66,10 @@ impl DBPools {
     }
 }
 
-pub(crate) fn modules() -> Vec<ModuleStarter> {
-    vec![(module_path!(), module_starter)]
-}
+pub(crate) fn starter(mx: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
+    info!("registering modules");
+    let mut modules: Vec<ModuleInfo> = vec![];
 
-fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
-    info!("registering database connections");
     let mut module_config: DBConfig = config.module_config_value(module_path!())?.try_into()?;
 
     let mut dbc = DB_CONNECTIONS.0.lock().unwrap();
@@ -97,18 +95,48 @@ fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandl
         dbc.insert(name.to_owned(), pool);
     }
 
-    Ok(client.add_event_handler(move |ev, room| {
-        simple_command_wrapper(ev, room, module_config, vec![".db".to_string()], status)
-    }))
+    let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
+    tokio::task::spawn(dbstatus_consumer(rx, module_config));
+    let at = ModuleInfo {
+        name: "dbstatus".s(),
+        help: "check status of database connections".s(),
+        acl: vec![],
+        trigger: TriggerType::Keyword(vec!["db".s()]),
+        channel: Some(tx),
+    };
+    modules.push(at);
+
+    Ok(modules)
 }
 
-async fn status(
-    _room: Room,
-    _sender: OwnedUserId,
-    _keyword: String,
-    _argv: Vec<String>,
+async fn dbstatus_consumer(
+    mut rx: mpsc::Receiver<ConsumerEvent>,
     config: DBConfig,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<()> {
+    loop {
+        let event = match rx.recv().await {
+            Some(e) => e,
+            None => {
+                error!("channel closed, goodbye! :(");
+                bail!("channel closed");
+            }
+        };
+
+        if let Err(e) = dbstatus(event.clone(), config.clone()).await {
+            if let Err(e) = event
+                .room
+                .send(RoomMessageEventContent::text_plain(format!(
+                    "error getting database status: {e}"
+                )))
+                .await
+            {
+                error!("error while sending database status: {e}");
+            };
+        }
+    }
+}
+
+async fn dbstatus(event: ConsumerEvent, config: DBConfig) -> anyhow::Result<()> {
     let mut wip_response: String = "database status:".to_string();
 
     trace!("attempting to grab dbc lock");
@@ -131,8 +159,12 @@ async fn status(
         };
     }
 
-    trace!("returning response part: {wip_response}");
-    Ok(wip_response)
+    event
+        .room
+        .send(RoomMessageEventContent::text_plain(wip_response))
+        .await?;
+
+    Ok(())
 }
 
 #[derive(Debug)]

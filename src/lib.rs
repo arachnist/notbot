@@ -67,16 +67,9 @@ pub(crate) fn init_modules(
     }
 
     for initializer in [
-        autojoiner::modules,
-        db::modules,
-        inviter::modules,
-        kasownik::modules,
-        notmun::modules,
-        wolfram::modules,
+        autojoiner::modules, // handle invites
+        notmun::modules,     // just the non-text events
         shenanigans::modules,
-        commands::modules,
-        sage::modules,
-        klaczdb::modules,
         || {
             let v: Vec<ModuleStarter> = vec![("new dispatcher", crate::module::init_modules)];
             v

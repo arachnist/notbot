@@ -126,7 +126,7 @@ impl KlaczDB {
     const GET_LEVEL: &str =
         "select _level::bigint from _level where _channel = $1 and _account = $2 limit 1";
     pub async fn get_level(&self, room: &Room, user: &UserId) -> anyhow::Result<i64> {
-        let room_name = get_room_name(room);
+        let name = room_name(room);
         let user_name = user.as_str();
 
         let client = DBPools::get_client(self.handle).await?;
@@ -136,10 +136,7 @@ impl KlaczDB {
 
         // limit in the statement handles (and potentially hides) the case of too many records,
         // while the explicit error handling handles the default case
-        let Ok(row) = client
-            .query_one(&statement, &[&room_name, &user_name])
-            .await
-        else {
+        let Ok(row) = client.query_one(&statement, &[&name, &user_name]).await else {
             return Ok(0);
         };
 
@@ -152,7 +149,7 @@ impl KlaczDB {
     const INSERT_LEVELS: &str = r#"INSERT INTO _level (_oid, _channel, _account, _level)
         VALUES ($1, $2, $3, $4)"#;
     pub async fn add_level(&self, room: &Room, user: &UserId, level: i64) -> anyhow::Result<()> {
-        let room_name = get_room_name(room);
+        let name = room_name(room);
         let user_name = user.as_str();
 
         let id = self.get_instance_id().await?;
@@ -171,17 +168,13 @@ impl KlaczDB {
             )
             .await?;
 
-        if transaction
-            .execute(&delete, &[&room_name, &user_name])
-            .await?
-            > 1
-        {
+        if transaction.execute(&delete, &[&name, &user_name]).await? > 1 {
             transaction.rollback().await?;
             bail!("too many deleted levels")
         };
 
         if transaction
-            .execute(&insert, &[&oid, &room_name, &user_name, &level])
+            .execute(&insert, &[&oid, &name, &user_name, &level])
             .await?
             != 1
         {
@@ -442,130 +435,160 @@ impl fmt::Display for KlaczError {
 #[derive(Clone, Deserialize)]
 pub struct ModuleConfig {}
 
-pub(crate) fn modules() -> Vec<ModuleStarter> {
-    vec![
-        ("notbot::oodkb::add", module_starter_add),
-        ("notbot::oodkb::remove", module_starter_remove),
-    ]
+pub(crate) fn starter(mx: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
+    info!("registering modules");
+    let mut modules: Vec<ModuleInfo> = vec![];
+
+    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+
+    let (addtx, addrx) = mpsc::channel::<ConsumerEvent>(1);
+    tokio::task::spawn(add_consumer(addrx, module_config.clone()));
+    let add = ModuleInfo {
+        name: "add".s(),
+        help: "add an entry to knowledge base".s(),
+        acl: vec![],
+        trigger: TriggerType::Keyword(vec!["add".s()]),
+        channel: Some(addtx),
+    };
+    modules.push(add);
+
+    let (removetx, removerx) = mpsc::channel::<ConsumerEvent>(1);
+    tokio::task::spawn(remove_consumer(removerx, module_config.clone()));
+    let remove = ModuleInfo {
+        name: "remove".s(),
+        help: "remove an entry to knowledge base".s(),
+        acl: vec![Acl::KlaczLevel(10)],
+        trigger: TriggerType::Keyword(vec!["remove".s()]),
+        channel: Some(removetx),
+    };
+    modules.push(remove);
+
+    Ok(modules)
 }
 
-fn module_starter_add(client: &Client, _: &Config) -> anyhow::Result<EventHandlerHandle> {
-    Ok(client.add_event_handler(add))
-}
-fn module_starter_remove(client: &Client, _: &Config) -> anyhow::Result<EventHandlerHandle> {
-    Ok(client.add_event_handler(remove))
-}
-
-async fn add(
-    ev: OriginalSyncRoomMessageEvent,
-    room: Room,
-    klacz: Ctx<KlaczDB>,
+async fn add_consumer(
+    mut rx: mpsc::Receiver<ConsumerEvent>,
+    config: ModuleConfig,
 ) -> anyhow::Result<()> {
-    if room.state() != RoomState::Joined {
-        return Ok(());
-    };
+    loop {
+        let event = match rx.recv().await {
+            Some(e) => e,
+            None => {
+                error!("channel closed, goodbye! :(");
+                bail!("channel closed");
+            }
+        };
 
-    if ev.sender == room.client().user_id().unwrap() {
-        return Ok(());
-    };
+        if let Err(e) = add(event.clone(), config.clone()).await {
+            if let Err(e) = event
+                .room
+                .send(RoomMessageEventContent::text_plain(format!(
+                    "error adding entry: {e}"
+                )))
+                .await
+            {
+                error!("error while sending error message: {e}");
+            };
+        }
+    }
+}
 
-    let MessageType::Text(text) = ev.content.msgtype else {
-        return Ok(());
-    };
-
-    let mut args = text.body.splitn(3, [' ', '\n']);
-
-    let Some(keyword) = args.next() else {
-        return Ok(());
-    };
-
-    if keyword != ".add" {
-        return Ok(());
-    };
-
-    let Some(term) = args.next() else {
-        room.send(RoomMessageEventContent::text_plain(
-            "missing arguments: term, definition",
-        ))
-        .await?;
+async fn add(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
+    let Some(body) = event.args else {
+        event
+            .room
+            .send(RoomMessageEventContent::text_plain(
+                "missing arguments: term, definition",
+            ))
+            .await?;
         bail!("missing arguments")
     };
 
+    let mut args = body.splitn(2, [' ', '\n']);
+    let term = args.next().unwrap();
     let Some(definition) = args.next() else {
-        room.send(RoomMessageEventContent::text_plain(
-            "missing arguments: definition",
-        ))
-        .await?;
+        event
+            .room
+            .send(RoomMessageEventContent::text_plain(
+                "missing arguments: definition",
+            ))
+            .await?;
         bail!("missing arguments")
     };
 
     trace!("attempting to add: term: {term}: definition: {definition}");
 
     let mut response = String::new();
-    let result = klacz.add_entry(&ev.sender, term, definition).await?;
+    let result = event
+        .klacz
+        .add_entry(&event.sender, term, definition)
+        .await?;
     if result == KlaczKBChange::CreatedTerm {
         response.push_str(format!("Created term \"{term}\"\n").as_str());
     };
 
     response.push_str(format!(r#"Added one entry to term "{term}""#).as_str());
-    room.send(RoomMessageEventContent::text_plain(response))
+    event
+        .room
+        .send(RoomMessageEventContent::text_plain(response))
         .await?;
 
     Ok(())
 }
 
-async fn remove(
-    ev: OriginalSyncRoomMessageEvent,
-    room: Room,
-    klacz: Ctx<KlaczDB>,
+async fn remove_consumer(
+    mut rx: mpsc::Receiver<ConsumerEvent>,
+    config: ModuleConfig,
 ) -> anyhow::Result<()> {
-    if room.state() != RoomState::Joined {
-        return Ok(());
-    };
+    loop {
+        let event = match rx.recv().await {
+            Some(e) => e,
+            None => {
+                error!("channel closed, goodbye! :(");
+                bail!("channel closed");
+            }
+        };
 
-    if ev.sender == room.client().user_id().unwrap() {
-        return Ok(());
-    };
+        if let Err(e) = add(event.clone(), config.clone()).await {
+            if let Err(e) = event
+                .room
+                .send(RoomMessageEventContent::text_plain(format!(
+                    "error removing entry: {e}"
+                )))
+                .await
+            {
+                error!("error while sending error message: {e}");
+            };
+        }
+    }
+}
 
-    let MessageType::Text(text) = ev.content.msgtype else {
-        return Ok(());
-    };
-
-    let mut args = text.body.splitn(3, [' ', '\n']);
-
-    let Some(keyword) = args.next() else {
-        return Ok(());
-    };
-
-    if keyword != ".remove" {
-        return Ok(());
-    };
-
-    if klacz.get_level(&room, &ev.sender).await? < 10 {
-        room.send(RoomMessageEventContent::text_plain("I can't do that, Dave"))
+async fn remove(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
+    let Some(body) = event.args else {
+        event
+            .room
+            .send(RoomMessageEventContent::text_plain(
+                "missing arguments: term, definition",
+            ))
             .await?;
-        return Ok(());
-    };
-
-    let Some(term) = args.next() else {
-        room.send(RoomMessageEventContent::text_plain(
-            "missing arguments: term, definition",
-        ))
-        .await?;
         bail!("missing arguments")
     };
 
+    let mut args = body.splitn(2, [' ', '\n']);
+    let term = args.next().unwrap();
     let Some(definition) = args.next() else {
-        room.send(RoomMessageEventContent::text_plain(
-            "missing arguments: definition",
-        ))
-        .await?;
+        event
+            .room
+            .send(RoomMessageEventContent::text_plain(
+                "missing arguments: definition",
+            ))
+            .await?;
         bail!("missing arguments")
     };
 
     trace!("attempting to remove: term: {term}: definition: {definition}");
 
-    let response = klacz.remove_entry(term, definition).await?;
+    let response = event.klacz.remove_entry(term, definition).await?;
     let message = match response {
         KlaczKBChange::Unchanged => format!("entry not found in {term}"),
         KlaczKBChange::RemovedEntry => format!("removed entry from {term}"),
@@ -573,7 +596,9 @@ async fn remove(
         _ => format!("unexpected response from klacz, no error: {response}"),
     };
 
-    room.send(RoomMessageEventContent::text_plain(message))
+    event
+        .room
+        .send(RoomMessageEventContent::text_plain(message))
         .await?;
 
     Ok(())

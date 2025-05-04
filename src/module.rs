@@ -1,6 +1,8 @@
+use std::ops::Deref;
+
 use crate::config::Config;
 use crate::klaczdb::KlaczDB;
-use crate::tools::{get_room_name, membership_status};
+use crate::tools::{membership_status, room_name};
 
 use lazy_static::lazy_static;
 use prometheus::{opts, register_int_counter_vec, IntCounterVec};
@@ -8,12 +10,14 @@ use tracing::{debug, error, trace};
 
 use matrix_sdk::event_handler::{Ctx, EventHandlerHandle};
 use matrix_sdk::ruma::events::room::message::{
-    MessageFormat, MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
+    MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
 };
 use matrix_sdk::ruma::OwnedUserId;
 use matrix_sdk::{Client, Room};
 
 use tokio::sync::mpsc;
+
+use mlua::Lua;
 
 lazy_static! {
     static ref MODULE_EVENTS: IntCounterVec = register_int_counter_vec!(
@@ -34,6 +38,8 @@ pub struct ConsumerEvent {
     pub room: Room,
     pub keyword: String,
     pub args: Option<String>,
+    pub lua: Lua,
+    pub klacz: KlaczDB,
 }
 
 #[derive(Clone, Debug)]
@@ -47,13 +53,15 @@ pub struct ModuleInfo {
 
 // distinct from generic ModuleInfo for legal purposes only
 #[derive(Clone)]
-pub struct PassThroughModuleInfo(ModuleInfo);
+pub struct PassThroughModuleInfo(pub ModuleInfo);
 
+// figure out how to pass just limited config here
 pub type CatchallDecider = fn(
     klaczlevel: i64,
     sender: OwnedUserId,
     room: &Room,
     content: &RoomMessageEventContent,
+    config: &Config,
 ) -> anyhow::Result<Consumption>;
 
 #[derive(Clone, Debug)]
@@ -82,7 +90,7 @@ pub enum Consumption {
     Exclusive,
 }
 
-pub async fn dispatch(
+pub async fn dispatcher(
     ev: OriginalSyncRoomMessageEvent,
     room: Room,
     mx: Client,
@@ -90,11 +98,13 @@ pub async fn dispatch(
     modules: Ctx<Vec<ModuleInfo>>,
     passthrough_modules: Ctx<Vec<PassThroughModuleInfo>>,
     klacz: Ctx<KlaczDB>,
+    lua: Ctx<Lua>,
 ) -> anyhow::Result<()> {
     use Consumption::*;
 
     let sender: OwnedUserId = ev.sender.clone();
 
+    /* we tried to be fancy here, but formatted events are fancier
     let (body, formatted) = match ev.content.msgtype {
         MessageType::Text(ref content) => (content.body.clone(), content.formatted.clone()),
         MessageType::Notice(ref content) => (content.body.clone(), content.formatted.clone()),
@@ -108,6 +118,12 @@ pub async fn dispatch(
         },
         None => body,
     };
+    */
+
+    let MessageType::Text(ref content) = ev.content.msgtype else {
+        return Ok(());
+    };
+    let text = content.body.clone();
 
     trace!("new dispatcher: getting klacz permission level");
     let klacz_level = match klacz.get_level(&room, &sender).await {
@@ -172,6 +188,8 @@ pub async fn dispatch(
         room: room.clone(),
         keyword: keyword.clone(),
         args: remainder,
+        lua: lua.deref().clone(),
+        klacz: klacz.deref().clone(),
     };
     // trace!("consumer event: {consumer_event:#?}");
 
@@ -198,7 +216,13 @@ pub async fn dispatch(
                     Reject
                 }
             }
-            Catchall(fun) => match fun(klacz_level, sender.clone(), &room, &ev.content) {
+            Catchall(fun) => match fun(
+                klacz_level,
+                sender.clone(),
+                &room,
+                &ev.content,
+                &config.clone(),
+            ) {
                 Err(e) => {
                     error!("{} decider returned error: {e}", module.name);
                     continue;
@@ -266,7 +290,13 @@ pub async fn dispatch(
                         error!("can't have keyword modules in passthrough!");
                         continue;
                     }
-                    Catchall(fun) => match fun(klacz_level, sender.clone(), &room, &ev.content) {
+                    Catchall(fun) => match fun(
+                        klacz_level,
+                        sender.clone(),
+                        &room,
+                        &ev.content,
+                        &config.clone(),
+                    ) {
                         Err(e) => {
                             error!("{} decider returned error: {e}", module.0.name);
                             continue;
@@ -316,6 +346,7 @@ async fn dispatch_module(
     let mut failed = false;
 
     for acl in &module.acl {
+        trace!("checking acl: {acl:#?}");
         match acl {
             KlaczLevel(required) => {
                 if required < &klacz_level {
@@ -328,7 +359,7 @@ async fn dispatch_module(
                 }
             }
             Room(rooms) => {
-                let name = get_room_name(&room);
+                let name = room_name(&room);
                 if !rooms.contains(&name) {
                     failed = true;
                 }
@@ -381,6 +412,7 @@ async fn dispatch_module(
         return Ok(());
     };
 
+    trace!("attempting to reserve channel space");
     // .unwrap() is safe here because star
     let reservation = match module.channel.clone().unwrap().try_reserve_owned() {
         Ok(r) => r,
@@ -391,6 +423,7 @@ async fn dispatch_module(
     };
 
     MODULE_EVENTS.with_label_values(&[&module.name]).inc();
+    trace!("sending event");
     reservation.send(consumer_event);
 
     Ok(())
@@ -407,14 +440,29 @@ pub fn init_modules(mx: &Client, config: &Config) -> anyhow::Result<EventHandler
     let mut modules: Vec<ModuleInfo> = vec![];
     let mut passthrough_modules: Vec<PassThroughModuleInfo> = vec![];
 
-    for starter in [crate::spaceapi::starter] {
+    // start moving notmun to becoming a 1st-class citizen
+    match crate::notmun::module_starter(mx, config) {
+        Err(e) => error!("failed initializing notmun: {e}"),
+        Ok(()) => (),
+    };
+
+    for starter in [
+        crate::klaczdb::starter,
+        crate::notmun::starter,
+        crate::spaceapi::starter,
+        crate::db::starter,
+        crate::inviter::starter,
+        crate::kasownik::starter,
+        crate::wolfram::starter,
+        crate::sage::starter,
+    ] {
         match starter(mx, config) {
             Err(e) => error!("module initialization failed fatally: {e}"),
             Ok(m) => modules.extend(m),
         };
     }
 
-    for starter in passthrough_module_starters {
+    for starter in [crate::kasownik::passthrough] {
         match starter(mx, config) {
             Err(e) => error!("module initialization failed fatally: {e}"),
             Ok(m) => passthrough_modules.extend(m),
@@ -426,5 +474,5 @@ pub fn init_modules(mx: &Client, config: &Config) -> anyhow::Result<EventHandler
     mx.add_event_handler_context(modules);
     mx.add_event_handler_context(passthrough_modules);
 
-    Ok(mx.add_event_handler(dispatch))
+    Ok(mx.add_event_handler(dispatcher))
 }

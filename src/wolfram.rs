@@ -4,48 +4,69 @@ use serde_json::Value;
 
 use urlencoding::encode as uencode;
 
-use prometheus::Counter;
-use prometheus::{opts, register_counter};
-
-lazy_static! {
-    static ref WOLFRAM_CALLS: Counter = register_counter!(opts!(
-        "wolfram_calls_total",
-        "Number of times wolfram was called",
-    ))
-    .unwrap();
-    static ref WOLFRAM_CALLS_SUCCESSFUL: Counter = register_counter!(opts!(
-        "wolfram_calls_total",
-        "Number of times wolfram was called",
-    ))
-    .unwrap();
-}
-
 #[derive(Clone, Deserialize)]
 pub struct ModuleConfig {
     pub app_id: String,
 }
 
-pub(crate) fn modules() -> Vec<ModuleStarter> {
-    vec![(module_path!(), module_starter)]
+pub(crate) fn starter(mx: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
+    info!("registering modules");
+    let mut modules: Vec<ModuleInfo> = vec![];
+
+    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+
+    let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
+    tokio::task::spawn(consumer(rx, module_config));
+    let at = ModuleInfo {
+        name: "wolfram".s(),
+        help: "calculate something using wolfram alpha".s(),
+        acl: vec![],
+        trigger: TriggerType::Keyword(vec!["c".s(), "wolfram".s()]),
+        channel: Some(tx),
+    };
+    modules.push(at);
+
+    Ok(modules)
 }
 
-fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
-    let command_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
-    Ok(client.add_event_handler(move |ev, room| {
-        simple_command_wrapper(ev, room, command_config, vec![".c".to_string()], wolfram)
-    }))
-}
-
-async fn wolfram(
-    _room: Room,
-    _sender: OwnedUserId,
-    _keyword: String,
-    argv: Vec<String>,
+async fn consumer(
+    mut rx: mpsc::Receiver<ConsumerEvent>,
     config: ModuleConfig,
-) -> anyhow::Result<String> {
-    WOLFRAM_CALLS.inc();
+) -> anyhow::Result<()> {
+    loop {
+        let event = match rx.recv().await {
+            Some(e) => e,
+            None => {
+                error!("channel closed, goodbye! :(");
+                bail!("channel closed");
+            }
+        };
 
-    let text_query = argv.join(" ");
+        if let Err(e) = processor(event.clone(), config.clone()).await {
+            if let Err(e) = event
+                .room
+                .send(RoomMessageEventContent::text_plain(format!(
+                    "error getting wolfram response: {e}"
+                )))
+                .await
+            {
+                error!("error while sending wolfram response: {e}");
+            };
+        }
+    }
+}
+
+async fn processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
+    let Some(text_query) = event.args else {
+        event
+            .room
+            .send(RoomMessageEventContent::text_plain(
+                "missing argument: query",
+            ))
+            .await?;
+        return Ok(());
+    };
+
     let query = uencode(text_query.as_str());
 
     let url: String = "http://api.wolframalpha.com/v2/query?input=".to_owned()
@@ -59,7 +80,10 @@ async fn wolfram(
     };
 
     if !data.queryresult.success || data.queryresult.numpods == 0 {
-        return Ok("no results".to_string());
+        event
+            .room
+            .send(RoomMessageEventContent::text_plain("no results"))
+            .await?;
     };
 
     let mut response_parts: Vec<String> = vec![];
@@ -70,7 +94,14 @@ async fn wolfram(
         }
     }
 
-    Ok(response_parts.join("\n"))
+    event
+        .room
+        .send(RoomMessageEventContent::text_plain(
+            response_parts.join("\n"),
+        ))
+        .await?;
+
+    Ok(())
 }
 
 #[derive(Clone, Deserialize)]

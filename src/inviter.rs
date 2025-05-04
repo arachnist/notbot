@@ -7,59 +7,70 @@ use matrix_sdk::ruma::events::reaction::OriginalSyncReactionEvent;
 use axum::{extract::State, response::IntoResponse};
 use tower_sessions::Session;
 
-pub(crate) fn modules() -> Vec<ModuleStarter> {
-    vec![(module_path!(), module_starter)]
-}
-
-fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
-    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
-    Ok(client.add_event_handler(move |ev, room, client| {
-        module_entrypoint(ev, room, client, module_config)
-    }))
-}
-
 #[derive(Clone, Deserialize)]
 pub struct ModuleConfig {
-    pub requests: String,
+    pub requests: Vec<String>,
     pub approvers: Vec<String>,
     pub homeserver_selfservice_allow: String,
     pub invite_to: Vec<String>,
 }
 
-async fn module_entrypoint(
-    ev: OriginalSyncRoomMessageEvent,
-    room: Room,
-    client: Client,
+pub(crate) fn starter(mx: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
+    info!("registering modules");
+    let mut modules: Vec<ModuleInfo> = vec![];
+
+    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+
+    let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
+    tokio::task::spawn(invite_request_consumer(rx, module_config.clone()));
+    let inviter = ModuleInfo {
+        name: "inviter".s(),
+        help: "processes invite requests to hackerspace matrix rooms and spaces".s(),
+        acl: vec![Acl::Room(module_config.requests)],
+        trigger: TriggerType::Keyword(vec!["invite".s()]),
+        channel: Some(tx),
+    };
+    modules.push(inviter);
+
+    Ok(modules)
+}
+
+async fn invite_request_consumer(
+    mut rx: mpsc::Receiver<ConsumerEvent>,
     config: ModuleConfig,
-) {
-    if let Some(alias) = room.canonical_alias() {
-        if config.requests != alias.as_str() {
-            return;
+) -> anyhow::Result<()> {
+    loop {
+        let event = match rx.recv().await {
+            Some(e) => e,
+            None => {
+                error!("channel closed, goodbye! :(");
+                bail!("channel closed");
+            }
         };
-    } else {
-        return;
-    };
 
-    let MessageType::Text(text) = ev.content.msgtype else {
-        return;
-    };
+        if let Err(e) = invite_request(event.clone(), config.clone()).await {
+            if let Err(e) = event
+                .room
+                .send(RoomMessageEventContent::text_plain(format!(
+                    "error getting presence status: {e}"
+                )))
+                .await
+            {
+                error!("error while sending presence status: {e}");
+            };
+        }
+    }
+}
 
-    if !text.body.trim().starts_with(".invite") {
-        return;
-    };
-
-    if ev.sender == client.user_id().unwrap() {
-        return;
-    };
-
-    info!("invitation request from: {}", ev.sender);
-    let prefixed_sender = "inviter:".to_owned() + ev.sender.as_str();
+async fn invite_request(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
+    info!("invitation request from: {}", event.sender);
+    let prefixed_sender = "inviter:".to_owned() + event.sender.as_str();
+    let client = event.room.client();
     let store = client.state_store();
 
     let next_allowed_attempt = match store.get_custom_value(prefixed_sender.as_bytes()).await {
         Err(e) => {
-            error!("error fetching next allowed attempt time: {e}");
-            return;
+            bail!("error fetching next allowed attempt time: {e}");
         }
         Ok(maybe_result) => {
             let next_attempt: NotBotTime = match maybe_result {
@@ -71,35 +82,27 @@ async fn module_entrypoint(
         }
     };
 
-    // from_days() is experimental :(
     if NotBotTime::now() > next_allowed_attempt {
         let next_allowed_attempt =
             NotBotTime(SystemTime::now() + Duration::from_secs(60 * 60 * 24 * 7));
-        if let Err(e) = store
+        store
             .set_custom_value_no_read(prefixed_sender.as_bytes(), next_allowed_attempt.into())
-            .await
-        {
-            error!(
-                "error setting last request time for user: {} {e}",
-                ev.sender.to_string()
-            );
-            return;
-        }
+            .await?;
     } else {
         info!(
             "user attempted invite request too soon: {}",
-            ev.sender.as_str()
+            event.sender.as_str()
         );
-        return;
+        return Ok(());
     }
 
-    let evid = ev.event_id.clone();
-    let evsender = ev.sender.clone();
-
-    trace!("adding reaction event handler for current event");
+    let evid = event.ev.event_id.clone();
+    let evsender = event.sender.clone();
     client.add_event_handler(move |ev, room, client, handle| {
-        reaction_listener(ev, room, client, handle, config, evid, evsender)
+        reaction_listener(ev, room, client, handle, config.clone(), evid, evsender)
     });
+
+    Ok(())
 }
 
 async fn reaction_listener(
