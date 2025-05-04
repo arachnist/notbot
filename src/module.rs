@@ -2,8 +2,9 @@ use std::ops::Deref;
 
 use crate::config::Config;
 use crate::klaczdb::KlaczDB;
-use crate::tools::{membership_status, room_name};
+use crate::tools::{membership_status, room_name, ToStringExt};
 
+use anyhow::bail;
 use lazy_static::lazy_static;
 use prometheus::{opts, register_int_counter_vec, IntCounterVec};
 use tracing::{debug, error, info, trace};
@@ -86,7 +87,9 @@ pub enum Consumption {
     Reject,
     // module wants this event, but in a passive way; shouldn't be later rejected with ACLs (noisy)
     Inclusive,
+    // module wants this event exclusively, but doesn't mind if passthrough modules catch it as well
     Passthrough,
+    // module wants this event exclusively. mostly for keyworded commands
     Exclusive,
 }
 
@@ -94,7 +97,6 @@ pub enum Consumption {
 pub async fn dispatcher(
     ev: OriginalSyncRoomMessageEvent,
     room: Room,
-    _mx: Client,
     config: Ctx<Config>,
     modules: Ctx<Vec<ModuleInfo>>,
     passthrough_modules: Ctx<Vec<PassThroughModuleInfo>>,
@@ -308,6 +310,11 @@ pub async fn dispatcher(
             }
 
             for module in run_passthrough_modules {
+                if module.channel.is_none() {
+                    debug!("failed module, skipping");
+                    continue;
+                };
+
                 if let Err(e) = dispatch_module(
                     false,
                     &module,
@@ -318,7 +325,7 @@ pub async fn dispatcher(
                 )
                 .await
                 {
-                    error!("dispatching passthrough module failed: {e}");
+                    error!("dispatching passthrough module {} failed: {e}", module.name);
                 };
             }
         }
@@ -376,6 +383,7 @@ async fn dispatch_module(
                     }
                     Ok(status) => match status {
                         Inactive | Stoned | NotAMember => failed = true,
+                        // kasownik, and - by extension - the board, has authority on who is an active member
                         Active(_) => (),
                     },
                 }
@@ -462,10 +470,191 @@ pub fn init_modules(mx: &Client, config: &Config) -> anyhow::Result<EventHandler
         };
     }
 
+    match core_starter(config, modules.clone(), passthrough_modules.clone()) {
+        Err(e) => error!("core modules module initialization failed fatally: {e}"),
+        Ok(m) => modules.extend(m),
+    };
+
     mx.add_event_handler_context(klacz);
     mx.add_event_handler_context(config.clone());
     mx.add_event_handler_context(modules);
     mx.add_event_handler_context(passthrough_modules);
 
     Ok(mx.add_event_handler(dispatcher))
+}
+
+pub(crate) fn core_starter(
+    config: &Config,
+    mut registered_modules: Vec<ModuleInfo>,
+    registered_passthrough_modules: Vec<PassThroughModuleInfo>,
+) -> anyhow::Result<Vec<ModuleInfo>> {
+    info!("registering modules");
+    let mut modules: Vec<ModuleInfo> = vec![];
+
+    let (help_tx, help_rx) = mpsc::channel::<ConsumerEvent>(1);
+    let at = ModuleInfo {
+        name: "help".s(),
+        help: "get help about the bot or its basic functions".s(),
+        acl: vec![],
+        trigger: TriggerType::Keyword(vec!["help".s(), "status".s()]),
+        channel: Some(help_tx),
+    };
+    modules.push(at);
+
+    registered_modules.extend(modules.clone());
+    tokio::task::spawn(help_consumer(
+        help_rx,
+        registered_modules,
+        registered_passthrough_modules,
+    ));
+
+    Ok(modules)
+}
+
+async fn help_consumer(
+    mut rx: mpsc::Receiver<ConsumerEvent>,
+    registered_modules: Vec<ModuleInfo>,
+    registered_passthrough_modules: Vec<PassThroughModuleInfo>,
+) -> anyhow::Result<()> {
+    loop {
+        let event = match rx.recv().await {
+            Some(e) => e,
+            None => {
+                error!("channel closed, goodbye! :(");
+                bail!("channel closed");
+            }
+        };
+
+        if let Err(e) = help_processor(
+            event.clone(),
+            registered_modules.clone(),
+            registered_passthrough_modules.clone(),
+        )
+        .await
+        {
+            if let Err(e) = event
+                .room
+                .send(RoomMessageEventContent::text_plain(format!(
+                    "error getting wolfram response: {e}"
+                )))
+                .await
+            {
+                error!("error while sending wolfram response: {e}");
+            };
+        }
+    }
+}
+
+async fn help_processor(
+    event: ConsumerEvent,
+    registered_modules: Vec<ModuleInfo>,
+    registered_passthrough_modules: Vec<PassThroughModuleInfo>,
+) -> anyhow::Result<()> {
+    let generic_help = {
+        let modules_num = registered_modules.len();
+        let passthrough_num = registered_passthrough_modules.len();
+        let failed_num = registered_modules
+            .iter()
+            .filter(|x| x.channel.is_none())
+            .count();
+        let passthrough_failed_num = registered_passthrough_modules
+            .iter()
+            .filter(|x| x.0.channel.is_none())
+            .count();
+        let failed_mod_str = match failed_num {
+            0 => String::new(),
+            _ => format!(", of which {failed_num} did not initialize correctly"),
+        };
+        let failed_passthrough_str = match passthrough_failed_num {
+            0 => String::new(),
+            _ => format!(", of which {passthrough_failed_num} did not initialize correctly"),
+        };
+        let m_plural = if modules_num != 1 { "s" } else { "" };
+        let p_plural = if passthrough_num != 1 { "s" } else { "" };
+        let plain = format!(
+            r#"this is the notbot module; source {source_url}
+there are currently {modules_num} module{m_plural} registered{failed_mod_str}{maybe_newline} {passthrough_num} passthrough module{p_plural} registered{failed_passthrough_str}<br />
+call «list-modules» to get a list of modules, or «help <module name>» for brief description of the module function
+documentation is WIP
+contact {mx_contact} or {fedi_contact} if you need more help"#,
+            maybe_newline = if failed_num == 0 {
+                ", and "
+            } else {
+                "\nthere are currently "
+            },
+            source_url = ": https://code.hackerspace.pl/ar/notbot",
+            mx_contact = "matrix: @ar:is-a.cat",
+            fedi_contact = "fedi: @ar@is-a.cat",
+        );
+        let html = format!(
+            r#"this is the notbot module; source {source_url}<br />
+there are currently {modules_num} module{m_plural} registered{failed_mod_str}{maybe_newline} {passthrough_num} passthrough module{p_plural} registered{failed_passthrough_str}<br />
+call «list-modules» to get a list of modules, or «help <module name>» for brief description of the module function<br />
+documentation is WIP<br />
+contact {mx_contact} or {fedi_contact} if you need more help"#,
+            maybe_newline = if failed_num == 0 {
+                ", and "
+            } else {
+                "<br />\nthere are currently "
+            },
+            source_url = r#"is <a href="https://code.hackerspace.pl/ar/notbot">here</a>"#,
+            mx_contact = r#"<a href="https://matrix.to/#/@ar:is-a.cat">@ar:is-a.cat</a>"#,
+            fedi_contact = r#"<a href="https://is-a.cat/@ar">@ar@is-a.cat</a>"#,
+        );
+
+        RoomMessageEventContent::text_html(plain, html)
+    };
+
+    let Some(args) = event.args else {
+        event.room.send(generic_help).await?;
+        return Ok(());
+    };
+
+    let mut argv = args.split_whitespace();
+    let Some(maybe_module_name) = argv.next() else {
+        event.room.send(generic_help).await?;
+        return Ok(());
+    };
+
+    let mut specific_response: Option<RoomMessageEventContent> = None;
+    for module in registered_modules {
+        if module.name == maybe_module_name {
+            let response = format!(
+                r#"module {name} is {status}; help: {help}"#,
+                name = module.name,
+                help = module.help,
+                status = if module.channel.is_some() {
+                    "running"
+                } else {
+                    "failed"
+                },
+            );
+            specific_response = Some(RoomMessageEventContent::text_plain(response));
+            break;
+        };
+    }
+
+    for module in registered_passthrough_modules {
+        if module.0.name == maybe_module_name {
+            let response = format!(
+                r#"module {name} is {status}; help: {help}"#,
+                name = module.0.name,
+                help = module.0.help,
+                status = if module.0.channel.is_some() {
+                    "running"
+                } else {
+                    "failed"
+                },
+            );
+            specific_response = Some(RoomMessageEventContent::text_plain(response));
+            break;
+        };
+    }
+
+    if let Some(response) = specific_response {
+        event.room.send(response).await?;
+    } else {
+        event.room.send(generic_help).await?;
+    };
+    Ok(())
 }
