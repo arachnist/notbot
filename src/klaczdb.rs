@@ -435,7 +435,7 @@ impl fmt::Display for KlaczError {
 #[derive(Clone, Deserialize)]
 pub struct ModuleConfig {}
 
-pub(crate) fn starter(mx: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
+pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
     info!("registering modules");
     let mut modules: Vec<ModuleInfo> = vec![];
 
@@ -493,7 +493,7 @@ async fn add_consumer(
     }
 }
 
-async fn add(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
+async fn add(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
     let Some(body) = event.args else {
         event
             .room
@@ -549,7 +549,7 @@ async fn remove_consumer(
             }
         };
 
-        if let Err(e) = add(event.clone(), config.clone()).await {
+        if let Err(e) = remove(event.clone(), config.clone()).await {
             if let Err(e) = event
                 .room
                 .send(RoomMessageEventContent::text_plain(format!(
@@ -563,7 +563,7 @@ async fn remove_consumer(
     }
 }
 
-async fn remove(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
+async fn remove(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
     let Some(body) = event.args else {
         event
             .room

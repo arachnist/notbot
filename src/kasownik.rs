@@ -4,13 +4,14 @@ use crate::notbottime::NotBotTime;
 
 #[derive(Clone, Deserialize)]
 pub struct ModuleConfig {
+    #[allow(dead_code)]
     pub url_template: String,
     pub nag_channels: Vec<String>,
     pub nag_late_fees: i64,
     pub due_others_allowed: Vec<String>,
 }
 
-pub(crate) fn starter(mx: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
+pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
     info!("registering modules");
     let mut modules: Vec<ModuleInfo> = vec![];
 
@@ -68,7 +69,7 @@ async fn due_consumer(
     }
 }
 
-async fn due(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
+async fn due(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
     use MembershipStatus::*;
 
     if event.args.is_none() {
@@ -112,9 +113,7 @@ async fn due(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
         candidate.unwrap()
     };
 
-    let status = membership_status(target.clone()).await?;
     let member = target.localpart();
-
     let response = match membership_status(target.clone()).await? {
         NotAMember => "not a member".s(),
         Stoned => "stoned".s(),
@@ -164,12 +163,8 @@ async fn due_me_consumer(
     }
 }
 
-async fn new_due_me(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
+async fn new_due_me(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
     use MembershipStatus::*;
-
-    let sender = event.sender.clone();
-    let status = membership_status(sender.clone()).await?;
-    let member = sender.localpart();
 
     let response = match membership_status(event.sender).await? {
         NotAMember => "not a member".s(),
@@ -192,7 +187,7 @@ async fn new_due_me(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Resul
 }
 
 pub(crate) fn passthrough(
-    mx: &Client,
+    _: &Client,
     config: &Config,
 ) -> anyhow::Result<Vec<PassThroughModuleInfo>> {
     info!("registering passthrough modules");

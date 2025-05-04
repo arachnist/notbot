@@ -1,7 +1,4 @@
-#![allow(dead_code, unused_variables)]
-
 mod botmanager;
-mod commands;
 mod config;
 mod db;
 mod metrics;

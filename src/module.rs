@@ -93,7 +93,7 @@ pub enum Consumption {
 pub async fn dispatcher(
     ev: OriginalSyncRoomMessageEvent,
     room: Room,
-    mx: Client,
+    _mx: Client,
     config: Ctx<Config>,
     modules: Ctx<Vec<ModuleInfo>>,
     passthrough_modules: Ctx<Vec<PassThroughModuleInfo>>,
@@ -264,7 +264,6 @@ pub async fn dispatcher(
             true,
             &module,
             klacz_level,
-            ev.clone(),
             sender.clone(),
             room.clone(),
             consumer_event.clone(),
@@ -285,7 +284,7 @@ pub async fn dispatcher(
             for module in passthrough_modules.iter() {
                 // we're in passthrough already, so we don't
                 match module.0.trigger {
-                    Keyword(ref keywords) => {
+                    Keyword(_) => {
                         // handle that on init?
                         error!("can't have keyword modules in passthrough!");
                         continue;
@@ -312,7 +311,6 @@ pub async fn dispatcher(
                     false,
                     &module,
                     klacz_level,
-                    ev.clone(),
                     sender.clone(),
                     room.clone(),
                     consumer_event.clone(),
@@ -335,7 +333,6 @@ async fn dispatch_module(
     general: bool,
     module: &ModuleInfo,
     klacz_level: i64,
-    ev: OriginalSyncRoomMessageEvent,
     sender: OwnedUserId,
     room: Room,
     consumer_event: ConsumerEvent,
@@ -429,14 +426,8 @@ async fn dispatch_module(
     Ok(())
 }
 
-pub type ModuleStarter = fn(&Client, &Config) -> anyhow::Result<Vec<ModuleInfo>>;
-pub type PassthroughModuleStarter =
-    fn(&Client, &Config) -> anyhow::Result<Vec<PassThroughModuleInfo>>;
-
 pub fn init_modules(mx: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
     let klacz = KlaczDB { handle: "main" };
-    let module_starters: Vec<Box<ModuleStarter>> = vec![];
-    let passthrough_module_starters: Vec<Box<PassthroughModuleStarter>> = vec![];
     let mut modules: Vec<ModuleInfo> = vec![];
     let mut passthrough_modules: Vec<PassThroughModuleInfo> = vec![];
 

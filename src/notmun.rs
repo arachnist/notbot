@@ -23,7 +23,7 @@ pub(crate) fn modules() -> Vec<ModuleStarter> {
 
 pub(crate) fn start_generic_dispatcher(
     client: &Client,
-    config: &Config,
+    _: &Config,
 ) -> anyhow::Result<EventHandlerHandle> {
     Ok(client.add_event_handler(lua_generic_dispatcher))
 }
@@ -44,10 +44,6 @@ async fn lua_generic_dispatcher(
     if client.user_id().unwrap() == event.sender() {
         return Ok(());
     };
-
-    let handle_command = lua.load(chunk! {
-        irc:HandleCommand(...)
-    });
 
     // text-like events handled elsewhere
     trace!("attempting to match event");
@@ -138,7 +134,7 @@ pub(crate) fn module_starter(client: &Client, config: &Config) -> anyhow::Result
     Ok(()) // Ok(client.add_event_handler(lua_dispatcher))
 }
 
-pub(crate) fn starter(mx: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
+pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
     info!("registering modules");
     let mut modules: Vec<ModuleInfo> = vec![];
 
@@ -185,7 +181,7 @@ async fn incoming_consumer(
     }
 }
 
-async fn processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
+async fn processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
     let target = room_name(&event.room);
     let handle_command = event.lua.load(chunk! {
         irc:HandleCommand(...)
