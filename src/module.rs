@@ -259,7 +259,7 @@ pub async fn dispatcher(
         };
     }
 
-    debug!("dispatching event to modules");
+    trace!("dispatching event to modules");
     for (_, module) in run_modules {
         if let Err(e) = dispatch_module(
             true,
@@ -271,13 +271,13 @@ pub async fn dispatcher(
         )
         .await
         {
-            error!("dispatching module failed: {e}");
+            error!("dispatching module {} failed: {e}", module.name);
         };
     }
 
     match consumption {
         Consumption::Inclusive | Consumption::Passthrough => {
-            debug!("dispatching event to modules");
+            trace!("dispatching event to passthrough modules");
             let mut run_passthrough_modules: Vec<ModuleInfo> = vec![];
 
             use TriggerType::*;

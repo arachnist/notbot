@@ -283,7 +283,7 @@ fn initialize_lua_env(lua: &Lua, global: &Table, config: &ModuleConfig) -> anyho
         "rust_db_query_wrapper",
         lua.create_async_function(
             |lua, (handle, statement, query_args): (String, String, Variadic<String>)| async move {
-                debug!(
+                trace!(
                     "in db query wrapper: {handle} | {statement} | {:#?}",
                     query_args
                 );
@@ -344,21 +344,21 @@ async fn lua_db_query(
     statement_str: &str,
     query_args: Variadic<String>,
 ) -> LuaResult<Table> {
-    debug!("aquiring client for {handle}");
+    trace!("aquiring client for {handle}");
     let client = DBPools::get_client(handle).await.into_lua_err()?;
-    debug!("preparing statement with {statement_str}");
+    trace!("preparing statement with {statement_str}");
     let statement = client.prepare(statement_str).await.into_lua_err()?;
 
-    debug!("executing query");
+    trace!("executing query");
     let results_stream = client
         .query_raw(&statement, query_args.to_vec())
         .await
         .into_lua_err()?;
-    debug!("query executed");
+    trace!("query executed");
 
     pin_mut!(results_stream);
 
-    debug!("constructing response");
+    trace!("constructing response");
     let lua_result = lua.create_table()?;
 
     while let Some(result) = results_stream.next().await {
@@ -382,7 +382,7 @@ fn lua_db_row_to_table(lua: &Lua, row: &Row) -> LuaResult<Table> {
     let lua_row: Table = lua.create_table()?;
 
     for (i, rcol) in row.columns().iter().enumerate() {
-        debug!("column type is: {:#?}", rcol.type_());
+        trace!("column type is: {:#?}", rcol.type_());
         // lua_row.set(rcol.name(), row.get::<usize, >(i))?,
         match rcol.type_().to_owned() {
             Type::INT8 => lua_row.set(rcol.name(), row.get::<usize, i64>(i))?,
