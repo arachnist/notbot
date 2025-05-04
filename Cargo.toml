@@ -24,6 +24,7 @@ console-subscriber = "0.4.1"
 convert_case = { version = "0.8.0", features = ["random"] }
 crc32fast = "1.4.2"
 deadpool-postgres = { version = "0.14.1", features = ["serde", "rt_tokio_1"] }
+expiringmap = "0.1.2"
 futures = "0.3.31"
 http = "1.3.1"
 http-body-util = { version = "0.1.3", features = ["full"] }

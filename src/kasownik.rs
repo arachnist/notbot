@@ -101,7 +101,7 @@ async fn due(
             let data = response.json::<Kasownik>().await?;
 
             if data.status != "ok" {
-                bail!("No such member.".to_string());
+                bail!("No such member.");
             };
 
             let response = match data.content.as_i64() {

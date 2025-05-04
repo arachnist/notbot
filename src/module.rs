@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::klaczdb::KlaczDB;
+use crate::tools::{get_room_name, membership_status};
 
 use lazy_static::lazy_static;
 use prometheus::{opts, register_int_counter_vec, IntCounterVec};
@@ -38,7 +39,7 @@ pub type ConsumerEvent = (
 pub struct ModuleInfo {
     pub name: String,
     pub help: String,
-    pub acl: ACL,
+    pub acl: Vec<Acl>,
     pub trigger: TriggerType,
     pub channel: mpsc::Sender<ConsumerEvent>,
 }
@@ -61,12 +62,12 @@ pub enum TriggerType {
 }
 
 #[derive(Clone)]
-pub enum ACL {
-    HswawMember,
-    ActiveMember,
+pub enum Acl {
+    ActiveHswawMember,
+    MaybeInactiveHswawMember,
+    Room(Vec<String>),
     KlaczLevel(i64),
     Homeserver(Vec<String>),
-    None,
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
@@ -170,7 +171,7 @@ pub(crate) async fn dispatch(
         keyword.clone(),
         remainder,
     );
-    trace!("consumer event: {consumer_event:#?}");
+    // trace!("consumer event: {consumer_event:#?}");
 
     let mut run_modules: Vec<(Consumption, ModuleInfo)> = vec![];
     let mut consumption = Inclusive;
@@ -229,7 +230,7 @@ pub(crate) async fn dispatch(
         };
     }
 
-    trace!("dispatching event to modules");
+    debug!("dispatching event to modules");
     for (_, module) in run_modules {
         if let Err(e) = dispatch_module(
             true,
@@ -248,7 +249,7 @@ pub(crate) async fn dispatch(
 
     match consumption {
         Consumption::Inclusive | Consumption::Passthrough => {
-            debug!("running passthrough modules");
+            debug!("dispatching event to modules");
             let mut run_passthrough_modules: Vec<ModuleInfo> = vec![];
 
             use TriggerType::*;
@@ -305,34 +306,69 @@ async fn dispatch_module(
     room: Room,
     consumer_event: ConsumerEvent,
 ) -> anyhow::Result<()> {
-    use ACL::*;
+    use Acl::*;
 
-    match &module.acl {
-        None => (),
-        KlaczLevel(required) => {
-            if required < &klacz_level {
-                if general {
-                    room.send(RoomMessageEventContent::text_plain(
-                        "I'm sorry Dave, I'm afraid I can't do that",
-                    ))
-                    .await?;
-                };
-                return Ok(());
+    let mut failed = false;
+
+    for acl in &module.acl {
+        match acl {
+            KlaczLevel(required) => {
+                if required < &klacz_level {
+                    failed = true;
+                }
             }
-        }
-        Homeserver(homeservers) => {
-            if !homeservers.contains(&sender.server_name().to_string()) {
-                if general {
-                    room.send(RoomMessageEventContent::text_plain(
-                        "I'm sorry Dave, I'm afraid I can't do that",
-                    ))
-                    .await?;
-                };
-                return Ok(());
+            Homeserver(homeservers) => {
+                if !homeservers.contains(&sender.clone().server_name().to_string()) {
+                    failed = true;
+                }
             }
+            Room(rooms) => {
+                let name = get_room_name(&room);
+                if !rooms.contains(&name) {
+                    failed = true;
+                }
+            }
+            ActiveHswawMember => {
+                use crate::tools::MembershipStatus::*;
+                match membership_status(sender.clone()).await {
+                    Err(e) => {
+                        error!("checking membership for {sender} failed: {e}");
+                        failed = true;
+                    }
+                    Ok(status) => match status {
+                        Inactive | Stoned | NotAMember => failed = true,
+                        Active(_) => (),
+                    },
+                }
+            }
+            MaybeInactiveHswawMember => {
+                use crate::tools::MembershipStatus::*;
+                match membership_status(sender.clone()).await {
+                    Err(e) => {
+                        error!("checking membership for {sender} failed: {e}");
+                        failed = true;
+                    }
+                    Ok(status) => match status {
+                        Stoned | NotAMember => failed = true,
+                        Inactive | Active(_) => (),
+                    },
+                }
+            }
+        };
+
+        if failed {
+            break;
         }
-        // implement hswaw-specific ACLs in a cached way
-        _ => todo!(),
+    }
+
+    if failed {
+        if general {
+            room.send(RoomMessageEventContent::text_plain(
+                "I'm sorry Dave, I'm afraid I can't do that",
+            ))
+            .await?;
+        };
+        return Ok(());
     };
 
     let reservation = match module.channel.clone().try_reserve_owned() {
@@ -349,15 +385,15 @@ async fn dispatch_module(
     Ok(())
 }
 
-pub type module_starter = fn(&Client, &Config) -> anyhow::Result<(Vec<ModuleInfo>, Vec<String>)>;
-pub type passthrough_module_starter =
+pub type ModuleStarter = fn(&Client, &Config) -> anyhow::Result<(Vec<ModuleInfo>, Vec<String>)>;
+pub type PassthroughModuleStarter =
     fn(&Client, &Config) -> anyhow::Result<(Vec<PassThroughModuleInfo>, Vec<String>)>;
 
 pub(crate) fn init_modules(mx: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
     let klacz = KlaczDB { handle: "main" };
     // let module_starters: Vec<fn(&Client, &Config)->(Vec<ModuleInfo>, Vec<String>)> = vec![];
-    let module_starters: Vec<Box<module_starter>> = vec![];
-    let passthrough_module_starters: Vec<Box<passthrough_module_starter>> = vec![];
+    let module_starters: Vec<Box<ModuleStarter>> = vec![];
+    let passthrough_module_starters: Vec<Box<PassthroughModuleStarter>> = vec![];
     let mut live_modules: Vec<ModuleInfo> = vec![];
     let mut live_passthrough_modules: Vec<PassThroughModuleInfo> = vec![];
     let mut failed_modules: Vec<String> = vec![];

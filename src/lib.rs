@@ -5,9 +5,9 @@ mod commands;
 mod config;
 mod db;
 mod metrics;
+mod module;
 mod tools;
 mod webterface;
-mod module;
 
 pub use crate::botmanager::BotManager;
 pub mod prelude;
@@ -78,6 +78,10 @@ pub(crate) fn init_modules(
         commands::modules,
         sage::modules,
         klaczdb::modules,
+        || {
+            let v: Vec<ModuleStarter> = vec![("new dispatcher", crate::module::init_modules)];
+            v
+        },
     ] {
         register_modules(mx, config, &mut modules, &mut failed, initializer());
     }

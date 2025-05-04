@@ -44,7 +44,7 @@ struct ConfigInner {
     device_id: String,
     #[allow(dead_code)]
     module: Table,
-    prefixes: Vec<String>
+    prefixes: Vec<String>,
 }
 
 impl TryFrom<String> for ConfigInner {
