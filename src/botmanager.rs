@@ -152,8 +152,21 @@ impl BotManager {
 
         client.add_event_handler_context(klacz);
 
-        let (modules, _) = crate::init_modules(&client, &config, &Default::default());
+        let (mut modules, _) = crate::init_modules(&client, &config, &Default::default());
         let (workers, _) = crate::init_workers(&client, &config, &Default::default());
+
+        match crate::module::init_modules(&client, &config) {
+            Ok(handle) => {
+                modules.insert(
+                    "new-dispatcher".to_string(),
+                    Module {
+                        handle: Some(handle),
+                        starter: |mx, cfg| crate::module::init_modules(mx, cfg),
+                    },
+                );
+            }
+            Err(e) => error!("new event handler failed: {e}"),
+        }
 
         let (tx, _) = channel::<Room>(1);
         let tx2 = tx.clone();
