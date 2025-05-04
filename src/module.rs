@@ -6,7 +6,7 @@ use crate::tools::{membership_status, room_name};
 
 use lazy_static::lazy_static;
 use prometheus::{opts, register_int_counter_vec, IntCounterVec};
-use tracing::{debug, error, trace};
+use tracing::{debug, error, info, trace};
 
 use matrix_sdk::event_handler::{Ctx, EventHandlerHandle};
 use matrix_sdk::ruma::events::room::message::{
@@ -90,6 +90,7 @@ pub enum Consumption {
     Exclusive,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn dispatcher(
     ev: OriginalSyncRoomMessageEvent,
     room: Room,
@@ -434,7 +435,7 @@ pub fn init_modules(mx: &Client, config: &Config) -> anyhow::Result<EventHandler
     // start moving notmun to becoming a 1st-class citizen
     match crate::notmun::module_starter(mx, config) {
         Err(e) => error!("failed initializing notmun: {e}"),
-        Ok(()) => (),
+        Ok(()) => info!("initialized notmun"),
     };
 
     for starter in [
@@ -453,6 +454,7 @@ pub fn init_modules(mx: &Client, config: &Config) -> anyhow::Result<EventHandler
         };
     }
 
+    #[allow(clippy::single_element_loop)]
     for starter in [crate::kasownik::passthrough] {
         match starter(mx, config) {
             Err(e) => error!("module initialization failed fatally: {e}"),

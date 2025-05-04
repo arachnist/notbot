@@ -75,9 +75,9 @@ async fn due(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
     if event.args.is_none() {
         event
             .room
-            .send(RoomMessageEventContent::text_plain(format!(
-                "missing argument: member"
-            )))
+            .send(RoomMessageEventContent::text_plain(
+                "missing argument: member".s(),
+            ))
             .await?;
     };
 
@@ -103,9 +103,9 @@ async fn due(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
         if candidate.is_none() {
             event
                 .room
-                .send(RoomMessageEventContent::text_plain(format!(
-                    "member argument missing or couldn't parse"
-                )))
+                .send(RoomMessageEventContent::text_plain(
+                    "member argument missing or couldn't parse".s(),
+                ))
                 .await?;
             return Ok(());
         };
@@ -172,8 +172,8 @@ async fn new_due_me(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()>
         Inactive => "not currently a member".s(),
         Active(months) => match months {
             i64::MIN..0 => format!("{} months ahead. Cool!", 0 - months),
-            0 => format!("paid all membership fees."),
-            1 => format!("need to pay one membership fee."),
+            0 => "paid all membership fees.".s(),
+            1 => "need to pay one membership fee.".s(),
             2..=i64::MAX => format!("need to pay {months} membership fees."),
         },
     };
