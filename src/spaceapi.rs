@@ -16,50 +16,75 @@ lazy_static! {
     .unwrap();
 }
 
-pub(crate) fn modules() -> Vec<ModuleStarter> {
-    vec![(module_path!(), module_starter)]
-}
-
 pub(crate) fn workers() -> Vec<WorkerStarter> {
     vec![(module_path!(), worker_starter)]
 }
 
-fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
-    let command_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
-    Ok(client.add_event_handler(move |ev, room| {
-        simple_command_wrapper(ev, room, command_config, vec![".at".to_string()], at)
-    }))
+pub(crate) fn starter(mx: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
+    let mut modules: Vec<ModuleInfo> = vec![];
+
+    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+
+    let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
+    tokio::task::spawn(at(rx, module_config));
+    let at = ModuleInfo {
+        name: "at".s(),
+        help: "see who is present at the hackerspace".s(),
+        acl: vec![],
+        trigger: TriggerType::Keyword(vec!["at".s()]),
+        channel: Some(tx),
+    };
+    modules.push(at);
+
+    Ok(modules)
 }
 
-async fn at(
-    room: Room,
-    _sender: OwnedUserId,
-    _keyword: String,
-    _argv: Vec<String>,
-    config: ModuleConfig,
-) -> anyhow::Result<String> {
-    CHECKINATOR_CALLS.inc();
+async fn at(mut rx: mpsc::Receiver<ConsumerEvent>, config: ModuleConfig) -> anyhow::Result<()> {
+    loop {
+        let event = match rx.recv().await {
+            Some(e) => e,
+            None => {
+                error!("channel closed, goodbye! :(");
+                bail!("channel closed");
+            }
+        };
 
-    let room_name = get_room_name(&room);
+        match async {
+            let room_name = get_room_name(&event.room);
 
-    let url = match config.room_map.get(&room_name) {
-        Some(url) => url,
-        None => {
-            debug!("no spaceapi url found, using default");
-            match config.room_map.get("default") {
-                None => bail!("no spaceapi url found"),
-                Some(u) => u,
+            let url = match config.room_map.get(&room_name) {
+                Some(url) => url,
+                None => {
+                    debug!("no spaceapi url found, using default");
+                    match config.room_map.get("default") {
+                        None => bail!("no spaceapi url found"),
+                        Some(u) => u,
+                    }
+                }
+            };
+
+            let data = fetch_and_decode_json::<SpaceAPI>(url.to_owned()).await?;
+            let present: Vec<String> = names_dehighlighted(data.sensors.people_now_present);
+
+            if present.is_empty() {
+                Ok(config.empty_response.clone())
+            } else {
+                Ok(present.join(", "))
             }
         }
-    };
-
-    let data = fetch_and_decode_json::<SpaceAPI>(url.to_owned()).await?;
-    let present: Vec<String> = names_dehighlighted(data.sensors.people_now_present);
-
-    if present.is_empty() {
-        Ok(config.empty_response)
-    } else {
-        Ok(present.join(", "))
+        .await
+        {
+            Ok(r) => {
+                if let Err(e) = event
+                    .room
+                    .send(RoomMessageEventContent::text_plain(r))
+                    .await
+                {
+                    error!("error while sending presence update: {e}");
+                };
+            }
+            _ => todo!(""),
+        }
     }
 }
 

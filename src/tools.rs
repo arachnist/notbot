@@ -110,6 +110,13 @@ pub struct Kasownik {
     pub modified: String,
 }
 
+pub trait ToStringExt: ToString {
+    fn s(&self) -> String {
+        self.to_string()
+    }
+}
+impl<T> ToStringExt for T where T: ToString {}
+
 pub mod sync {
     use reqwest::blocking::Client as RClient;
     use serde::de;

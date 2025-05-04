@@ -26,22 +26,23 @@ lazy_static! {
     .unwrap();
 }
 
-pub type ConsumerEvent = (
-    i64, // klacz level
-    OriginalSyncRoomMessageEvent,
-    OwnedUserId,
-    Room,
-    String,
-    Option<String>,
-);
-
 #[derive(Clone)]
+pub struct ConsumerEvent {
+    pub klacz_level: i64, // klacz level
+    pub ev: OriginalSyncRoomMessageEvent,
+    pub sender: OwnedUserId,
+    pub room: Room,
+    pub keyword: String,
+    pub args: Option<String>,
+}
+
+#[derive(Clone, Debug)]
 pub struct ModuleInfo {
     pub name: String,
     pub help: String,
     pub acl: Vec<Acl>,
     pub trigger: TriggerType,
-    pub channel: mpsc::Sender<ConsumerEvent>,
+    pub channel: Option<mpsc::Sender<ConsumerEvent>>,
 }
 
 // distinct from generic ModuleInfo for legal purposes only
@@ -55,22 +56,23 @@ pub type CatchallDecider = fn(
     content: &RoomMessageEventContent,
 ) -> anyhow::Result<Consumption>;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum TriggerType {
     Keyword(Vec<String>),
     Catchall(CatchallDecider),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Acl {
     ActiveHswawMember,
     MaybeInactiveHswawMember,
+    SpecificUsers(Vec<String>),
     Room(Vec<String>),
     KlaczLevel(i64),
     Homeserver(Vec<String>),
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Debug)]
 pub enum Consumption {
     // module doesn't want this event
     Reject,
@@ -80,7 +82,7 @@ pub enum Consumption {
     Exclusive,
 }
 
-pub(crate) async fn dispatch(
+pub async fn dispatch(
     ev: OriginalSyncRoomMessageEvent,
     room: Room,
     mx: Client,
@@ -163,14 +165,14 @@ pub(crate) async fn dispatch(
         }
     };
 
-    let consumer_event: ConsumerEvent = (
+    let consumer_event = ConsumerEvent {
         klacz_level,
-        ev.clone(),
-        sender.clone(),
-        room.clone(),
-        keyword.clone(),
-        remainder,
-    );
+        ev: ev.clone(),
+        sender: sender.clone(),
+        room: room.clone(),
+        keyword: keyword.clone(),
+        args: remainder,
+    };
     // trace!("consumer event: {consumer_event:#?}");
 
     let mut run_modules: Vec<(Consumption, ModuleInfo)> = vec![];
@@ -179,15 +181,22 @@ pub(crate) async fn dispatch(
     // go through all the modules first to figure out consumption priority
     trace!("figuring out event consumption priority");
     for module in modules.iter() {
+        trace!("considering module: {}", module.name);
         use TriggerType::*;
+
+        if module.channel.is_none() {
+            debug!("failed module, skipping");
+            continue;
+        };
 
         let module_consumption: Consumption = match module.trigger {
             Keyword(ref keywords) => {
                 if !keyword.is_empty() && keywords.contains(&keyword) {
-                    continue;
-                };
-
-                Exclusive
+                    Exclusive
+                } else {
+                    trace!("\"{keyword}\" doesn't match any keyword: {keywords:?}");
+                    Reject
+                }
             }
             Catchall(fun) => match fun(klacz_level, sender.clone(), &room, &ev.content) {
                 Err(e) => {
@@ -199,6 +208,7 @@ pub(crate) async fn dispatch(
             },
         };
 
+        trace!("checking consumption: {module_consumption:?}");
         // while technically there might be a situation where multiple modules would have a chance to return with
         // exclusive consumption, i don't think there's a better solution than running just the first one found
         match module_consumption {
@@ -220,13 +230,7 @@ pub(crate) async fn dispatch(
                     run_modules.push((module_consumption, module.clone()));
                 }
             }
-            Reject => {
-                error!(
-                    "module {} somehow returned Reject consumption without skipping the loop",
-                    module.name
-                );
-                continue;
-            }
+            Reject => continue,
         };
     }
 
@@ -306,6 +310,7 @@ async fn dispatch_module(
     room: Room,
     consumer_event: ConsumerEvent,
 ) -> anyhow::Result<()> {
+    trace!("dispatching module: {}", module.name);
     use Acl::*;
 
     let mut failed = false;
@@ -325,6 +330,11 @@ async fn dispatch_module(
             Room(rooms) => {
                 let name = get_room_name(&room);
                 if !rooms.contains(&name) {
+                    failed = true;
+                }
+            }
+            SpecificUsers(users) => {
+                if !users.contains(&sender.to_string()) {
                     failed = true;
                 }
             }
@@ -371,7 +381,8 @@ async fn dispatch_module(
         return Ok(());
     };
 
-    let reservation = match module.channel.clone().try_reserve_owned() {
+    // .unwrap() is safe here because star
+    let reservation = match module.channel.clone().unwrap().try_reserve_owned() {
         Ok(r) => r,
         Err(e) => {
             error!("module channel can't accept message: {e}");
@@ -385,46 +396,35 @@ async fn dispatch_module(
     Ok(())
 }
 
-pub type ModuleStarter = fn(&Client, &Config) -> anyhow::Result<(Vec<ModuleInfo>, Vec<String>)>;
+pub type ModuleStarter = fn(&Client, &Config) -> anyhow::Result<Vec<ModuleInfo>>;
 pub type PassthroughModuleStarter =
-    fn(&Client, &Config) -> anyhow::Result<(Vec<PassThroughModuleInfo>, Vec<String>)>;
+    fn(&Client, &Config) -> anyhow::Result<Vec<PassThroughModuleInfo>>;
 
-pub(crate) fn init_modules(mx: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
+pub fn init_modules(mx: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
     let klacz = KlaczDB { handle: "main" };
-    // let module_starters: Vec<fn(&Client, &Config)->(Vec<ModuleInfo>, Vec<String>)> = vec![];
     let module_starters: Vec<Box<ModuleStarter>> = vec![];
     let passthrough_module_starters: Vec<Box<PassthroughModuleStarter>> = vec![];
-    let mut live_modules: Vec<ModuleInfo> = vec![];
-    let mut live_passthrough_modules: Vec<PassThroughModuleInfo> = vec![];
-    let mut failed_modules: Vec<String> = vec![];
-    let mut failed_passthrough_modules: Vec<String> = vec![];
+    let mut modules: Vec<ModuleInfo> = vec![];
+    let mut passthrough_modules: Vec<PassThroughModuleInfo> = vec![];
 
-    // hmm: for fn() -> Vec<fn() -> ModuleInfo> in [ hardcoded list ]
-    // hmm: for … in Vec<fn(mx, config) -> (Vec<ModuleInfo>, Vec<String>)>
-    for starter in module_starters {
+    for starter in [crate::spaceapi::starter] {
         match starter(mx, config) {
-            Err(e) => error!("module initialization failed: {e}"),
-            Ok((m, f)) => {
-                live_modules.extend(m);
-                failed_modules.extend(f);
-            }
+            Err(e) => error!("module initialization failed fatally: {e}"),
+            Ok(m) => modules.extend(m),
         };
     }
 
     for starter in passthrough_module_starters {
         match starter(mx, config) {
-            Err(e) => error!("module initialization failed: {e}"),
-            Ok((m, f)) => {
-                live_passthrough_modules.extend(m);
-                failed_passthrough_modules.extend(f);
-            }
+            Err(e) => error!("module initialization failed fatally: {e}"),
+            Ok(m) => passthrough_modules.extend(m),
         };
     }
 
     mx.add_event_handler_context(klacz);
     mx.add_event_handler_context(config.clone());
-    mx.add_event_handler_context(live_modules);
-    mx.add_event_handler_context(live_passthrough_modules);
+    mx.add_event_handler_context(modules);
+    mx.add_event_handler_context(passthrough_modules);
 
     Ok(mx.add_event_handler(dispatch))
 }

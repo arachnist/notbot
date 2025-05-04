@@ -72,7 +72,6 @@ pub(crate) fn init_modules(
         inviter::modules,
         kasownik::modules,
         notmun::modules,
-        spaceapi::modules,
         wolfram::modules,
         shenanigans::modules,
         commands::modules,

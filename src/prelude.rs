@@ -5,6 +5,7 @@ pub use crate::commands::simple_command_wrapper;
 pub use crate::db::{DBError, DBPools};
 
 pub use crate::botmanager::{Module, ModuleStarter, Worker, WorkerStarter};
+pub use crate::module::{ConsumerEvent, ModuleInfo, TriggerType};
 pub use crate::webterface::{OauthUserInfo, WebAppState};
 
 pub use crate::klaczdb::{KlaczClass, KlaczDB, KlaczError};
@@ -40,6 +41,7 @@ pub use matrix_sdk::ruma::{OwnedEventId, OwnedRoomAliasId, OwnedRoomId, OwnedUse
 pub use matrix_sdk::{Client, Room, RoomState};
 
 pub use reqwest::Client as RClient;
+pub use tokio::sync::mpsc;
 
 pub use tracing::{debug, error, info, trace, warn};
 
