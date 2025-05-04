@@ -2583,7 +2583,7 @@ dependencies = [
 
 [[package]]
 name = "notbot"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "axum 0.8.3",
