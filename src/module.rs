@@ -7,6 +7,7 @@ use crate::tools::{membership_status, room_name, ToStringExt};
 use anyhow::bail;
 use lazy_static::lazy_static;
 use prometheus::{opts, register_int_counter_vec, IntCounterVec};
+use rand::seq::IndexedRandom;
 use tracing::{debug, error, info, trace};
 
 use matrix_sdk::event_handler::{Ctx, EventHandlerHandle};
@@ -264,6 +265,7 @@ pub async fn dispatcher(
     trace!("dispatching event to modules");
     for (_, module) in run_modules {
         if let Err(e) = dispatch_module(
+            config.clone(),
             true,
             &module,
             klacz_level,
@@ -316,6 +318,7 @@ pub async fn dispatcher(
                 };
 
                 if let Err(e) = dispatch_module(
+                    config.clone(),
                     false,
                     &module,
                     klacz_level,
@@ -338,6 +341,7 @@ pub async fn dispatcher(
 }
 
 async fn dispatch_module(
+    config: Config,
     general: bool,
     module: &ModuleInfo,
     klacz_level: i64,
@@ -411,8 +415,9 @@ async fn dispatch_module(
 
     if failed {
         if general {
+            let response = config.acl_deny().choose(&mut rand::rng()).unwrap().to_owned();
             room.send(RoomMessageEventContent::text_plain(
-                "I'm sorry Dave, I'm afraid I can't do that",
+                response
             ))
             .await?;
         };
@@ -469,7 +474,7 @@ pub fn init_modules(mx: &Client, config: &Config) -> anyhow::Result<EventHandler
         };
     }
 
-    match core_starter(modules.clone(), passthrough_modules.clone()) {
+    match core_starter(config, modules.clone(), passthrough_modules.clone()) {
         Err(e) => error!("core modules module initialization failed fatally: {e}"),
         Ok(m) => modules.extend(m),
     };
@@ -483,6 +488,7 @@ pub fn init_modules(mx: &Client, config: &Config) -> anyhow::Result<EventHandler
 }
 
 pub(crate) fn core_starter(
+    config: &Config,
     mut registered_modules: Vec<ModuleInfo>,
     registered_passthrough_modules: Vec<PassThroughModuleInfo>,
 ) -> anyhow::Result<Vec<ModuleInfo>> {
@@ -512,6 +518,7 @@ pub(crate) fn core_starter(
     registered_modules.extend(modules.clone());
     tokio::task::spawn(help_consumer(
         help_rx,
+        config.clone(),
         registered_modules.clone(),
         registered_passthrough_modules.clone(),
     ));
@@ -526,6 +533,7 @@ pub(crate) fn core_starter(
 
 async fn help_consumer(
     mut rx: mpsc::Receiver<ConsumerEvent>,
+    config: Config,
     registered_modules: Vec<ModuleInfo>,
     registered_passthrough_modules: Vec<PassThroughModuleInfo>,
 ) -> anyhow::Result<()> {
@@ -540,6 +548,7 @@ async fn help_consumer(
 
         if let Err(e) = help_processor(
             event.clone(),
+            config.clone(),
             registered_modules.clone(),
             registered_passthrough_modules.clone(),
         )
@@ -560,6 +569,7 @@ async fn help_consumer(
 
 async fn help_processor(
     event: ConsumerEvent,
+    config: Config,
     registered_modules: Vec<ModuleInfo>,
     registered_passthrough_modules: Vec<PassThroughModuleInfo>,
 ) -> anyhow::Result<()> {
@@ -584,8 +594,9 @@ async fn help_processor(
         };
         let m_plural = if modules_num != 1 { "s" } else { "" };
         let p_plural = if passthrough_num != 1 { "s" } else { "" };
+        let prefixes = config.prefixes();
         let plain = format!(
-            r#"this is the notbot module; source {source_url}
+            r#"this is the notbot; source {source_url}; configured prefixes: {prefixes:?}
 there are currently {modules_num} module{m_plural} registered{failed_mod_str}{maybe_newline} {passthrough_num} passthrough module{p_plural} registered{failed_passthrough_str}<br />
 call «list-modules» to get a list of modules, or «help <module name>» for brief description of the module function
 documentation is WIP
@@ -600,7 +611,7 @@ contact {mx_contact} or {fedi_contact} if you need more help"#,
             fedi_contact = "fedi: @ar@is-a.cat",
         );
         let html = format!(
-            r#"this is the notbot module; source {source_url}<br />
+            r#"this is the notbot; source {source_url}; configured prefixes: {prefixes:?}<br />
 there are currently {modules_num} module{m_plural} registered{failed_mod_str}{maybe_newline} {passthrough_num} passthrough module{p_plural} registered{failed_passthrough_str}<br />
 call «list-modules» to get a list of modules, or «help <module name>» for brief description of the module function<br />
 documentation is WIP<br />

@@ -45,6 +45,7 @@ struct ConfigInner {
     #[allow(dead_code)]
     module: Table,
     prefixes: Vec<String>,
+    acl_deny: Vec<String>,
 }
 
 impl TryFrom<String> for ConfigInner {
@@ -121,6 +122,11 @@ impl Config {
     pub fn prefixes(&self) -> Vec<String> {
         let inner = &self.inner.lock().unwrap();
         inner.prefixes.clone()
+    }
+
+    pub fn acl_deny(&self) -> Vec<String> {
+        let inner = &self.inner.lock().unwrap();
+        inner.acl_deny.clone()
     }
 
     pub(crate) fn module_config_value(&self, n: &str) -> Result<Value, ConfigError> {
