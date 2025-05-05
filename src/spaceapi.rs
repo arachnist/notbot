@@ -4,18 +4,6 @@ use tokio::task::AbortHandle;
 
 use tokio::time::{interval, Duration};
 
-use lazy_static::lazy_static;
-use prometheus::Counter;
-use prometheus::{opts, register_counter};
-
-lazy_static! {
-    static ref CHECKINATOR_CALLS: Counter = register_counter!(opts!(
-        "checkinator_calls_total",
-        "Number of times checkinator was called",
-    ))
-    .unwrap();
-}
-
 pub(crate) fn workers() -> Vec<WorkerStarter> {
     vec![(module_path!(), worker_starter)]
 }

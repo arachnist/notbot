@@ -5,10 +5,9 @@ use tokio::time::{sleep, Duration};
 use prometheus::Counter;
 use prometheus::{opts, register_counter};
 
-lazy_static! {
-    static ref ROOM_INVITES: Counter =
-        register_counter!(opts!("room_invite_events_total", "Number of room invites",)).unwrap();
-}
+static ROOM_INVITES: LazyLock<Counter> = LazyLock::new(|| {
+    register_counter!(opts!("room_invite_events_total", "Number of room invites",)).unwrap()
+});
 
 pub(crate) fn modules() -> Vec<ModuleStarter> {
     vec![(module_path!(), module_starter)]

@@ -9,17 +9,6 @@ use matrix_sdk::{
 
 use tokio::sync::mpsc::{Receiver, Sender};
 
-use prometheus::Counter;
-use prometheus::{opts, register_counter};
-
-lazy_static! {
-    static ref CONFIG_RELOADS: Counter = register_counter!(opts!(
-        "config_reloads_total",
-        "Number of DB status requests",
-    ))
-    .unwrap();
-}
-
 pub type WorkerStarter = (
     &'static str,
     fn(&Client, &Config) -> anyhow::Result<AbortHandle>,

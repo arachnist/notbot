@@ -1,21 +1,11 @@
 use crate::prelude::*;
 
-use prometheus::Counter;
-use prometheus::{opts, register_counter};
-
 use deadpool_postgres::{
     Client as DBClient, Config as PGConfig, ManagerConfig, Pool, RecyclingMethod, Runtime,
 };
 use tokio_postgres::NoTls;
 
-lazy_static! {
-    static ref DB_STATUS: Counter = register_counter!(opts!(
-        "db_status_requests_total",
-        "Number of DB status requests",
-    ))
-    .unwrap();
-    static ref DB_CONNECTIONS: DBPools = Default::default();
-}
+static DB_CONNECTIONS: LazyLock<DBPools> = LazyLock::new(Default::default);
 
 pub type DBConfig = HashMap<String, PGConfig>;
 

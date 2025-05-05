@@ -3,10 +3,10 @@ use crate::klaczdb::KlaczDB;
 use crate::tools::{membership_status, room_name, ToStringExt};
 
 use std::ops::Deref;
+use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::bail;
-use lazy_static::lazy_static;
 use prometheus::{opts, register_int_counter_vec, IntCounterVec};
 use serde_derive::Deserialize;
 use tracing::{debug, error, info, trace};
@@ -22,20 +22,20 @@ use tokio::sync::mpsc;
 
 use mlua::Lua;
 
-lazy_static! {
-    static ref MODULE_EVENTS: IntCounterVec = register_int_counter_vec!(
+static MODULE_EVENTS: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!(
         opts!(
             "module_event_counts",
             "Number of events a module has consumed"
         ),
         &["event"]
     )
-    .unwrap();
-}
+    .unwrap()
+});
 
 #[derive(Clone)]
 pub struct ConsumerEvent {
-    pub klacz_level: i64, // klacz level
+    pub klacz_level: i64,
     pub ev: OriginalSyncRoomMessageEvent,
     pub sender: OwnedUserId,
     pub room: Room,
@@ -58,7 +58,7 @@ pub struct ModuleInfo {
 #[derive(Clone)]
 pub struct PassThroughModuleInfo(pub ModuleInfo);
 
-// figure out how to pass just limited config here
+// TODO: figure out how to pass just limited config here
 pub type CatchallDecider = fn(
     klaczlevel: i64,
     sender: OwnedUserId,

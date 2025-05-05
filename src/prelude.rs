@@ -16,7 +16,7 @@ pub use crate::tools::*;
 pub use std::collections::HashMap;
 pub use std::convert::{From, TryFrom};
 pub use std::str::FromStr;
-pub use std::sync::{Arc, Mutex};
+pub use std::sync::{Arc, LazyLock, Mutex};
 pub use std::time::{Duration, Instant, SystemTime, SystemTimeError, UNIX_EPOCH};
 pub use std::{
     fs, io,
@@ -47,5 +47,3 @@ pub use tracing::{debug, error, info, trace, warn};
 
 pub use serde::de;
 pub use serde_derive::{Deserialize, Serialize};
-
-pub use lazy_static::lazy_static;
