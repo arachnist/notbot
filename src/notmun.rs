@@ -134,21 +134,21 @@ pub(crate) fn module_starter(client: &Client, config: &Config) -> anyhow::Result
     Ok(()) // Ok(client.add_event_handler(lua_dispatcher))
 }
 
-pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
+pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<PassThroughModuleInfo>> {
     info!("registering modules");
-    let mut modules: Vec<ModuleInfo> = vec![];
+    let mut modules: Vec<PassThroughModuleInfo> = vec![];
 
     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
 
     let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
     tokio::task::spawn(incoming_consumer(rx, module_config));
-    let at = ModuleInfo {
+    let at = PassThroughModuleInfo(ModuleInfo {
         name: "notmun".s(),
         help: "run mun runtime for fun and questionable profit".s(),
         acl: vec![],
         trigger: TriggerType::Catchall(|_, _, _, _, _| Ok(Consumption::Inclusive)),
         channel: Some(tx),
-    };
+    });
     modules.push(at);
 
     Ok(modules)
