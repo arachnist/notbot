@@ -354,7 +354,8 @@ async fn dispatch_module(
         trace!("checking acl: {acl:#?}");
         match acl {
             KlaczLevel(required) => {
-                if required < &klacz_level {
+                trace!("required: {required}, current: {klacz_level}");
+                if required > &klacz_level {
                     failed = true;
                 }
             }
@@ -468,7 +469,7 @@ pub fn init_modules(mx: &Client, config: &Config) -> anyhow::Result<EventHandler
         };
     }
 
-    match core_starter(config, modules.clone(), passthrough_modules.clone()) {
+    match core_starter(modules.clone(), passthrough_modules.clone()) {
         Err(e) => error!("core modules module initialization failed fatally: {e}"),
         Ok(m) => modules.extend(m),
     };
@@ -482,7 +483,6 @@ pub fn init_modules(mx: &Client, config: &Config) -> anyhow::Result<EventHandler
 }
 
 pub(crate) fn core_starter(
-    config: &Config,
     mut registered_modules: Vec<ModuleInfo>,
     registered_passthrough_modules: Vec<PassThroughModuleInfo>,
 ) -> anyhow::Result<Vec<ModuleInfo>> {
@@ -696,7 +696,7 @@ async fn list_consumer(
             .map(|x| {
                 let mut s = x.name.clone();
                 if x.channel.is_none() {
-                    s.push_str("*");
+                    s.push('*');
                     failed = true;
                 }
                 s
@@ -707,7 +707,7 @@ async fn list_consumer(
             .map(|x| {
                 let mut s = x.0.name.clone();
                 if x.0.channel.is_none() {
-                    s.push_str("*");
+                    s.push('*');
                     failed = true;
                 }
                 s
@@ -716,10 +716,10 @@ async fn list_consumer(
 
         let response = format!(
             r#"{maybe_modules}{modules_list}{maybe_newline}{maybe_passthrough}{passthrough_list}{maybe_failed}"#,
-            maybe_modules = if modules.len() > 0 { "modules: " } else { "" },
+            maybe_modules = if !modules.is_empty() { "modules: " } else { "" },
             modules_list = modules.join(", "),
-            maybe_newline = if modules.len() > 0 { "\n" } else { "" },
-            maybe_passthrough = if passthrough.len() > 0 {
+            maybe_newline = if !modules.is_empty() { "\n" } else { "" },
+            maybe_passthrough = if !passthrough.is_empty() {
                 "passthrough: "
             } else {
                 ""

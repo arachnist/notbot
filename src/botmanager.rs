@@ -70,14 +70,14 @@ impl fmt::Display for ReloadError {
                 write!(
                     fmt,
                     "{maybe_modules}{modules_list}{maybe_join}{maybe_workers}{workers_list}",
-                    maybe_modules = if modules.len() > 0 {
+                    maybe_modules = if !modules.is_empty() {
                         "failed modules: "
                     } else {
                         ""
                     },
                     modules_list = modules.join(", "),
-                    maybe_join = if modules.len() > 0 { "; " } else { "" },
-                    maybe_workers = if workers.len() > 0 {
+                    maybe_join = if !modules.is_empty() { "; " } else { "" },
+                    maybe_workers = if !workers.is_empty() {
                         "failed workers: "
                     } else {
                         ""
@@ -96,7 +96,7 @@ impl BotManagerInner {
         self.config = match Config::new(self.config_path.clone()) {
             Ok(c) => c,
             Err(e) => {
-                return Err(ConfigParseError(e).into());
+                return Err(ConfigParseError(e));
             }
         };
 
@@ -110,7 +110,7 @@ impl BotManagerInner {
                 h
             }
             Err(e) => {
-                return Err(CoreModulesFailure(e).into());
+                return Err(CoreModulesFailure(e));
             }
         };
         self.dispatcher_handle = dispatcher_handle;
@@ -122,8 +122,8 @@ impl BotManagerInner {
             crate::init_workers(&self.client, &self.config, &self.workers);
         self.workers = registered_workers;
 
-        if failed_workers.len() > 0 || failed_modules.len() > 0 {
-            return Err(SomePartsFailed(failed_modules, failed_workers).into());
+        if !failed_workers.is_empty() || !failed_modules.is_empty() {
+            return Err(SomePartsFailed(failed_modules, failed_workers));
         };
 
         Ok(())
@@ -369,16 +369,18 @@ impl BotManager {
                     error!("reload error: {e}");
                     match e {
                         ReloadError::CoreModulesFailure(e) => {
-                            room.send(RoomMessageEventContent::text_plain(format!("fatal failure: {e}")))
-                                .await?;
+                            room.send(RoomMessageEventContent::text_plain(format!(
+                                "fatal failure: {e}"
+                            )))
+                            .await?;
                             std::process::exit(1);
-                        },
+                        }
                         ReloadError::SomePartsFailed(_, _) => {
                             "configuration reloaded, but some parts failed. check logs"
-                        },
+                        }
                         ReloadError::ConfigParseError(_) => {
                             "configuration parsing error, check logs"
-                        },
+                        }
                     }
                 }
             };
