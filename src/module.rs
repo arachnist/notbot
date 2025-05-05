@@ -98,6 +98,7 @@ pub enum Consumption {
 #[allow(clippy::too_many_arguments)]
 pub async fn dispatcher(
     ev: OriginalSyncRoomMessageEvent,
+    client: Client,
     room: Room,
     config: Ctx<Config>,
     modules: Ctx<Vec<ModuleInfo>>,
@@ -109,21 +110,12 @@ pub async fn dispatcher(
 
     let sender: OwnedUserId = ev.sender.clone();
 
-    /* we tried to be fancy here, but formatted events are fancier
-    let (body, formatted) = match ev.content.msgtype {
-        MessageType::Text(ref content) => (content.body.clone(), content.formatted.clone()),
-        MessageType::Notice(ref content) => (content.body.clone(), content.formatted.clone()),
-        _ => return Ok(()),
-    };
-
-    let text = match formatted {
-        Some(content) => match content.format {
-            MessageFormat::Html => content.body,
-            _ => body,
-        },
-        None => body,
-    };
-    */
+    if config.user_id() == sender
+        || config.ignored().contains(&sender.to_string())
+        || client.user_id().unwrap() == sender
+    {
+        return Ok(());
+    }
 
     let MessageType::Text(ref content) = ev.content.msgtype else {
         return Ok(());
