@@ -49,7 +49,7 @@ async fn consumer(
                 )))
                 .await
             {
-                error!("error while sending wolfram response: {e}");
+                error!("error while sending response: {e}");
             };
         }
     }

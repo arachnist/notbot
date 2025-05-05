@@ -2604,7 +2604,6 @@ dependencies = [
  "matrix-sdk",
  "mlua",
  "prometheus",
- "rand 0.9.1",
  "reqwest 0.12.15",
  "serde",
  "serde_derive",

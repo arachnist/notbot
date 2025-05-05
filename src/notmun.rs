@@ -168,14 +168,14 @@ async fn incoming_consumer(
         };
 
         if let Err(e) = processor(event.clone(), config.clone()).await {
-            if let Err(e) = event
+            if let Err(ee) = event
                 .room
                 .send(RoomMessageEventContent::text_plain(format!(
-                    "error getting wolfram response: {e}"
+                    "error getting response: {e}"
                 )))
                 .await
             {
-                error!("error while sending wolfram response: {e}");
+                error!("error while sending response: {ee}");
             };
         }
     }

@@ -1,13 +1,13 @@
-use std::ops::Deref;
-
 use crate::config::Config;
 use crate::klaczdb::KlaczDB;
 use crate::tools::{membership_status, room_name, ToStringExt};
 
+use std::ops::Deref;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use anyhow::bail;
 use lazy_static::lazy_static;
 use prometheus::{opts, register_int_counter_vec, IntCounterVec};
-use rand::seq::IndexedRandom;
 use tracing::{debug, error, info, trace};
 
 use matrix_sdk::event_handler::{Ctx, EventHandlerHandle};
@@ -415,11 +415,22 @@ async fn dispatch_module(
 
     if failed {
         if general {
-            let response = config.acl_deny().choose(&mut rand::rng()).unwrap().to_owned();
-            room.send(RoomMessageEventContent::text_plain(
-                response
-            ))
-            .await?;
+            let mut response = "busy figuring out why time behaves weirdly";
+            let options = config.acl_deny();
+            // matrix-rust-sdk doesn't like it if we use rand::rng() here in
+            // an actually useful (producing random results) way.
+            // the trait `EventHandler<_, _>` is not implemented for fn item …
+            // so i'm doing the next best thing: milis % vector length
+            if let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) {
+                let milis = now.as_millis();
+                // FIXME: sketchy AF
+                let chosen_idx: usize = milis as usize % config.acl_deny().len();
+                if let Some(option) = options.iter().nth(chosen_idx) {
+                    response = option;
+                };
+            };
+            room.send(RoomMessageEventContent::text_plain(response))
+                .await?;
         };
         return Ok(());
     };
@@ -561,7 +572,7 @@ async fn help_consumer(
                 )))
                 .await
             {
-                error!("error while sending wolfram response: {e}");
+                error!("error while sending response: {e}");
             };
         }
     }
