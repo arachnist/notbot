@@ -448,7 +448,6 @@ pub fn init_modules(mx: &Client, config: &Config) -> anyhow::Result<EventHandler
 
     for starter in [
         crate::klaczdb::starter,
-        crate::notmun::starter,
         crate::spaceapi::starter,
         crate::db::starter,
         crate::inviter::starter,
@@ -462,8 +461,7 @@ pub fn init_modules(mx: &Client, config: &Config) -> anyhow::Result<EventHandler
         };
     }
 
-    #[allow(clippy::single_element_loop)]
-    for starter in [crate::kasownik::passthrough] {
+    for starter in [crate::kasownik::passthrough, crate::notmun::starter] {
         match starter(mx, config) {
             Err(e) => error!("module initialization failed fatally: {e}"),
             Ok(m) => passthrough_modules.extend(m),
