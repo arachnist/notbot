@@ -423,7 +423,7 @@ async fn dispatch_module(
     let reservation = match module.channel.clone().unwrap().try_reserve_owned() {
         Ok(r) => r,
         Err(e) => {
-            error!("module channel can't accept message: {e}");
+            error!("module {} channel can't accept message: {e}", module.name);
             return Ok(());
         }
     };
@@ -490,18 +490,33 @@ pub(crate) fn core_starter(
     let mut modules: Vec<ModuleInfo> = vec![];
 
     let (help_tx, help_rx) = mpsc::channel::<ConsumerEvent>(1);
-    let at = ModuleInfo {
+    let help = ModuleInfo {
         name: "help".s(),
         help: "get help about the bot or its basic functions".s(),
         acl: vec![],
         trigger: TriggerType::Keyword(vec!["help".s(), "status".s()]),
         channel: Some(help_tx),
     };
-    modules.push(at);
+    modules.push(help);
+
+    let (list_tx, list_rx) = mpsc::channel::<ConsumerEvent>(1);
+    let list = ModuleInfo {
+        name: "list".s(),
+        help: "get the list of currently registered modules".s(),
+        acl: vec![],
+        trigger: TriggerType::Keyword(vec!["list".s(), "list-functions".s()]),
+        channel: Some(list_tx),
+    };
+    modules.push(list);
 
     registered_modules.extend(modules.clone());
     tokio::task::spawn(help_consumer(
         help_rx,
+        registered_modules.clone(),
+        registered_passthrough_modules.clone(),
+    ));
+    tokio::task::spawn(list_consumer(
+        list_rx,
         registered_modules,
         registered_passthrough_modules,
     ));
@@ -533,7 +548,7 @@ async fn help_consumer(
             if let Err(e) = event
                 .room
                 .send(RoomMessageEventContent::text_plain(format!(
-                    "error getting wolfram response: {e}"
+                    "error getting help: {e}"
                 )))
                 .await
             {
@@ -634,8 +649,12 @@ contact {mx_contact} or {fedi_contact} if you need more help"#,
 
     for module in registered_passthrough_modules {
         if module.0.name == maybe_module_name {
+            let keywords = match module.0.trigger {
+                TriggerType::Keyword(t) => format!("; registered keywords: {t:?}"),
+                _ => String::new(),
+            };
             let response = format!(
-                r#"module {name} is {status}; help: {help}"#,
+                r#"module {name} is {status}; help: {help}{keywords}"#,
                 name = module.0.name,
                 help = module.0.help,
                 status = if module.0.channel.is_some() {
@@ -655,4 +674,70 @@ contact {mx_contact} or {fedi_contact} if you need more help"#,
         event.room.send(generic_help).await?;
     };
     Ok(())
+}
+
+async fn list_consumer(
+    mut rx: mpsc::Receiver<ConsumerEvent>,
+    registered_modules: Vec<ModuleInfo>,
+    registered_passthrough_modules: Vec<PassThroughModuleInfo>,
+) -> anyhow::Result<()> {
+    loop {
+        let event = match rx.recv().await {
+            Some(e) => e,
+            None => {
+                error!("channel closed, goodbye! :(");
+                bail!("channel closed");
+            }
+        };
+
+        let mut failed = false;
+        let modules: Vec<String> = registered_modules
+            .iter()
+            .map(|x| {
+                let mut s = x.name.clone();
+                if x.channel.is_none() {
+                    s.push_str("*");
+                    failed = true;
+                }
+                s
+            })
+            .collect();
+        let passthrough: Vec<String> = registered_passthrough_modules
+            .iter()
+            .map(|x| {
+                let mut s = x.0.name.clone();
+                if x.0.channel.is_none() {
+                    s.push_str("*");
+                    failed = true;
+                }
+                s
+            })
+            .collect();
+
+        let response = format!(
+            r#"{maybe_modules}{modules_list}{maybe_newline}{maybe_passthrough}{passthrough_list}{maybe_failed}"#,
+            maybe_modules = if modules.len() > 0 { "modules: " } else { "" },
+            modules_list = modules.join(", "),
+            maybe_newline = if modules.len() > 0 { "\n" } else { "" },
+            maybe_passthrough = if passthrough.len() > 0 {
+                "passthrough: "
+            } else {
+                ""
+            },
+            passthrough_list = passthrough.join(", "),
+            maybe_failed = if failed {
+                "modules marked with * are failed"
+            } else {
+                ""
+            },
+        );
+
+        if let Err(e) = event
+            .room
+            .send(RoomMessageEventContent::text_plain(response))
+            .await
+        {
+            error!("failed sending list response: {e}");
+        }
+    }
 }
