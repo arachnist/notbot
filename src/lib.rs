@@ -67,10 +67,6 @@ pub(crate) fn init_modules(
         autojoiner::modules, // handle invites
         notmun::modules,     // just the non-text events
         shenanigans::modules,
-        || {
-            let v: Vec<ModuleStarter> = vec![("new dispatcher", crate::module::init_modules)];
-            v
-        },
     ] {
         register_modules(mx, config, &mut modules, &mut failed, initializer());
     }

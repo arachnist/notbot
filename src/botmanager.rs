@@ -48,21 +48,72 @@ struct BotManagerInner {
     session_file: PathBuf,
     sync_settings: SyncSettings,
     config_path: String,
+    dispatcher_handle: EventHandlerHandle,
+}
+
+#[derive(Debug)]
+enum ReloadError {
+    ConfigParseError(anyhow::Error),
+    CoreModulesFailure(anyhow::Error),
+    SomePartsFailed(Vec<String>, Vec<String>),
+}
+
+impl StdError for ReloadError {}
+
+impl fmt::Display for ReloadError {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        use ReloadError::*;
+        match self {
+            CoreModulesFailure(e) => write!(fmt, "core modules failed to initialize: {e}"),
+            ConfigParseError(e) => write!(fmt, "configuration error: {e}"),
+            SomePartsFailed(modules, workers) => {
+                write!(
+                    fmt,
+                    "{maybe_modules}{modules_list}{maybe_join}{maybe_workers}{workers_list}",
+                    maybe_modules = if modules.len() > 0 {
+                        "failed modules: "
+                    } else {
+                        ""
+                    },
+                    modules_list = modules.join(", "),
+                    maybe_join = if modules.len() > 0 { "; " } else { "" },
+                    maybe_workers = if workers.len() > 0 {
+                        "failed workers: "
+                    } else {
+                        ""
+                    },
+                    workers_list = workers.join(", "),
+                )
+            }
+        }
+    }
 }
 
 impl BotManagerInner {
-    pub async fn reload(&mut self) -> anyhow::Result<String> {
-        info!("reloading");
+    pub fn reload(&mut self) -> Result<(), ReloadError> {
+        use ReloadError::*;
 
         self.config = match Config::new(self.config_path.clone()) {
             Ok(c) => c,
             Err(e) => {
-                error!("couldn't parse configuration: {e}");
-                return Err(e);
+                return Err(ConfigParseError(e).into());
             }
         };
 
         trace!("config: {:#?}", self.config);
+
+        self.client
+            .remove_event_handler(self.dispatcher_handle.clone());
+        let dispatcher_handle = match crate::module::init_modules(&self.client, &self.config) {
+            Ok(h) => {
+                info!("initialized modules");
+                h
+            }
+            Err(e) => {
+                return Err(CoreModulesFailure(e).into());
+            }
+        };
+        self.dispatcher_handle = dispatcher_handle;
 
         let (registered_modules, failed_modules) =
             crate::init_modules(&self.client, &self.config, &self.modules);
@@ -71,44 +122,11 @@ impl BotManagerInner {
             crate::init_workers(&self.client, &self.config, &self.workers);
         self.workers = registered_workers;
 
-        let mut status: String = "configuration reloaded".to_string();
-
-        if failed_workers.is_empty() && failed_modules.is_empty() {
-            return Ok(status);
-        } else {
-            status.push_str(", but:");
+        if failed_workers.len() > 0 || failed_modules.len() > 0 {
+            return Err(SomePartsFailed(failed_modules, failed_workers).into());
         };
 
-        if !failed_modules.is_empty() {
-            status.push_str(
-                format!(
-                    " {len} module{maybe_plural} failed: {modules}",
-                    len = failed_modules.len(),
-                    modules = failed_modules.join(", "),
-                    maybe_plural = if failed_modules.len() == 1 { "" } else { "s" }
-                )
-                .as_str(),
-            );
-        };
-
-        if !failed_workers.is_empty() {
-            status.push_str(
-                format!(
-                    "{maybe_conjunction} {len} worker{maybe_plural} failed: {workers}",
-                    maybe_conjunction = if failed_modules.is_empty() {
-                        ""
-                    } else {
-                        ", and"
-                    },
-                    len = failed_workers.len(),
-                    workers = failed_workers.join(", "),
-                    maybe_plural = if failed_workers.len() == 1 { "" } else { "s" }
-                )
-                .as_str(),
-            );
-        };
-
-        Ok(status)
+        Ok(())
     }
 }
 
@@ -152,6 +170,17 @@ impl BotManager {
 
         client.add_event_handler_context(klacz);
 
+        let dispatcher_handle = match crate::module::init_modules(&client, &config) {
+            Ok(h) => {
+                info!("initialized modules");
+                h
+            }
+            Err(e) => {
+                error!("core modules failed to initialize: {e}");
+                std::process::exit(1)
+            }
+        };
+
         let (modules, _) = crate::init_modules(&client, &config, &Default::default());
         let (workers, _) = crate::init_workers(&client, &config, &Default::default());
 
@@ -177,6 +206,7 @@ impl BotManager {
                     session_file,
                     sync_settings: sync_settings.clone(),
                     config_path,
+                    dispatcher_handle,
                 })),
             },
             tx2,
@@ -332,14 +362,31 @@ impl BotManager {
             debug!("reload: attempting lock");
             let inner = &mut self.inner.lock().await;
             debug!("reload: grabbed lock");
-            let status: String = match inner.reload().await {
-                Ok(s) => s,
-                Err(e) => format!(
-                    "configuration not reloaded: {message}",
-                    message = e.to_string().lines().nth(0).unwrap_or("couldn't decode")
-                ),
+
+            let response = match inner.reload() {
+                Ok(_) => "configuration reloaded",
+                Err(e) => {
+                    error!("reload error: {e}");
+                    match e {
+                        ReloadError::CoreModulesFailure(e) => {
+                            room.send(RoomMessageEventContent::text_plain(format!("fatal failure: {e}")))
+                                .await?;
+                            std::process::exit(1);
+                        },
+                        ReloadError::SomePartsFailed(_, _) => {
+                            "configuration reloaded, but some parts failed. check logs"
+                        },
+                        ReloadError::ConfigParseError(_) => {
+                            "configuration parsing error, check logs"
+                        },
+                    }
+                }
             };
-            if let Err(e) = room.send(RoomMessageEventContent::text_plain(status)).await {
+
+            if let Err(e) = room
+                .send(RoomMessageEventContent::text_plain(response))
+                .await
+            {
                 error!("sending reload status failed: {e}");
             };
         }
