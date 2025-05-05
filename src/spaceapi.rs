@@ -8,6 +8,20 @@ pub(crate) fn workers() -> Vec<WorkerStarter> {
     vec![(module_path!(), worker_starter)]
 }
 
+fn default_keywords() -> Vec<String> {
+    vec!["at".s()]
+}
+
+#[derive(Clone, Deserialize)]
+pub struct ModuleConfig {
+    room_map: HashMap<String, String>,
+    presence_map: HashMap<String, Vec<String>>,
+    presence_interval: u64,
+    empty_response: String,
+    #[serde(default = "default_keywords")]
+    pub keywords: Vec<String>,
+}
+
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
     info!("registering modules");
     let mut modules: Vec<ModuleInfo> = vec![];
@@ -19,7 +33,7 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         name: "at".s(),
         help: "see who is present at the hackerspace".s(),
         acl: vec![],
-        trigger: TriggerType::Keyword(vec!["at".s()]),
+        trigger: TriggerType::Keyword(module_config.keywords.clone()),
         channel: Some(tx),
         error_prefix: Some("error getting presence status".s()),
     };
@@ -57,14 +71,6 @@ async fn processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result
         .send(RoomMessageEventContent::text_plain(response))
         .await?;
     Ok(())
-}
-
-#[derive(Clone, Deserialize)]
-pub struct ModuleConfig {
-    room_map: HashMap<String, String>,
-    presence_map: HashMap<String, Vec<String>>,
-    presence_interval: u64,
-    empty_response: String,
 }
 
 fn worker_starter(client: &Client, config: &Config) -> anyhow::Result<AbortHandle> {

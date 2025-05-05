@@ -4,9 +4,15 @@ use serde_json::Value;
 
 use urlencoding::encode as uencode;
 
+fn default_keywords() -> Vec<String> {
+    vec!["c".s(), "wolfram".s()]
+}
+
 #[derive(Clone, Deserialize)]
 pub struct ModuleConfig {
     pub app_id: String,
+    #[serde(default = "default_keywords")]
+    pub keywords: Vec<String>,
 }
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
@@ -20,7 +26,7 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         name: "wolfram".s(),
         help: "calculate something using wolfram alpha".s(),
         acl: vec![],
-        trigger: TriggerType::Keyword(vec!["c".s(), "wolfram".s()]),
+        trigger: TriggerType::Keyword(module_config.keywords.clone()),
         channel: Some(tx),
         error_prefix: Some("error getting wolfram response".s()),
     };

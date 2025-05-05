@@ -432,8 +432,21 @@ impl fmt::Display for KlaczError {
     }
 }
 
+fn default_add_keywords() -> Vec<String> {
+    vec!["add".s()]
+}
+
+fn default_remove_keywords() -> Vec<String> {
+    vec!["remove".s()]
+}
+
 #[derive(Clone, Deserialize)]
-pub struct ModuleConfig {}
+pub struct ModuleConfig {
+    #[serde(default = "default_add_keywords")]
+    pub keywords_add: Vec<String>,
+    #[serde(default = "default_remove_keywords")]
+    pub keywords_remove: Vec<String>,
+}
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
     info!("registering modules");
@@ -446,7 +459,7 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         name: "add".s(),
         help: "add an entry to knowledge base".s(),
         acl: vec![],
-        trigger: TriggerType::Keyword(vec!["add".s()]),
+        trigger: TriggerType::Keyword(module_config.keywords_add.clone()),
         channel: Some(addtx),
         error_prefix: Some("error adding entry".s()),
     };
@@ -458,7 +471,7 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         name: "remove".s(),
         help: "remove an entry to knowledge base".s(),
         acl: vec![Acl::KlaczLevel(10)],
-        trigger: TriggerType::Keyword(vec!["remove".s()]),
+        trigger: TriggerType::Keyword(module_config.keywords_remove.clone()),
         channel: Some(removetx),
         error_prefix: Some("error removing entry".s()),
     };

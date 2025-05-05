@@ -7,12 +7,18 @@ use matrix_sdk::ruma::events::reaction::OriginalSyncReactionEvent;
 use axum::{extract::State, response::IntoResponse};
 use tower_sessions::Session;
 
+fn default_keywords() -> Vec<String> {
+    vec!["invite".s()]
+}
+
 #[derive(Clone, Deserialize)]
 pub struct ModuleConfig {
     pub requests: Vec<String>,
     pub approvers: Vec<String>,
     pub homeserver_selfservice_allow: String,
     pub invite_to: Vec<String>,
+    #[serde(default = "default_keywords")]
+    pub keywords: Vec<String>,
 }
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
@@ -26,7 +32,7 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         name: "inviter".s(),
         help: "processes invite requests to hackerspace matrix rooms and spaces".s(),
         acl: vec![Acl::Room(module_config.requests.clone())],
-        trigger: TriggerType::Keyword(vec!["invite".s()]),
+        trigger: TriggerType::Keyword(module_config.keywords.clone()),
         channel: Some(tx),
         error_prefix: Some("couldn't process invite request".s()),
     };

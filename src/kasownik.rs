@@ -2,6 +2,14 @@ use crate::prelude::*;
 
 use crate::notbottime::NotBotTime;
 
+fn default_due_keywords() -> Vec<String> {
+    vec!["due".s()]
+}
+
+fn default_due_me_keywords() -> Vec<String> {
+    vec!["due-me".s(), "dueme".s()]
+}
+
 #[derive(Clone, Deserialize)]
 pub struct ModuleConfig {
     #[allow(dead_code)]
@@ -9,6 +17,10 @@ pub struct ModuleConfig {
     pub nag_channels: Vec<String>,
     pub nag_late_fees: i64,
     pub due_others_allowed: Vec<String>,
+    #[serde(default = "default_due_keywords")]
+    pub keywords_due: Vec<String>,
+    #[serde(default = "default_due_me_keywords")]
+    pub keywords_due_me: Vec<String>,
 }
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
@@ -22,7 +34,7 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         name: "due".s(),
         help: "checks how many membership fees a member is missing".s(),
         acl: vec![Acl::Room(module_config.due_others_allowed.clone())],
-        trigger: TriggerType::Keyword(vec!["due".s()]),
+        trigger: TriggerType::Keyword(module_config.keywords_due.clone()),
         channel: Some(duetx),
         error_prefix: Some("error checking membership fees".s()),
     };
@@ -34,7 +46,7 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         name: "due-me".s(),
         help: "checks how many membership fees you are missing".s(),
         acl: vec![],
-        trigger: TriggerType::Keyword(vec!["due-me".s(), "dueme".s()]),
+        trigger: TriggerType::Keyword(module_config.keywords_due_me.clone()),
         channel: Some(due_metx),
         error_prefix: Some("error checking membership fees".s()),
     };

@@ -1,11 +1,17 @@
 use crate::prelude::*;
 
+fn default_keywords() -> Vec<String> {
+    vec!["sage".s()]
+}
+
 #[derive(Clone, Deserialize)]
 pub struct ModuleConfig {
     pub protected: Vec<String>,
     pub protected_reason: String,
     pub reason: String,
     pub no_target_response: String,
+    #[serde(default = "default_keywords")]
+    pub keywords: Vec<String>,
 }
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
@@ -19,7 +25,7 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         name: "sage".s(),
         help: "lol, lmao".s(),
         acl: vec![],
-        trigger: TriggerType::Keyword(vec!["sage".s()]),
+        trigger: TriggerType::Keyword(module_config.keywords.clone()),
         channel: Some(tx),
         error_prefix: Some("failed to remove them".s()),
     };
