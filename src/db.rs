@@ -97,14 +97,14 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
 
     let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
     tokio::task::spawn(dbstatus_consumer(rx, module_config));
-    let at = ModuleInfo {
+    let db = ModuleInfo {
         name: "dbstatus".s(),
         help: "check status of database connections".s(),
         acl: vec![],
         trigger: TriggerType::Keyword(vec!["db".s()]),
         channel: Some(tx),
     };
-    modules.push(at);
+    modules.push(db);
 
     Ok(modules)
 }

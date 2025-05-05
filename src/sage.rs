@@ -16,14 +16,14 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
 
     let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
     tokio::task::spawn(consumer(rx, module_config));
-    let at = ModuleInfo {
+    let sage = ModuleInfo {
         name: "sage".s(),
         help: "lol, lmao".s(),
         acl: vec![],
         trigger: TriggerType::Keyword(vec!["sage".s()]),
         channel: Some(tx),
     };
-    modules.push(at);
+    modules.push(sage);
 
     Ok(modules)
 }

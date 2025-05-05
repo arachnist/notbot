@@ -17,14 +17,14 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
 
     let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
     tokio::task::spawn(consumer(rx, module_config));
-    let at = ModuleInfo {
+    let wolfram = ModuleInfo {
         name: "wolfram".s(),
         help: "calculate something using wolfram alpha".s(),
         acl: vec![],
         trigger: TriggerType::Keyword(vec!["c".s(), "wolfram".s()]),
         channel: Some(tx),
     };
-    modules.push(at);
+    modules.push(wolfram);
 
     Ok(modules)
 }

@@ -142,14 +142,14 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<PassThr
 
     let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
     tokio::task::spawn(incoming_consumer(rx, module_config));
-    let at = PassThroughModuleInfo(ModuleInfo {
+    let notmun = PassThroughModuleInfo(ModuleInfo {
         name: "notmun".s(),
         help: "run mun runtime for fun and questionable profit".s(),
         acl: vec![],
         trigger: TriggerType::Catchall(|_, _, _, _, _| Ok(Consumption::Inclusive)),
         channel: Some(tx),
     });
-    modules.push(at);
+    modules.push(notmun);
 
     Ok(modules)
 }
