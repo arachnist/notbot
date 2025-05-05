@@ -15,44 +15,18 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
 
     let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
-    tokio::task::spawn(consumer(rx, module_config));
     let sage = ModuleInfo {
         name: "sage".s(),
         help: "lol, lmao".s(),
         acl: vec![],
         trigger: TriggerType::Keyword(vec!["sage".s()]),
         channel: Some(tx),
+        error_prefix: Some("failed to remove them".s()),
     };
+    sage.spawn(rx, module_config.clone(), processor);
     modules.push(sage);
 
     Ok(modules)
-}
-
-async fn consumer(
-    mut rx: mpsc::Receiver<ConsumerEvent>,
-    config: ModuleConfig,
-) -> anyhow::Result<()> {
-    loop {
-        let event = match rx.recv().await {
-            Some(e) => e,
-            None => {
-                error!("channel closed, goodbye! :(");
-                bail!("channel closed");
-            }
-        };
-
-        if let Err(e) = processor(event.clone(), config.clone()).await {
-            if let Err(e) = event
-                .room
-                .send(RoomMessageEventContent::text_plain(format!(
-                    "failed removing someone: {e}"
-                )))
-                .await
-            {
-                error!("error while sending response: {e}");
-            };
-        }
-    }
 }
 
 async fn processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {

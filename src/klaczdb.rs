@@ -442,58 +442,33 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
 
     let (addtx, addrx) = mpsc::channel::<ConsumerEvent>(1);
-    tokio::task::spawn(add_consumer(addrx, module_config.clone()));
     let add = ModuleInfo {
         name: "add".s(),
         help: "add an entry to knowledge base".s(),
         acl: vec![],
         trigger: TriggerType::Keyword(vec!["add".s()]),
         channel: Some(addtx),
+        error_prefix: Some("error adding entry".s()),
     };
+    add.spawn(addrx, module_config.clone(), add_processor);
     modules.push(add);
 
     let (removetx, removerx) = mpsc::channel::<ConsumerEvent>(1);
-    tokio::task::spawn(remove_consumer(removerx, module_config.clone()));
     let remove = ModuleInfo {
         name: "remove".s(),
         help: "remove an entry to knowledge base".s(),
         acl: vec![Acl::KlaczLevel(10)],
         trigger: TriggerType::Keyword(vec!["remove".s()]),
         channel: Some(removetx),
+        error_prefix: Some("error removing entry".s()),
     };
+    remove.spawn(removerx, module_config.clone(), remove_processor);
     modules.push(remove);
 
     Ok(modules)
 }
 
-async fn add_consumer(
-    mut rx: mpsc::Receiver<ConsumerEvent>,
-    config: ModuleConfig,
-) -> anyhow::Result<()> {
-    loop {
-        let event = match rx.recv().await {
-            Some(e) => e,
-            None => {
-                error!("channel closed, goodbye! :(");
-                bail!("channel closed");
-            }
-        };
-
-        if let Err(e) = add(event.clone(), config.clone()).await {
-            if let Err(e) = event
-                .room
-                .send(RoomMessageEventContent::text_plain(format!(
-                    "error adding entry: {e}"
-                )))
-                .await
-            {
-                error!("error while sending error message: {e}");
-            };
-        }
-    }
-}
-
-async fn add(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
+async fn add_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
     let Some(body) = event.args else {
         event
             .room
@@ -536,34 +511,7 @@ async fn add(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn remove_consumer(
-    mut rx: mpsc::Receiver<ConsumerEvent>,
-    config: ModuleConfig,
-) -> anyhow::Result<()> {
-    loop {
-        let event = match rx.recv().await {
-            Some(e) => e,
-            None => {
-                error!("channel closed, goodbye! :(");
-                bail!("channel closed");
-            }
-        };
-
-        if let Err(e) = remove(event.clone(), config.clone()).await {
-            if let Err(e) = event
-                .room
-                .send(RoomMessageEventContent::text_plain(format!(
-                    "error removing entry: {e}"
-                )))
-                .await
-            {
-                error!("error while sending error message: {e}");
-            };
-        }
-    }
-}
-
-async fn remove(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
+async fn remove_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
     let Some(body) = event.args else {
         event
             .room

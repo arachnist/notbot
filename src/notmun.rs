@@ -141,44 +141,18 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<PassThr
     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
 
     let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
-    tokio::task::spawn(incoming_consumer(rx, module_config));
     let notmun = PassThroughModuleInfo(ModuleInfo {
         name: "notmun".s(),
         help: "run mun runtime for fun and questionable profit".s(),
         acl: vec![],
         trigger: TriggerType::Catchall(|_, _, _, _, _| Ok(Consumption::Inclusive)),
         channel: Some(tx),
+        error_prefix: None,
     });
+    notmun.0.spawn(rx, module_config, processor);
     modules.push(notmun);
 
     Ok(modules)
-}
-
-async fn incoming_consumer(
-    mut rx: mpsc::Receiver<ConsumerEvent>,
-    config: ModuleConfig,
-) -> anyhow::Result<()> {
-    loop {
-        let event = match rx.recv().await {
-            Some(e) => e,
-            None => {
-                error!("channel closed, goodbye! :(");
-                bail!("channel closed");
-            }
-        };
-
-        if let Err(e) = processor(event.clone(), config.clone()).await {
-            if let Err(ee) = event
-                .room
-                .send(RoomMessageEventContent::text_plain(format!(
-                    "error getting response: {e}"
-                )))
-                .await
-            {
-                error!("error while sending response: {ee}");
-            };
-        }
-    }
 }
 
 async fn processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {

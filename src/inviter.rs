@@ -22,44 +22,18 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
 
     let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
-    tokio::task::spawn(invite_request_consumer(rx, module_config.clone()));
     let inviter = ModuleInfo {
         name: "inviter".s(),
         help: "processes invite requests to hackerspace matrix rooms and spaces".s(),
-        acl: vec![Acl::Room(module_config.requests)],
+        acl: vec![Acl::Room(module_config.requests.clone())],
         trigger: TriggerType::Keyword(vec!["invite".s()]),
         channel: Some(tx),
+        error_prefix: Some("couldn't process invite request".s()),
     };
+    inviter.spawn(rx, module_config, invite_request);
     modules.push(inviter);
 
     Ok(modules)
-}
-
-async fn invite_request_consumer(
-    mut rx: mpsc::Receiver<ConsumerEvent>,
-    config: ModuleConfig,
-) -> anyhow::Result<()> {
-    loop {
-        let event = match rx.recv().await {
-            Some(e) => e,
-            None => {
-                error!("channel closed, goodbye! :(");
-                bail!("channel closed");
-            }
-        };
-
-        if let Err(e) = invite_request(event.clone(), config.clone()).await {
-            if let Err(e) = event
-                .room
-                .send(RoomMessageEventContent::text_plain(format!(
-                    "error getting presence status: {e}"
-                )))
-                .await
-            {
-                error!("error while sending presence status: {e}");
-            };
-        }
-    }
 }
 
 async fn invite_request(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {

@@ -15,47 +15,21 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
 
     let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
-    tokio::task::spawn(at_consumer(rx, module_config));
     let at = ModuleInfo {
         name: "at".s(),
         help: "see who is present at the hackerspace".s(),
         acl: vec![],
         trigger: TriggerType::Keyword(vec!["at".s()]),
         channel: Some(tx),
+        error_prefix: Some("error getting presence status".s()),
     };
+    at.spawn(rx, module_config, processor);
     modules.push(at);
 
     Ok(modules)
 }
 
-async fn at_consumer(
-    mut rx: mpsc::Receiver<ConsumerEvent>,
-    config: ModuleConfig,
-) -> anyhow::Result<()> {
-    loop {
-        let event = match rx.recv().await {
-            Some(e) => e,
-            None => {
-                error!("channel closed, goodbye! :(");
-                bail!("channel closed");
-            }
-        };
-
-        if let Err(e) = at(event.clone(), config.clone()).await {
-            if let Err(e) = event
-                .room
-                .send(RoomMessageEventContent::text_plain(format!(
-                    "error getting presence status: {e}"
-                )))
-                .await
-            {
-                error!("error while sending presence status: {e}");
-            };
-        }
-    }
-}
-
-async fn at(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
+async fn processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
     let name = room_name(&event.room);
 
     let url = match config.room_map.get(&name) {

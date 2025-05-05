@@ -16,44 +16,18 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
 
     let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
-    tokio::task::spawn(consumer(rx, module_config));
     let wolfram = ModuleInfo {
         name: "wolfram".s(),
         help: "calculate something using wolfram alpha".s(),
         acl: vec![],
         trigger: TriggerType::Keyword(vec!["c".s(), "wolfram".s()]),
         channel: Some(tx),
+        error_prefix: Some("error getting wolfram response".s()),
     };
+    wolfram.spawn(rx, module_config, processor);
     modules.push(wolfram);
 
     Ok(modules)
-}
-
-async fn consumer(
-    mut rx: mpsc::Receiver<ConsumerEvent>,
-    config: ModuleConfig,
-) -> anyhow::Result<()> {
-    loop {
-        let event = match rx.recv().await {
-            Some(e) => e,
-            None => {
-                error!("channel closed, goodbye! :(");
-                bail!("channel closed");
-            }
-        };
-
-        if let Err(e) = processor(event.clone(), config.clone()).await {
-            if let Err(e) = event
-                .room
-                .send(RoomMessageEventContent::text_plain(format!(
-                    "error getting wolfram response: {e}"
-                )))
-                .await
-            {
-                error!("error while sending wolfram response: {e}");
-            };
-        }
-    }
 }
 
 async fn processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {

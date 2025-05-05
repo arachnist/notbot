@@ -18,58 +18,33 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
 
     let (duetx, duerx) = mpsc::channel::<ConsumerEvent>(1);
-    tokio::task::spawn(due_consumer(duerx, module_config.clone()));
     let due = ModuleInfo {
         name: "due".s(),
         help: "checks how many membership fees a member is missing".s(),
         acl: vec![Acl::Room(module_config.due_others_allowed.clone())],
         trigger: TriggerType::Keyword(vec!["due".s()]),
         channel: Some(duetx),
+        error_prefix: Some("error checking membership fees".s()),
     };
+    due.spawn(duerx, module_config.clone(), due_processor);
     modules.push(due);
 
-    let (duemetx, duemerx) = mpsc::channel::<ConsumerEvent>(1);
-    tokio::task::spawn(due_me_consumer(duemerx, module_config.clone()));
-    let dueme = ModuleInfo {
+    let (due_metx, due_merx) = mpsc::channel::<ConsumerEvent>(1);
+    let due_me = ModuleInfo {
         name: "due-me".s(),
         help: "checks how many membership fees you are missing".s(),
         acl: vec![],
         trigger: TriggerType::Keyword(vec!["due-me".s(), "dueme".s()]),
-        channel: Some(duemetx),
+        channel: Some(due_metx),
+        error_prefix: Some("error checking membership fees".s()),
     };
-    modules.push(dueme);
+    due_me.spawn(due_merx, module_config.clone(), due_me_processor);
+    modules.push(due_me);
 
     Ok(modules)
 }
 
-async fn due_consumer(
-    mut rx: mpsc::Receiver<ConsumerEvent>,
-    config: ModuleConfig,
-) -> anyhow::Result<()> {
-    loop {
-        let event = match rx.recv().await {
-            Some(e) => e,
-            None => {
-                error!("channel closed, goodbye! :(");
-                bail!("channel closed");
-            }
-        };
-
-        if let Err(e) = due(event.clone(), config.clone()).await {
-            if let Err(e) = event
-                .room
-                .send(RoomMessageEventContent::text_plain(format!(
-                    "error getting presence status: {e}"
-                )))
-                .await
-            {
-                error!("error while sending presence status: {e}");
-            };
-        }
-    }
-}
-
-async fn due(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
+async fn due_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
     use MembershipStatus::*;
 
     if event.args.is_none() {
@@ -134,36 +109,7 @@ async fn due(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn due_me_consumer(
-    mut rx: mpsc::Receiver<ConsumerEvent>,
-    config: ModuleConfig,
-) -> anyhow::Result<()> {
-    loop {
-        let event = match rx.recv().await {
-            Some(e) => e,
-            None => {
-                error!("channel closed, goodbye! :(");
-                bail!("channel closed");
-            }
-        };
-
-        trace!("we got the event!");
-
-        if let Err(e) = new_due_me(event.clone(), config.clone()).await {
-            if let Err(e) = event
-                .room
-                .send(RoomMessageEventContent::text_plain(format!(
-                    "error getting presence status: {e}"
-                )))
-                .await
-            {
-                error!("error while sending presence status: {e}");
-            };
-        }
-    }
-}
-
-async fn new_due_me(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
+async fn due_me_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
     use MembershipStatus::*;
 
     let response = match membership_status(event.sender).await? {
@@ -195,57 +141,21 @@ pub(crate) fn passthrough(
     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
 
     let (nagtx, nagrx) = mpsc::channel::<ConsumerEvent>(1);
-    tokio::task::spawn(nag_consumer(nagrx, module_config.clone()));
     let nag = PassThroughModuleInfo(ModuleInfo {
         name: "nag".s(),
         help: "nags users about missing membership fees".s(),
-        acl: vec![Acl::Room(module_config.nag_channels)],
+        acl: vec![Acl::Room(module_config.nag_channels.clone())],
         trigger: TriggerType::Catchall(|_, _, _, _, _| Ok(Consumption::Inclusive)),
         channel: Some(nagtx),
+        error_prefix: None,
     });
+    nag.0.spawn(nagrx, module_config, nag_processor);
     modules.push(nag);
 
     Ok(modules)
 }
 
-/* with no persistent store access (no async), this would've been effectively just a room acl
-fn nag_decider(
-    klaczlevel: i64,
-    sender: OwnedUserId,
-    room: &Room,
-    content: &RoomMessageEventContent,
-    config: &Config,
-) -> anyhow::Result<Consumption> {
-    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
-
-    if module_config.nag_channels.contains(&room_name(room)) {
-        return Ok(Consumption::Reject);
-    };
-
-    Ok(Consumption::Inclusive)
-}
-*/
-
-async fn nag_consumer(
-    mut rx: mpsc::Receiver<ConsumerEvent>,
-    config: ModuleConfig,
-) -> anyhow::Result<()> {
-    loop {
-        let event = match rx.recv().await {
-            Some(e) => e,
-            None => {
-                error!("channel closed, goodbye! :(");
-                bail!("channel closed");
-            }
-        };
-
-        if let Err(e) = nag(event.clone(), config.clone()).await {
-            error!("error while processing nag check: {e}");
-        }
-    }
-}
-
-async fn nag(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
+async fn nag_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
     use MembershipStatus::*;
     let sender_str: &str = event.sender.as_str();
 

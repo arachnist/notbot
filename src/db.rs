@@ -86,44 +86,18 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
     }
 
     let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
-    tokio::task::spawn(dbstatus_consumer(rx, module_config));
     let db = ModuleInfo {
         name: "dbstatus".s(),
         help: "check status of database connections".s(),
         acl: vec![],
         trigger: TriggerType::Keyword(vec!["db".s()]),
         channel: Some(tx),
+        error_prefix: Some("error getting database status".s()),
     };
+    db.spawn(rx, module_config, dbstatus);
     modules.push(db);
 
     Ok(modules)
-}
-
-async fn dbstatus_consumer(
-    mut rx: mpsc::Receiver<ConsumerEvent>,
-    config: DBConfig,
-) -> anyhow::Result<()> {
-    loop {
-        let event = match rx.recv().await {
-            Some(e) => e,
-            None => {
-                error!("channel closed, goodbye! :(");
-                bail!("channel closed");
-            }
-        };
-
-        if let Err(e) = dbstatus(event.clone(), config.clone()).await {
-            if let Err(e) = event
-                .room
-                .send(RoomMessageEventContent::text_plain(format!(
-                    "error getting database status: {e}"
-                )))
-                .await
-            {
-                error!("error while sending database status: {e}");
-            };
-        }
-    }
 }
 
 async fn dbstatus(event: ConsumerEvent, config: DBConfig) -> anyhow::Result<()> {

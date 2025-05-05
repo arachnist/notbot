@@ -6,7 +6,9 @@ use std::ops::Deref;
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::de;
 use anyhow::bail;
+use futures::Future;
 use prometheus::{opts, register_int_counter_vec, IntCounterVec};
 use serde_derive::Deserialize;
 use tracing::{debug, error, info, trace};
@@ -33,6 +35,9 @@ static MODULE_EVENTS: LazyLock<IntCounterVec> = LazyLock::new(|| {
     .unwrap()
 });
 
+/// An event object passed to modules.
+///
+/// For modules consuming text-like events, this should contain everything that's needed.
 #[derive(Clone)]
 pub struct ConsumerEvent {
     pub klacz_level: i64,
@@ -52,6 +57,63 @@ pub struct ModuleInfo {
     pub acl: Vec<Acl>,
     pub trigger: TriggerType,
     pub channel: Option<mpsc::Sender<ConsumerEvent>>,
+    pub error_prefix: Option<String>,
+}
+
+impl ModuleInfo {
+    pub fn spawn<C, Fut>(
+        &self,
+        rx: mpsc::Receiver<ConsumerEvent>,
+        config: C,
+        processor: impl Fn(ConsumerEvent, C) -> Fut + Send + 'static,
+    ) where
+        C: de::DeserializeOwned + Clone + Send + Sync + 'static,
+        Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
+    {
+        let prefix = self.error_prefix.clone();
+        tokio::task::spawn(Self::consumer(
+            rx,
+            config.clone(),
+            prefix.clone(),
+            processor,
+        ));
+    }
+
+    async fn consumer<C, Fut>(
+        mut rx: mpsc::Receiver<ConsumerEvent>,
+        config: C,
+        error_prefix: Option<String>,
+        processor: impl Fn(ConsumerEvent, C) -> Fut,
+    ) -> anyhow::Result<()>
+    where
+        C: de::DeserializeOwned + Clone + Send + Sync,
+        Fut: Future<Output = anyhow::Result<()>>,
+    {
+        loop {
+            let event = match rx.recv().await {
+                Some(e) => e,
+                None => {
+                    error!("channel closed, goodbye! :(");
+                    bail!("channel closed");
+                }
+            };
+
+            if let Err(e) = processor(event.clone(), config.clone()).await {
+                error!("error processing event: {e}");
+                if let Some(ref prefix) = error_prefix {
+                    if let Err(ee) = event
+                        .room
+                        .send(RoomMessageEventContent::text_plain(format!(
+                            "{prefix}: {e}"
+                        )))
+                        .await
+                    {
+                        error!("error when sending event response: {ee}");
+                    }
+                };
+            }
+        }
+    }
 }
 
 // distinct from generic ModuleInfo for legal purposes only
@@ -418,7 +480,7 @@ async fn dispatch_module(
                 let milis = now.as_millis();
                 // FIXME: sketchy AF
                 let chosen_idx: usize = milis as usize % config.acl_deny().len();
-                if let Some(option) = options.iter().nth(chosen_idx) {
+                if let Some(option) = options.get(chosen_idx) {
                     response = option;
                 };
             };
@@ -518,6 +580,7 @@ pub(crate) fn core_starter(
         acl: vec![],
         trigger: TriggerType::Keyword(vec!["help".s(), "status".s()]),
         channel: Some(help_tx),
+        error_prefix: None,
     };
     modules.push(help);
 
@@ -528,6 +591,7 @@ pub(crate) fn core_starter(
         acl: vec![],
         trigger: TriggerType::Keyword(vec!["list".s(), "list-functions".s()]),
         channel: Some(list_tx),
+        error_prefix: None,
     };
     modules.push(list);
 
@@ -538,6 +602,7 @@ pub(crate) fn core_starter(
         acl: vec![Acl::SpecificUsers(reloader_config.admins)],
         trigger: TriggerType::Keyword(vec!["reload".s()]),
         channel: Some(reload_tx),
+        error_prefix: None,
     };
     modules.push(reload);
 
@@ -670,8 +735,16 @@ contact {mx_contact} or {fedi_contact} if you need more help"#,
     let mut specific_response: Option<RoomMessageEventContent> = None;
     for module in registered_modules {
         if module.name == maybe_module_name {
+            let keywords = match module.trigger {
+                TriggerType::Catchall(_) => "".s(),
+                TriggerType::Keyword(v) => format!(
+                    "\nkeyword{maybe_s}: {kws}",
+                    maybe_s = if v.len() > 1 { "s" } else { "" },
+                    kws = v.join(", ")
+                ),
+            };
             let response = format!(
-                r#"module {name} is {status}; help: {help}"#,
+                r#"module {name} is {status}; help: {help}{keywords}"#,
                 name = module.name,
                 help = module.help,
                 status = if module.channel.is_some() {
