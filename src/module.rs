@@ -8,6 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::bail;
 use lazy_static::lazy_static;
 use prometheus::{opts, register_int_counter_vec, IntCounterVec};
+use serde_derive::Deserialize;
 use tracing::{debug, error, info, trace};
 
 use matrix_sdk::event_handler::{Ctx, EventHandlerHandle};
@@ -452,7 +453,11 @@ async fn dispatch_module(
     Ok(())
 }
 
-pub fn init_modules(mx: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
+pub fn init_modules(
+    mx: &Client,
+    config: &Config,
+    reload_tx: mpsc::Sender<Room>,
+) -> anyhow::Result<EventHandlerHandle> {
     let klacz = KlaczDB { handle: "main" };
     let mut modules: Vec<ModuleInfo> = vec![];
     let mut passthrough_modules: Vec<PassThroughModuleInfo> = vec![];
@@ -485,7 +490,12 @@ pub fn init_modules(mx: &Client, config: &Config) -> anyhow::Result<EventHandler
         };
     }
 
-    match core_starter(config, modules.clone(), passthrough_modules.clone()) {
+    match core_starter(
+        config,
+        reload_tx,
+        modules.clone(),
+        passthrough_modules.clone(),
+    ) {
         Err(e) => error!("core modules module initialization failed fatally: {e}"),
         Ok(m) => modules.extend(m),
     };
@@ -500,11 +510,14 @@ pub fn init_modules(mx: &Client, config: &Config) -> anyhow::Result<EventHandler
 
 pub(crate) fn core_starter(
     config: &Config,
+    reload_ev_tx: mpsc::Sender<Room>,
     mut registered_modules: Vec<ModuleInfo>,
     registered_passthrough_modules: Vec<PassThroughModuleInfo>,
 ) -> anyhow::Result<Vec<ModuleInfo>> {
     info!("registering modules");
     let mut modules: Vec<ModuleInfo> = vec![];
+    let reloader_config: ReloaderConfig =
+        config.module_config_value("notbot::reloader")?.try_into()?;
 
     let (help_tx, help_rx) = mpsc::channel::<ConsumerEvent>(1);
     let help = ModuleInfo {
@@ -526,6 +539,16 @@ pub(crate) fn core_starter(
     };
     modules.push(list);
 
+    let (reload_tx, reload_rx) = mpsc::channel::<ConsumerEvent>(1);
+    let reload = ModuleInfo {
+        name: "reload".s(),
+        help: "reload bot configuration and modules".s(),
+        acl: vec![Acl::SpecificUsers(reloader_config.admins)],
+        trigger: TriggerType::Keyword(vec!["reload".s()]),
+        channel: Some(reload_tx),
+    };
+    modules.push(reload);
+
     registered_modules.extend(modules.clone());
     tokio::task::spawn(help_consumer(
         help_rx,
@@ -535,9 +558,10 @@ pub(crate) fn core_starter(
     ));
     tokio::task::spawn(list_consumer(
         list_rx,
-        registered_modules,
-        registered_passthrough_modules,
+        registered_modules.clone(),
+        registered_passthrough_modules.clone(),
     ));
+    tokio::task::spawn(reload_consumer(reload_rx, reload_ev_tx));
 
     Ok(modules)
 }
@@ -762,4 +786,34 @@ async fn list_consumer(
             error!("failed sending list response: {e}");
         }
     }
+}
+
+async fn reload_consumer(
+    mut rx: mpsc::Receiver<ConsumerEvent>,
+    reload_tx: mpsc::Sender<Room>,
+) -> anyhow::Result<()> {
+    loop {
+        let event = match rx.recv().await {
+            Some(e) => e,
+            None => {
+                error!("channel closed, goodbye! :(");
+                bail!("channel closed");
+            }
+        };
+
+        let reservation = match reload_tx.clone().try_reserve_owned() {
+            Ok(r) => r,
+            Err(e) => {
+                error!("reloader can't accept trigger: {e}");
+                continue;
+            }
+        };
+
+        reservation.send(event.room);
+    }
+}
+
+#[derive(Clone, Deserialize)]
+pub struct ReloaderConfig {
+    admins: Vec<String>,
 }

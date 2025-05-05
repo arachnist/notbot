@@ -7,7 +7,7 @@ use matrix_sdk::{
     authentication::matrix::MatrixSession, config::SyncSettings, Error as MatrixError, LoopCtrl,
 };
 
-use tokio::sync::broadcast::{channel, Receiver, Sender};
+use tokio::sync::mpsc::{Receiver, Sender};
 
 use prometheus::Counter;
 use prometheus::{opts, register_counter};
@@ -49,6 +49,7 @@ struct BotManagerInner {
     sync_settings: SyncSettings,
     config_path: String,
     dispatcher_handle: EventHandlerHandle,
+    reload_ev_tx: Sender<Room>,
 }
 
 #[derive(Debug)]
@@ -104,7 +105,11 @@ impl BotManagerInner {
 
         self.client
             .remove_event_handler(self.dispatcher_handle.clone());
-        let dispatcher_handle = match crate::module::init_modules(&self.client, &self.config) {
+        let dispatcher_handle = match crate::module::init_modules(
+            &self.client,
+            &self.config,
+            self.reload_ev_tx.clone(),
+        ) {
             Ok(h) => {
                 info!("initialized modules");
                 h
@@ -135,7 +140,7 @@ pub struct BotManager {
 }
 
 impl BotManager {
-    pub async fn new(config_path: String) -> anyhow::Result<(Self, Sender<Room>)> {
+    pub async fn new(config_path: String, reload_ev_tx: Sender<Room>) -> anyhow::Result<Self> {
         let config = Config::new(config_path.clone())?;
         let data_dir_str = config.data_dir();
         let data_dir = Path::new(&data_dir_str);
@@ -170,47 +175,36 @@ impl BotManager {
 
         client.add_event_handler_context(klacz);
 
-        let dispatcher_handle = match crate::module::init_modules(&client, &config) {
-            Ok(h) => {
-                info!("initialized modules");
-                h
-            }
-            Err(e) => {
-                error!("core modules failed to initialize: {e}");
-                std::process::exit(1)
-            }
-        };
+        let dispatcher_handle =
+            match crate::module::init_modules(&client, &config, reload_ev_tx.clone()) {
+                Ok(h) => {
+                    info!("initialized modules");
+                    h
+                }
+                Err(e) => {
+                    error!("core modules failed to initialize: {e}");
+                    std::process::exit(1)
+                }
+            };
 
         let (modules, _) = crate::init_modules(&client, &config, &Default::default());
         let (workers, _) = crate::init_workers(&client, &config, &Default::default());
 
-        let (tx, _) = channel::<Room>(1);
-        let tx2 = tx.clone();
-
-        // this config will not be reloadable :(
-        let reloader_config: ReloaderConfig =
-            config.module_config_value("notbot::reloader")?.try_into()?;
-        let _ = client.add_event_handler(move |ev, room| {
-            Self::reload_trigger(ev, room, tx.clone(), reloader_config)
-        });
-
         info!("finished initializing");
 
-        Ok((
-            BotManager {
-                inner: Arc::new(Mutex::new(BotManagerInner {
-                    modules,
-                    workers,
-                    config,
-                    client,
-                    session_file,
-                    sync_settings: sync_settings.clone(),
-                    config_path,
-                    dispatcher_handle,
-                })),
-            },
-            tx2,
-        ))
+        Ok(BotManager {
+            inner: Arc::new(Mutex::new(BotManagerInner {
+                modules,
+                workers,
+                config,
+                client,
+                session_file,
+                sync_settings: sync_settings.clone(),
+                config_path,
+                dispatcher_handle,
+                reload_ev_tx,
+            })),
+        })
     }
 
     pub async fn run(&self) -> anyhow::Result<()> {
@@ -328,37 +322,16 @@ impl BotManager {
         info!("[{room_name}] {}: {}", event.sender, text_content.body)
     }
 
-    async fn reload_trigger(
-        event: OriginalSyncRoomMessageEvent,
-        room: Room,
-        tx: Sender<Room>,
-        module_config: ReloaderConfig,
-    ) -> anyhow::Result<()> {
-        let MessageType::Text(text) = event.content.msgtype else {
-            return Ok(());
-        };
-
-        if !text.body.trim().starts_with(".reload") {
-            return Ok(());
-        };
-
-        if module_config.admins.contains(&event.sender.to_string()) {
-            if tx.is_empty() {
-                info!("sending reload trigger");
-                tx.send(room)?;
-            } else {
-                warn!("already processing reload request");
-                return Ok(());
-            };
-        };
-
-        Ok(())
-    }
-
     pub async fn reload(&self, mut rx: Receiver<Room>) -> anyhow::Result<()> {
         loop {
-            let room: Room = rx.recv().await?;
-            CONFIG_RELOADS.inc();
+            let room = match rx.recv().await {
+                Some(e) => e,
+                None => {
+                    error!("channel closed, goodbye! :(");
+                    bail!("channel closed");
+                }
+            };
+
             debug!("reload: attempting lock");
             let inner = &mut self.inner.lock().await;
             debug!("reload: grabbed lock");
@@ -393,11 +366,6 @@ impl BotManager {
             };
         }
     }
-}
-
-#[derive(Clone, Deserialize)]
-pub struct ReloaderConfig {
-    admins: Vec<String>,
 }
 
 /// The full session to persist.
