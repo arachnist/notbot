@@ -1,3 +1,8 @@
+//! Abstraction over the matrix-rust-sdk event handler system.
+//!
+//! Provides some structure for defining additional functionality for the bot,
+//! as well as functionality not provided by the upstream
+
 use crate::config::Config;
 use crate::klaczdb::KlaczDB;
 use crate::tools::{membership_status, room_name, ToStringExt};
@@ -40,27 +45,48 @@ static MODULE_EVENTS: LazyLock<IntCounterVec> = LazyLock::new(|| {
 /// For modules consuming text-like events, this should contain everything that's needed.
 #[derive(Clone)]
 pub struct ConsumerEvent {
+    /// "klacz" permission level of the event sender, defined on a room/sender pair.
     pub klacz_level: i64,
+    /// full original event from matrix-rust-sdk
     pub ev: OriginalSyncRoomMessageEvent,
+    /// convienience field for event sender
     pub sender: OwnedUserId,
+    /// room in which the event originated
     pub room: Room,
+    /// first word (whitespace deliminated) of text in the event content after the prefix
     pub keyword: String,
+    /// possible rest of the text in the event after the keyword
     pub args: Option<String>,
+    /// lua interpreter, pre-configured for running [notmun](https://code.hackerspace.pl/ar/notmun) modules and functions.
     pub lua: Lua,
+    /// [klacz](https://code.hackerspace.pl/hswaw/klacz) database object, providing convienient access to the database contents
     pub klacz: KlaczDB,
 }
 
+/// Main module object.
+///
+/// Defines the things needed from the module by the dispatcher and help system.
 #[derive(Clone, Debug)]
 pub struct ModuleInfo {
+    /// Module name
     pub name: String,
+    /// Short help/description of the module
     pub help: String,
+    /// ACLs required for the module. All that are defined for the module must be satisfied.
     pub acl: Vec<Acl>,
+    /// Type of module trigger
     pub trigger: TriggerType,
+    /// mpsc channel for sending events to the module
     pub channel: Option<mpsc::Sender<ConsumerEvent>>,
+    /// A prefix for error messages sent to the channel. If `None`, errors will be only
+    /// written to logs.
     pub error_prefix: Option<String>,
 }
 
 impl ModuleInfo {
+    /// Convenience function to spawn generic event channel consumer.
+    ///
+    /// Spawns a new tokio task looping over the event receiver channel, and
     pub fn spawn<C, Fut>(
         &self,
         rx: mpsc::Receiver<ConsumerEvent>,
@@ -79,6 +105,10 @@ impl ModuleInfo {
         ));
     }
 
+    /// Generic event consumer.
+    ///
+    /// Consumes events from the ConsumerEvent channel and passes them on to the
+    /// provided processor function.
     async fn consumer<C, Fut>(
         mut rx: mpsc::Receiver<ConsumerEvent>,
         config: C,
@@ -116,11 +146,16 @@ impl ModuleInfo {
     }
 }
 
-// distinct from generic ModuleInfo for legal purposes only
+/// Thin wrapper around ModuleInfo
+///
+/// Exists because the matrix-rust-sdk can only hold one extra context object per type.
 #[derive(Clone)]
 pub struct PassThroughModuleInfo(pub ModuleInfo);
 
-// TODO: figure out how to pass just limited config here
+/// Function signature for Decider function for non-keyword modules.
+///
+/// Returns Consumption to indicate whether or not the module will want to consume
+/// the event, and in what exclusivity manner.
 pub type CatchallDecider = fn(
     klaczlevel: i64,
     sender: OwnedUserId,
@@ -129,22 +164,42 @@ pub type CatchallDecider = fn(
     config: &Config,
 ) -> anyhow::Result<Consumption>;
 
+/// Possible ways to trigger a module
 #[derive(Clone, Debug)]
 pub enum TriggerType {
+    /// Module responds to pre-defined keywords.
     Keyword(Vec<String>),
+    /// Module uses a function to accept or reject modules using an arbitrary function.
     Catchall(CatchallDecider),
 }
 
+/// Access control lists for modules.
+///
+/// Define conditions required for an event to be passed to the module.
+/// All defined conditions must be satisfied.
 #[derive(Clone, Debug)]
 pub enum Acl {
+    /// User must be an active member of the Warsaw Hackerspace.
     ActiveHswawMember,
+    /// User must be a past or present known member of the Warsaw Hackerspace.
     MaybeInactiveHswawMember,
+    /// User is one of the pre-defined known users.
     SpecificUsers(Vec<String>),
+    /// Event was sent to a specific room.
     Room(Vec<String>),
+    /// User has a perimission level defined in the `oof`/`ood`/`klacz` database that is
+    /// not lower than the defined value.
     KlaczLevel(i64),
+    /// User comes from one of pre-defined homeserers.
     Homeserver(Vec<String>),
 }
 
+/// Event consumption manners for modules.
+///
+/// Indicate whether or not a module will consume an incoming event, and in what manner.
+/// Modules triggered by keywords will always consume exclusively.
+/// If, due to configuration, multiple modules were to consume an event exclusively, the
+/// first one checked wins.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Debug)]
 pub enum Consumption {
     // module doesn't want this event
@@ -157,6 +212,11 @@ pub enum Consumption {
     Exclusive,
 }
 
+/// Main event dispatcher.
+///
+/// Handles incoming text-like events, checks if they're not our own echoed back events,
+/// checks whether they match a prefix and keyword, handles consumption levels logic for
+/// regular and passthrough (rejection only) modules, and modules and events to `dispatch_module`
 #[allow(clippy::too_many_arguments)]
 pub async fn dispatcher(
     ev: OriginalSyncRoomMessageEvent,
@@ -395,6 +455,10 @@ pub async fn dispatcher(
     Ok(())
 }
 
+/// Actual module event dispatcher.
+///
+/// Checks ACLs, responds accordingly if ACLs fail, checks if event can be passed on to
+/// the module, and sends the event.
 async fn dispatch_module(
     config: Config,
     general: bool,
@@ -507,6 +571,10 @@ async fn dispatch_module(
     Ok(())
 }
 
+/// Main module initializer
+///
+/// Initializes "notmun" runtime, sets of main and passthrough modules, and core help,
+/// and configuration reloading functionality.
 pub fn init_modules(
     mx: &Client,
     config: &Config,

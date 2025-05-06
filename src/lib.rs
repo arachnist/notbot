@@ -2,12 +2,12 @@ mod botmanager;
 mod config;
 mod db;
 mod metrics;
-mod module;
 mod tools;
 mod webterface;
 
 pub use crate::botmanager::BotManager;
-pub mod prelude;
+pub(crate) mod prelude;
+pub mod module;
 
 mod autojoiner;
 mod inviter;
