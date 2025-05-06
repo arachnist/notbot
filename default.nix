@@ -4,7 +4,6 @@
   pkg-config,
   openssl,
   sqlite,
-  luajit_2_1,
   ...
 }:
 let
@@ -23,6 +22,5 @@ rustPlatform.buildRustPackage {
   buildInputs = [
     openssl
     sqlite
-    luajit_2_1
   ];
 }

@@ -253,7 +253,8 @@ pub struct ModuleInfo {
 impl ModuleInfo {
     /// Convenience function to spawn generic event channel consumer.
     ///
-    /// Spawns a new tokio task looping over the event receiver channel, and
+    /// Spawns a new tokio task dedicated to receiving events from the module mpsc
+    /// channel, and calling the event processor
     pub fn spawn<C, Fut>(
         &self,
         rx: mpsc::Receiver<ConsumerEvent>,
@@ -276,7 +277,7 @@ impl ModuleInfo {
     ///
     /// Consumes events from the ConsumerEvent channel and passes them on to the
     /// provided processor function.
-    async fn consumer<C, Fut>(
+    pub async fn consumer<C, Fut>(
         mut rx: mpsc::Receiver<ConsumerEvent>,
         config: C,
         error_prefix: Option<String>,
