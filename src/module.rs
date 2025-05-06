@@ -9,7 +9,7 @@
 //! throughout the project.
 //!
 //! ```
-//! use crate::prelude::*;
+//! use notbot::prelude::*;
 //!
 //! use serde_json::Value;
 //! use urlencoding::encode as uencode;
@@ -19,6 +19,8 @@
 //! reasonable default values, if applicable.
 //!
 //! ```
+//! use notbot::prelude::*;
+//!
 //! #[derive(Clone, Deserialize)]
 //! pub struct ModuleConfig {
 //!     pub app_id: String,
@@ -37,7 +39,7 @@
 //! which itself is loaded from a toml file, usually `notbot.toml`. The practice is to name the
 //! section after the module, for example:
 //!
-//! ```
+//! ```toml
 //! [module."notbot::wolfram"]
 //! app_id = "…"
 //! keywords = [ "c", "wolfram" ]
@@ -46,7 +48,9 @@
 //! Next step is to define a `starter` function, whose signature is as follows:
 //!
 //! ```
-//! pub fn starter(mx: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> { ... }
+//! use notbot::prelude::*;
+//!
+//! pub fn starter(mx: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> { Ok(vec![]) }
 //! ```
 //!
 //! The arguments are:
@@ -58,6 +62,10 @@
 //! A good example of a function registering just a single module is [`crate::wolfram`]
 //!
 //! ```rust
+//! use notbot::prelude::*;
+//!
+//! use notbot::wolfram::{ModuleConfig, WolframAlpha, processor};
+//!
 //! pub fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
 //!     info!("registering modules");
 //!
@@ -110,6 +118,17 @@
 //! needs to handle things specific to it:
 //!
 //! ```rust
+//! use notbot::prelude::*;
+//!
+//! use serde_json::Value;
+//! use urlencoding::encode as uencode;
+//!
+//! use notbot::wolfram::{ModuleConfig, WolframAlpha};
+//!
+//! fn default_keywords() -> Vec<String> {
+//!     vec!["c".s(), "wolfram".s()]
+//! }
+//!
 //! pub async fn processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
 //!     // check if the user actually passed any extra arguments
 //!     let Some(text_query) = event.args else {
@@ -743,10 +762,7 @@ pub async fn dispatch_module(
 ///
 /// Initializes "notmun" runtime, sets of main and passthrough modules, and core help,
 /// and configuration reloading functionality.
-/// This is also where the list of modules to try to initialize lives, see the two loops
-/// ```rust
-/// for starter in [ ] {}
-/// ```
+/// This is also where the list of modules to try to initialize lives, see the two for loops
 pub fn init_modules(
     mx: &Client,
     config: &Config,

@@ -135,7 +135,7 @@ impl Config {
         inner.ignored.clone()
     }
 
-    pub(crate) fn module_config_value(&self, n: &str) -> Result<Value, ConfigError> {
+    pub fn module_config_value(&self, n: &str) -> Result<Value, ConfigError> {
         let inner = &self.inner.lock().unwrap();
         if !inner.module.contains_key(n) {
             return Err(ConfigError::NoModuleConfig(n.to_owned()));

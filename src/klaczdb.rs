@@ -15,7 +15,7 @@
 //! 2) crc32 derived from class name, providing 16 bits
 //!
 //! the class name derived stuff is optimistic:
-//! ```
+//! ```clisp
 //! (def generic compute-class-id (class)
 //!  (:method ((class persistent-class))
 //!    (bind ((class-name-bytes (string-to-octets (symbol-name (class-name class)) :encoding :utf-8)))
@@ -25,7 +25,7 @@
 //! ```
 //!
 //! and the code for combining them is:
-//! ```
+//! ```clisp
 //! (def (function o) make-new-oid (class)
 //!  "Creates a fresh and unique oid which was never used before in the relational database."
 //!  (or (oid-instance-id-sequence-exists-p *database*)
@@ -39,12 +39,12 @@
 //! ```
 //!
 //! `ash` just shifts bits:
-//! ```
+//! ```irc
 //! 025025 <ari> ,eval (ash 8361528 16)
 //! 025025 <@oof> 547981099008 => (INTEGER 0 4611686018427387903)
 //! ```
 //!
-//! ```
+//! ```irb
 //! irb(main):001> 8361528.to_s(2)
 //! => "11111111001011000111000"
 //! irb(main):002> 547981099008.to_s(2)
@@ -56,7 +56,7 @@
 //! best thing: queried the the klacz with its exposed eval functionality
 //! to see what the unknown function returns.
 //!
-//! ```
+//! ```irc
 //! 032210 <ari> ,eval-klacz (hu.dwim.perec::id-of (find-class 'topic-change))
 //! 032210 <oof> 16031 => (INTEGER 0 4611686018427387903)
 //! 032435 <ari> ,eval-klacz (hu.dwim.perec::id-of (find-class 'term))
@@ -86,14 +86,14 @@
 //!
 //! I then figured out the `id-of` function gets mapped to `compute-class-id`, though I couldn't find the
 //! definition for that.
-//! ```
+//! ```irb
 //! 033535 <ari> ,eval-klacz (hu.dwim.perec::compute-class-id (find-class 'term))
 //! 033535 <oof> 40403 => (INTEGER 0 4611686018427387903)
 //! 033620 <ari> ,eval-klacz (hu.dwim.perec::compute-class-id (find-class 'entry))
 //! 033620 <oof> 15414 => (INTEGER 0 4611686018427387903)
 //! ```
 //!
-//! ```
+//! ```irb
 //! irb(main):001> 547981099008.to_s(2)
 //! => "111111110010110001110000000000000000000"
 //! irb(main):002> 40403.to_s(2)
