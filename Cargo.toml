@@ -1,9 +1,13 @@
 [package]
 name = "notbot"
-version = "0.6.8"
+version = "0.6.9"
+authors = ["Ari Gato <ari@is-a.cat>"]
 edition = "2021"
 autobins = true
 description = "Matrix chatbot, primarily used around the Warsaw Hackerspace channels and spaces"
+documentation = "https://docs.rs/notbot/latest/notbot"
+homepage = "https://code.hackerspace.pl/ar/notbot"
+keywords = ["matrix", "bot"]
 license = "GPL-2.0"
 
 [lib]
