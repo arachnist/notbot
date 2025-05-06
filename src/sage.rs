@@ -16,8 +16,6 @@ pub struct ModuleConfig {
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
     info!("registering modules");
-    let mut modules: Vec<ModuleInfo> = vec![];
-
     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
 
     let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
@@ -30,9 +28,8 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         error_prefix: Some("failed to remove them".s()),
     };
     sage.spawn(rx, module_config.clone(), processor);
-    modules.push(sage);
 
-    Ok(modules)
+    Ok(vec![sage])
 }
 
 async fn processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {

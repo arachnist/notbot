@@ -121,6 +121,7 @@ pub mod sync {
     use reqwest::blocking::Client as RClient;
     use serde::de;
 
+    #[allow(dead_code)]
     pub fn fetch_and_decode_json<D: de::DeserializeOwned>(url: String) -> anyhow::Result<D> {
         let client = RClient::new();
         let data = client.get(url).send()?;

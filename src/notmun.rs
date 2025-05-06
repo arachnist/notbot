@@ -16,7 +16,7 @@ pub struct ModuleConfig {
     mun_path: String,
 }
 
-// leaving this here for now;
+#[allow(deprecated)]
 pub(crate) fn modules() -> Vec<ModuleStarter> {
     vec![(module_path!(), start_generic_dispatcher)]
 }
@@ -134,10 +134,11 @@ pub(crate) fn module_starter(client: &Client, config: &Config) -> anyhow::Result
     Ok(()) // Ok(client.add_event_handler(lua_dispatcher))
 }
 
-pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<PassThroughModuleInfo>> {
+pub(crate) fn passthrough(
+    _: &Client,
+    config: &Config,
+) -> anyhow::Result<Vec<PassThroughModuleInfo>> {
     info!("registering modules");
-    let mut modules: Vec<PassThroughModuleInfo> = vec![];
-
     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
 
     let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
@@ -150,9 +151,8 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<PassThr
         error_prefix: None,
     });
     notmun.0.spawn(rx, module_config, processor);
-    modules.push(notmun);
 
-    Ok(modules)
+    Ok(vec![notmun])
 }
 
 async fn processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
@@ -518,7 +518,8 @@ impl TryFrom<Vec<String>> for NotMunAction {
 
 #[derive(Debug)]
 pub enum NotMunError {
-    NoRoom(String),
+    #[allow(dead_code)]
+    NoSuchRoom(String),
     UnknownAction,
     UnhandledAction(NotMunAction),
     ChannelClosed,
@@ -529,7 +530,7 @@ impl StdError for NotMunError {}
 impl fmt::Display for NotMunError {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            NotMunError::NoRoom(e) => write!(fmt, "Couldn't get room from: {e}"),
+            NotMunError::NoSuchRoom(e) => write!(fmt, "Couldn't get room from: {e}"),
             NotMunError::UnknownAction => write!(fmt, "Unknown action"),
             NotMunError::UnhandledAction(e) => write!(fmt, "Unhandled action: {e}"),
             NotMunError::ChannelClosed => write!(fmt, "Action consumer channel is closed"),

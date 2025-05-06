@@ -1,16 +1,16 @@
 pub use crate::config::Config;
 
-pub use crate::db::{DBError, DBPools};
+pub use crate::db::DBPools;
 
-pub use crate::botmanager::{Module, ModuleStarter, Worker, WorkerStarter};
+#[allow(deprecated)]
+pub use crate::botmanager::{ModuleStarter, WorkerStarter};
 pub use crate::module::{
     Acl, ConsumerEvent, Consumption, ModuleInfo, PassThroughModuleInfo, TriggerType,
 };
 pub use crate::webterface::{OauthUserInfo, WebAppState};
 
-pub use crate::klaczdb::{KlaczClass, KlaczDB, KlaczError};
+pub use crate::klaczdb::KlaczDB;
 
-pub use crate::notmun::NotMunError;
 pub use crate::tools::*;
 
 pub use std::collections::HashMap;
@@ -30,17 +30,14 @@ pub use anyhow::{anyhow, bail};
 pub use matrix_sdk::event_handler::{Ctx, EventHandlerHandle};
 pub use matrix_sdk::ruma::events::room::{
     member::{MembershipChange, RoomMemberEvent, RoomMemberEventContent, StrippedRoomMemberEvent},
-    message::{
-        MessageType, OriginalSyncRoomMessageEvent, RoomMessageEvent, RoomMessageEventContent,
-    },
+    message::{MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent},
 };
 pub use matrix_sdk::ruma::events::{
-    AnyMessageLikeEvent, AnyStateEvent, AnySyncTimelineEvent, AnyTimelineEvent, Mentions,
+    AnyStateEvent, AnySyncTimelineEvent, AnyTimelineEvent, Mentions,
 };
 pub use matrix_sdk::ruma::{OwnedEventId, OwnedRoomAliasId, OwnedRoomId, OwnedUserId, UserId};
-pub use matrix_sdk::{Client, Room, RoomState};
+pub use matrix_sdk::{Client, Room};
 
-pub use reqwest::Client as RClient;
 pub use tokio::sync::mpsc;
 
 pub use tracing::{debug, error, info, trace, warn};

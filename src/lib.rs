@@ -1,13 +1,13 @@
 mod botmanager;
-mod config;
 mod db;
 mod metrics;
-mod tools;
 mod webterface;
 
 pub use crate::botmanager::BotManager;
-pub(crate) mod prelude;
+pub mod config;
 pub mod module;
+pub mod prelude;
+pub mod tools;
 
 mod autojoiner;
 mod inviter;
@@ -16,16 +16,16 @@ mod klaczdb;
 mod notbottime;
 mod notmun;
 mod sage;
-mod shenanigans;
 mod spaceapi;
-mod wolfram;
+pub mod wolfram;
 
 use crate::prelude::*;
 
+#[allow(deprecated)]
 fn register_modules(
     mx: &Client,
     config: &Config,
-    modules: &mut HashMap<String, Module>,
+    modules: &mut HashMap<String, Option<EventHandlerHandle>>,
     failed: &mut Vec<String>,
     starters: Vec<ModuleStarter>,
 ) {
@@ -41,20 +41,20 @@ fn register_modules(
             }
         };
 
-        modules.insert(name.to_string(), Module { handle, starter });
+        modules.insert(name.to_string(), handle);
     }
 }
 
 pub(crate) fn init_modules(
     mx: &Client,
     config: &Config,
-    old_modules: &HashMap<String, Module>,
-) -> (HashMap<String, Module>, Vec<String>) {
-    let mut modules: HashMap<String, Module> = Default::default();
+    old_modules: &HashMap<String, Option<EventHandlerHandle>>,
+) -> (HashMap<String, Option<EventHandlerHandle>>, Vec<String>) {
+    let mut modules: HashMap<String, Option<EventHandlerHandle>> = Default::default();
     let mut failed: Vec<String> = vec![];
 
     for (name, module) in old_modules {
-        match &module.handle {
+        match &module {
             Some(handle) => {
                 info!("deregistering: {name}");
                 mx.remove_event_handler(handle.to_owned());
@@ -66,7 +66,6 @@ pub(crate) fn init_modules(
     for initializer in [
         autojoiner::modules, // handle invites
         notmun::modules,     // just the non-text events
-        shenanigans::modules,
     ] {
         register_modules(mx, config, &mut modules, &mut failed, initializer());
     }
@@ -75,10 +74,11 @@ pub(crate) fn init_modules(
 }
 
 use tokio::task::AbortHandle;
+#[allow(deprecated)]
 fn register_workers(
     mx: &Client,
     config: &Config,
-    modules: &mut HashMap<String, Worker>,
+    modules: &mut HashMap<String, Option<AbortHandle>>,
     failed: &mut Vec<String>,
     starters: Vec<WorkerStarter>,
 ) {
@@ -94,20 +94,20 @@ fn register_workers(
             }
         };
 
-        modules.insert(name.to_string(), Worker { handle, starter });
+        modules.insert(name.to_string(), handle);
     }
 }
 
 pub(crate) fn init_workers(
     mx: &Client,
     config: &Config,
-    old_workers: &HashMap<String, Worker>,
-) -> (HashMap<String, Worker>, Vec<String>) {
-    let mut workers: HashMap<String, Worker> = Default::default();
+    old_workers: &HashMap<String, Option<AbortHandle>>,
+) -> (HashMap<String, Option<AbortHandle>>, Vec<String>) {
+    let mut workers: HashMap<String, Option<AbortHandle>> = Default::default();
     let mut failed: Vec<String> = vec![];
 
     for (name, worker) in old_workers {
-        match &worker.handle {
+        match &worker {
             Some(handle) => {
                 info!("stopping: {name}");
                 handle.abort();

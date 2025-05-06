@@ -34,6 +34,7 @@ pub struct ModuleConfig {
     client_secret: Option<String>,
 }
 
+#[allow(deprecated)]
 pub(crate) fn workers() -> Vec<WorkerStarter> {
     vec![(module_path!(), worker_starter)]
 }

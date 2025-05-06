@@ -1,12 +1,7 @@
 use crate::prelude::*;
 
 use serde_json::Value;
-
 use urlencoding::encode as uencode;
-
-fn default_keywords() -> Vec<String> {
-    vec!["c".s(), "wolfram".s()]
-}
 
 #[derive(Clone, Deserialize)]
 pub struct ModuleConfig {
@@ -15,13 +10,15 @@ pub struct ModuleConfig {
     pub keywords: Vec<String>,
 }
 
-pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
-    info!("registering modules");
-    let mut modules: Vec<ModuleInfo> = vec![];
+fn default_keywords() -> Vec<String> {
+    vec!["c".s(), "wolfram".s()]
+}
 
+pub fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
+    info!("registering modules");
     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
 
-    let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
+    let (tx, rx) = mpsc::channel(1);
     let wolfram = ModuleInfo {
         name: "wolfram".s(),
         help: "calculate something using wolfram alpha".s(),
@@ -31,12 +28,11 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         error_prefix: Some("error getting wolfram response".s()),
     };
     wolfram.spawn(rx, module_config, processor);
-    modules.push(wolfram);
 
-    Ok(modules)
+    Ok(vec![wolfram])
 }
 
-async fn processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
+pub async fn processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
     let Some(text_query) = event.args else {
         event
             .room
@@ -67,7 +63,6 @@ async fn processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result
     };
 
     let mut response_parts: Vec<String> = vec![];
-
     for pod in data.queryresult.pods {
         if pod.primary.is_some_and(|x| x) {
             response_parts.push(pod.title + ": " + pod.subpods[0].plaintext.as_str());

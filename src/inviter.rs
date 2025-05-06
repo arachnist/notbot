@@ -23,8 +23,6 @@ pub struct ModuleConfig {
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
     info!("registering modules");
-    let mut modules: Vec<ModuleInfo> = vec![];
-
     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
 
     let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
@@ -37,9 +35,8 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         error_prefix: Some("couldn't process invite request".s()),
     };
     inviter.spawn(rx, module_config, invite_request);
-    modules.push(inviter);
 
-    Ok(modules)
+    Ok(vec![inviter])
 }
 
 async fn invite_request(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {

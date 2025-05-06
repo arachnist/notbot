@@ -4,6 +4,7 @@ use tokio::task::AbortHandle;
 
 use tokio::time::{interval, Duration};
 
+#[allow(deprecated)]
 pub(crate) fn workers() -> Vec<WorkerStarter> {
     vec![(module_path!(), worker_starter)]
 }
@@ -24,8 +25,6 @@ pub struct ModuleConfig {
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
     info!("registering modules");
-    let mut modules: Vec<ModuleInfo> = vec![];
-
     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
 
     let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
@@ -38,9 +37,8 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         error_prefix: Some("error getting presence status".s()),
     };
     at.spawn(rx, module_config, processor);
-    modules.push(at);
 
-    Ok(modules)
+    Ok(vec![at])
 }
 
 async fn processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {

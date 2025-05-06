@@ -2,6 +2,173 @@
 //!
 //! Provides some structure for defining additional functionality for the bot,
 //! as well as functionality not provided by the upstream
+//!
+//! # Writing modules.
+//!
+//! Start by including [`crate::prelude`] which re-exports types, functions, and macros used
+//! throughout the project.
+//!
+//! ```
+//! use crate::prelude::*;
+//!
+//! use serde_json::Value;
+//! use urlencoding::encode as uencode;
+//! ```
+//!
+//! Create a struct for configuration of the module, as well as functions for defining any
+//! reasonable default values, if applicable.
+//!
+//! ```
+//! #[derive(Clone, Deserialize)]
+//! pub struct ModuleConfig {
+//!     pub app_id: String,
+//!     #[serde(default = "default_keywords")]
+//!     pub keywords: Vec<String>,
+//! }
+//!
+//! fn default_keywords() -> Vec<String> {
+//!     vec!["c".s(), "wolfram".s()]
+//! }
+//! ```
+//!
+//! The configuration struct will need to implement `Clone` and `Deserialize` traits, but that is
+//! easily achieved with the derive macros.
+//! Module configuration is loaded from sections of the global bot configuration, [`crate::config`],
+//! which itself is loaded from a toml file, usually `notbot.toml`. The practice is to name the
+//! section after the module, for example:
+//!
+//! ```
+//! [module."notbot::wolfram"]
+//! app_id = "…"
+//! keywords = [ "c", "wolfram" ]
+//! ```
+//!
+//! Next step is to define a `starter` function, whose signature is as follows:
+//!
+//! ```
+//! pub fn starter(mx: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> { ... }
+//! ```
+//!
+//! The arguments are:
+//! - `mx`: [`matrix_sdk::Client`] - global matrix client
+//! - `config`: [`crate::Config`] - global bot configuration
+//!
+//! And the function is expected to return [`anyhow::Result`] of a vector of [`ModuleInfo`]s.
+//!
+//! A good example of a function registering just a single module is [`crate::wolfram`]
+//!
+//! ```rust
+//! pub fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
+//!     info!("registering modules");
+//!
+//!     // object representing module configuration
+//!     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+//!
+//!     // [`tokio::sync::mpsc`] channel for passing events to the module. If the module is not
+//!     // expected to take significant amount of time for processing the events, capacity of `1`
+//!     // should be enough. If a module won't be able to accept the event, the event will be
+//!     // discarded.
+//!     let (tx, rx) = mpsc::channel(1);
+//!
+//!     // [`ModuleInfo`] for the module
+//!     let wolfram = ModuleInfo {
+//!         name: "wolfram".s(),
+//!         help: "calculate something using wolfram alpha".s(),
+//!         // Vector [`Acl`] objects representing requirements for triggering the module
+//!         acl: vec![],
+//!         // [`TriggerType`] for the module. Note how triggers can be defined in configuration.
+//!         trigger: TriggerType::Keyword(module_config.keywords.clone()),
+//!         // Option of channel sender. If the module performs a more sophisticated
+//!         // initialization process that failed, you can pass None here.
+//!         channel: Some(tx),
+//!         // Option of error message prefixes. If processing an event for the module fails, and
+//!         // is not `None`, the error message will be posted to the channel.
+//!         error_prefix: Some("error getting wolfram response".s()),
+//!     };
+//!     // Actually starting the module. Using this function is optional, and you can start an event
+//!     // processing task your own way. See [`core_starter`] for an example of that, where the
+//!     // event consumers and processors for `help`, `list`, and `reload` functionality take
+//!     // additional arguments.
+//!     // `processor`, as passed to the [`ModuleInfo::spawn`] function, is expected to take a
+//!     // single [`ConsumerEvent`] and module configuration as arguments.
+//!     wolfram.spawn(rx, module_config, processor);
+//!
+//!     // Return the list of registered modules.
+//!     // The module list can also be constructed dynamically, and appended with each registered
+//!     // module.
+//!     // ```
+//!     // let mut modules: Vec<ModuleInfo> = vec![];
+//!     // ...
+//!     // modules.push(wolfram);
+//!     // ```
+//!     Ok(vec![wolfram])
+//! }
+//! ```
+//!
+//! Modules need to process events sent to them. The typical checks, like access control, or keyword
+//! matching is handled by [`dispatcher`] and [`dispatch_module`] functions, so the module only
+//! needs to handle things specific to it:
+//!
+//! ```rust
+//! pub async fn processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
+//!     // check if the user actually passed any extra arguments
+//!     let Some(text_query) = event.args else {
+//!         event
+//!             .room
+//!             .send(RoomMessageEventContent::text_plain(
+//!                 "missing argument: query",
+//!             ))
+//!             .await?;
+//!         return Ok(());
+//!     };
+//!
+//!     // encode the query using [`urlencoding::encode`]
+//!     let query = uencode(text_query.as_str());
+//!
+//!     // construct the http query string
+//!     let url: String = "http://api.wolframalpha.com/v2/query?input=".to_owned()
+//!         + query.as_ref()
+//!         + "&appid="
+//!         + config.app_id.as_str()
+//!         + "&output=json";
+//!
+//!     // [`crate::tools::fetch_and_decode_json`] used here as a helper function to query
+//!     // WolframAlpha json api, and decode its response.
+//!     let Ok(data) = fetch_and_decode_json::<WolframAlpha>(url).await else {
+//!         bail!("couldn't fetch data from wolfram")
+//!     };
+//!
+//!     // Validate the returned data beyond what deserialize json can do
+//!     if !data.queryresult.success || data.queryresult.numpods == 0 {
+//!         event
+//!             .room
+//!             .send(RoomMessageEventContent::text_plain("no results"))
+//!             .await?;
+//!     };
+//!
+//!     // Prepare response sent back to the room:
+//!     let mut response_parts: Vec<String> = vec![];
+//!     for pod in data.queryresult.pods {
+//!         if pod.primary.is_some_and(|x| x) {
+//!             response_parts.push(pod.title + ": " + pod.subpods[0].plaintext.as_str());
+//!         }
+//!     }
+//!
+//!     // Actually send the response
+//!     event
+//!         .room
+//!         .send(RoomMessageEventContent::text_plain(
+//!             response_parts.join("\n"),
+//!         ))
+//!         .await?;
+//!
+//!     Ok(())
+//! }
+//! ```
+//!
+//! The module starter now needs to be added to the list of known module starters.
+//! This list is, for now, hardcoded, but the plan is to make a dynamic list that can
+//! be modified at runtime.
 
 use crate::config::Config;
 use crate::klaczdb::KlaczDB;
@@ -216,7 +383,7 @@ pub enum Consumption {
 ///
 /// Handles incoming text-like events, checks if they're not our own echoed back events,
 /// checks whether they match a prefix and keyword, handles consumption levels logic for
-/// regular and passthrough (rejection only) modules, and modules and events to `dispatch_module`
+/// regular and passthrough (rejection only) modules, and modules and events to [`dispatch_module`]
 #[allow(clippy::too_many_arguments)]
 pub async fn dispatcher(
     ev: OriginalSyncRoomMessageEvent,
@@ -457,9 +624,9 @@ pub async fn dispatcher(
 
 /// Actual module event dispatcher.
 ///
-/// Checks ACLs, responds accordingly if ACLs fail, checks if event can be passed on to
+/// Checks ACLs, responds accordingly if ACLs fail, checks if event can be sent to
 /// the module, and sends the event.
-async fn dispatch_module(
+pub async fn dispatch_module(
     config: Config,
     general: bool,
     module: &ModuleInfo,
@@ -575,6 +742,10 @@ async fn dispatch_module(
 ///
 /// Initializes "notmun" runtime, sets of main and passthrough modules, and core help,
 /// and configuration reloading functionality.
+/// This is also where the list of modules to try to initialize lives, see the two loops
+/// ```rust
+/// for starter in [ ] {}
+/// ```
 pub fn init_modules(
     mx: &Client,
     config: &Config,
@@ -605,7 +776,7 @@ pub fn init_modules(
         };
     }
 
-    for starter in [crate::kasownik::passthrough, crate::notmun::starter] {
+    for starter in [crate::kasownik::passthrough, crate::notmun::passthrough] {
         match starter(mx, config) {
             Err(e) => error!("module initialization failed fatally: {e}"),
             Ok(m) => passthrough_modules.extend(m),
@@ -630,7 +801,7 @@ pub fn init_modules(
     Ok(mx.add_event_handler(dispatcher))
 }
 
-pub(crate) fn core_starter(
+pub fn core_starter(
     config: &Config,
     reload_ev_tx: mpsc::Sender<Room>,
     mut registered_modules: Vec<ModuleInfo>,
@@ -691,7 +862,7 @@ pub(crate) fn core_starter(
     Ok(modules)
 }
 
-async fn help_consumer(
+pub async fn help_consumer(
     mut rx: mpsc::Receiver<ConsumerEvent>,
     config: Config,
     registered_modules: Vec<ModuleInfo>,
@@ -727,7 +898,7 @@ async fn help_consumer(
     }
 }
 
-async fn help_processor(
+pub async fn help_processor(
     event: ConsumerEvent,
     config: Config,
     registered_modules: Vec<ModuleInfo>,
@@ -855,7 +1026,7 @@ contact {mx_contact} or {fedi_contact} if you need more help"#,
     Ok(())
 }
 
-async fn list_consumer(
+pub async fn list_consumer(
     mut rx: mpsc::Receiver<ConsumerEvent>,
     registered_modules: Vec<ModuleInfo>,
     registered_passthrough_modules: Vec<PassThroughModuleInfo>,
@@ -921,7 +1092,7 @@ async fn list_consumer(
     }
 }
 
-async fn reload_consumer(
+pub async fn reload_consumer(
     mut rx: mpsc::Receiver<ConsumerEvent>,
     reload_tx: mpsc::Sender<Room>,
 ) -> anyhow::Result<()> {

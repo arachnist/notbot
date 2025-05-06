@@ -9,6 +9,7 @@ static ROOM_INVITES: LazyLock<Counter> = LazyLock::new(|| {
     register_counter!(opts!("room_invite_events_total", "Number of room invites",)).unwrap()
 });
 
+#[allow(deprecated)]
 pub(crate) fn modules() -> Vec<ModuleStarter> {
     vec![(module_path!(), module_starter)]
 }

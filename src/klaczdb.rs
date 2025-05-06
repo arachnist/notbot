@@ -450,8 +450,6 @@ pub struct ModuleConfig {
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
     info!("registering modules");
-    let mut modules: Vec<ModuleInfo> = vec![];
-
     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
 
     let (addtx, addrx) = mpsc::channel::<ConsumerEvent>(1);
@@ -464,7 +462,6 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         error_prefix: Some("error adding entry".s()),
     };
     add.spawn(addrx, module_config.clone(), add_processor);
-    modules.push(add);
 
     let (removetx, removerx) = mpsc::channel::<ConsumerEvent>(1);
     let remove = ModuleInfo {
@@ -476,9 +473,8 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         error_prefix: Some("error removing entry".s()),
     };
     remove.spawn(removerx, module_config.clone(), remove_processor);
-    modules.push(remove);
 
-    Ok(modules)
+    Ok(vec![add, remove])
 }
 
 async fn add_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {

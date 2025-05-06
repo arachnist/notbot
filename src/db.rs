@@ -58,8 +58,6 @@ impl DBPools {
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
     info!("registering modules");
-    let mut modules: Vec<ModuleInfo> = vec![];
-
     let mut module_config: DBConfig = config.module_config_value(module_path!())?.try_into()?;
 
     let mut dbc = DB_CONNECTIONS.0.lock().unwrap();
@@ -95,9 +93,8 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         error_prefix: Some("error getting database status".s()),
     };
     db.spawn(rx, module_config, dbstatus);
-    modules.push(db);
 
-    Ok(modules)
+    Ok(vec![db])
 }
 
 async fn dbstatus(event: ConsumerEvent, config: DBConfig) -> anyhow::Result<()> {

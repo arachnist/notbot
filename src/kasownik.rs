@@ -25,8 +25,6 @@ pub struct ModuleConfig {
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
     info!("registering modules");
-    let mut modules: Vec<ModuleInfo> = vec![];
-
     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
 
     let (duetx, duerx) = mpsc::channel::<ConsumerEvent>(1);
@@ -39,7 +37,6 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         error_prefix: Some("error checking membership fees".s()),
     };
     due.spawn(duerx, module_config.clone(), due_processor);
-    modules.push(due);
 
     let (due_metx, due_merx) = mpsc::channel::<ConsumerEvent>(1);
     let due_me = ModuleInfo {
@@ -51,9 +48,8 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         error_prefix: Some("error checking membership fees".s()),
     };
     due_me.spawn(due_merx, module_config.clone(), due_me_processor);
-    modules.push(due_me);
 
-    Ok(modules)
+    Ok(vec![due, due_me])
 }
 
 async fn due_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
@@ -149,7 +145,6 @@ pub(crate) fn passthrough(
     config: &Config,
 ) -> anyhow::Result<Vec<PassThroughModuleInfo>> {
     info!("registering passthrough modules");
-    let mut modules: Vec<PassThroughModuleInfo> = vec![];
     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
 
     let (nagtx, nagrx) = mpsc::channel::<ConsumerEvent>(1);
@@ -162,9 +157,8 @@ pub(crate) fn passthrough(
         error_prefix: None,
     });
     nag.0.spawn(nagrx, module_config, nag_processor);
-    modules.push(nag);
 
-    Ok(modules)
+    Ok(vec![nag])
 }
 
 async fn nag_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {

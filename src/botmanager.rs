@@ -9,29 +9,24 @@ use matrix_sdk::{
 
 use tokio::sync::mpsc::{Receiver, Sender};
 
+#[deprecated]
 pub type WorkerStarter = (
     &'static str,
     fn(&Client, &Config) -> anyhow::Result<AbortHandle>,
 );
 
-pub struct Worker {
-    pub handle: Option<AbortHandle>,
-    pub starter: fn(&Client, &Config) -> anyhow::Result<AbortHandle>,
-}
-
+#[deprecated(
+    since = "0.6.0",
+    note = "please use [`crate::module::ModuleInfo`] instead"
+)]
 pub type ModuleStarter = (
     &'static str,
     fn(&Client, &Config) -> anyhow::Result<EventHandlerHandle>,
 );
 
-pub struct Module {
-    pub handle: Option<EventHandlerHandle>,
-    pub starter: fn(&Client, &Config) -> anyhow::Result<EventHandlerHandle>,
-}
-
 struct BotManagerInner {
-    modules: HashMap<String, Module>,
-    workers: HashMap<String, Worker>,
+    modules: HashMap<String, Option<EventHandlerHandle>>,
+    workers: HashMap<String, Option<AbortHandle>>,
     config: Config,
     client: Client,
     session_file: PathBuf,
