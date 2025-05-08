@@ -1,7 +1,7 @@
 use crate::prelude::*;
 
-use crate::metrics::{serve_metrics, track_metrics};
 use crate::alerts::receive_alerts;
+use crate::metrics::{serve_metrics, track_metrics};
 
 use axum::{
     error_handling::HandleErrorLayer,

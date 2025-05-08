@@ -1,7 +1,7 @@
+mod alerts;
 mod botmanager;
 mod metrics;
 mod webterface;
-mod alerts;
 
 pub use crate::botmanager::BotManager;
 pub mod config;
