@@ -81,10 +81,7 @@ impl FiringAlerts {
 
         trace!("known instances: {:#?}", inner.keys());
 
-        match inner.get(&name) {
-            None => return None,
-            Some(va) => Some(va.to_owned()),
-        }
+        inner.get(&name).map(|va| va.to_owned())
     }
 
     // our known state has desynched for whatever reason, start from empty slate
@@ -169,10 +166,10 @@ pub async fn receive_alerts(
 
     let changed = match alerts.status {
         Firing => FIRING_ALERTS
-            .fire("cat".s(), alerts.alerts)
+            .fire(instance.clone().unwrap(), alerts.alerts)
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to fire alerts")),
         Resolved => FIRING_ALERTS
-            .resolve("cat".s(), alerts.alerts)
+            .resolve(instance.clone().unwrap(), alerts.alerts)
             .map_err(|_| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -260,7 +257,7 @@ async fn alerting_processor(event: ConsumerEvent, config: ModuleConfig) -> anyho
 
         maybe_grafanas.push(first);
 
-        while let Some(maybe_grafana) = args.next() {
+        for maybe_grafana in args {
             maybe_grafanas.push(maybe_grafana.to_string());
         }
 
@@ -286,6 +283,9 @@ async fn alerting_processor(event: ConsumerEvent, config: ModuleConfig) -> anyho
                 trace!("no alerts known")
             }
             Some(va) => {
+                if va.is_empty() {
+                    continue;
+                };
                 event.room.send(to_matrix_message(va)).await?;
                 sent = true;
             }
@@ -293,7 +293,11 @@ async fn alerting_processor(event: ConsumerEvent, config: ModuleConfig) -> anyho
     }
 
     if !sent {
-        let mut response = config.no_firing_alerts_responses.get(0).unwrap().to_owned();
+        let mut response = config
+            .no_firing_alerts_responses
+            .first()
+            .unwrap()
+            .to_owned();
         // same hack as crate::module::dispatch_module()
         if let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) {
             let milis = now.as_millis();
@@ -333,7 +337,7 @@ impl fmt::Display for AlertStatus {
 }
 
 impl AlertStatus {
-    pub fn into_emoji(&self) -> &'static str {
+    pub fn into_emoji(self) -> &'static str {
         use AlertStatus::*;
         match self {
             Firing => "🔥",
@@ -356,7 +360,7 @@ pub fn to_matrix_message(va: Vec<Alert>) -> impl MessageLikeEventContent {
                 r#"{state_emoji}<b>{state}</b><br/>
 {annotations}
 since: {since}<br />"#,
-                state_emoji = alert.status.into_emoji(),
+                state_emoji = alert.status.clone().into_emoji(),
                 state = alert.status,
                 annotations = annotations_html,
                 since = alert.starts_at,
@@ -372,7 +376,7 @@ since: {since}<br />"#,
             format!(
                 "{state_emoji} {state}\n
 {annotations}since: {since}\n",
-                state_emoji = alert.status.into_emoji(),
+                state_emoji = alert.status.clone().into_emoji(),
                 state = alert.status,
                 annotations = annotations,
                 since = alert.starts_at,
@@ -464,7 +468,7 @@ pub trait AuthBeaererCustom: Sized {
         let split = authorization.split_once(' ');
         match split {
             // Found proper bearer
-            Some((name, contents)) if name == "Bearer" => Ok(Self::from_header(contents)),
+            Some(("Bearer", contents)) => Ok(Self::from_header(contents)),
             _ => Err((Self::ERROR_CODE, "Authorization header invalid")),
         }
     }
