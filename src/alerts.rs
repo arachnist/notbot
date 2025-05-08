@@ -185,10 +185,10 @@ pub async fn receive_alerts(
         };
         async {
             // can .unwrap() as the .is_none() case is handled above
-            if let Some(grafana_config) = module_config.grafanas.get(&instance.unwrap()) {
+            if let Some(grafana_config) = module_config.grafanas.get(&instance.clone().unwrap()) {
                 for room in grafana_config.rooms.clone() {
                     if let Ok(mx_room) = maybe_get_room(&app_state.mx, &room).await {
-                        let mx_message = to_matrix_message(alerts.clone());
+                        let mx_message = to_matrix_message(alerts.clone(), instance.clone().unwrap());
                         if let Err(e) = mx_room.send(mx_message).await {
                             trace!("failed to send room notification: {e}");
                         }
@@ -277,7 +277,7 @@ async fn alerting_processor(event: ConsumerEvent, config: ModuleConfig) -> anyho
 
     for grafana in grafanas {
         let name = grafana.name.clone();
-        let alerts = FIRING_ALERTS.get(name);
+        let alerts = FIRING_ALERTS.get(name.clone());
         match alerts {
             None => {
                 trace!("no alerts known")
@@ -286,7 +286,7 @@ async fn alerting_processor(event: ConsumerEvent, config: ModuleConfig) -> anyho
                 if va.is_empty() {
                     continue;
                 };
-                event.room.send(to_matrix_message(va)).await?;
+                event.room.send(to_matrix_message(va, name)).await?;
                 sent = true;
             }
         };
@@ -346,9 +346,9 @@ impl AlertStatus {
     }
 }
 
-pub fn to_matrix_message(va: Vec<Alert>) -> impl MessageLikeEventContent {
-    let mut response_html = "".s();
-    let mut response = "".s();
+pub fn to_matrix_message(va: Vec<Alert>, instance: String) -> impl MessageLikeEventContent {
+    let mut response_html = format!("instance: <b>{instance}</b><br />");
+    let mut response = format!("instance: {instance}\n");
 
     for alert in va.clone() {
         let mut annotations_html = "".s();
