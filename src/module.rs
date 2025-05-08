@@ -786,6 +786,7 @@ pub fn init_modules(
         crate::kasownik::starter,
         crate::wolfram::starter,
         crate::sage::starter,
+        crate::alerts::starter,
     ] {
         match starter(mx, config) {
             Err(e) => error!("module initialization failed fatally: {e}"),

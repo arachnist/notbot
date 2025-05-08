@@ -1,6 +1,7 @@
 use crate::prelude::*;
 
 use crate::metrics::{serve_metrics, track_metrics};
+use crate::alerts::receive_alerts;
 
 use axum::{
     error_handling::HandleErrorLayer,
@@ -8,7 +9,7 @@ use axum::{
     http::{StatusCode, Uri},
     middleware, response,
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use axum_oidc::{
@@ -94,6 +95,7 @@ async fn worker_entrypoint(mx: Client, bot_config: Config) -> anyhow::Result<()>
         .layer(session_layer)
         .nest_service("/static", ServeDir::new("webui/static"))
         .route("/metrics", get(serve_metrics))
+        .route("/hook/alerts", post(receive_alerts))
         .route_layer(middleware::from_fn(track_metrics))
         .with_state(app_state);
 
