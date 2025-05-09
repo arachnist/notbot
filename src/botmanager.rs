@@ -15,17 +15,7 @@ pub type WorkerStarter = (
     fn(&Client, &Config) -> anyhow::Result<AbortHandle>,
 );
 
-#[deprecated(
-    since = "0.6.0",
-    note = "please use [`crate::module::ModuleInfo`] instead"
-)]
-pub type ModuleStarter = (
-    &'static str,
-    fn(&Client, &Config) -> anyhow::Result<EventHandlerHandle>,
-);
-
 struct BotManagerInner {
-    modules: HashMap<String, Option<EventHandlerHandle>>,
     workers: HashMap<String, Option<AbortHandle>>,
     config: Config,
     client: Client,
@@ -40,7 +30,7 @@ struct BotManagerInner {
 enum ReloadError {
     ConfigParseError(anyhow::Error),
     CoreModulesFailure(anyhow::Error),
-    SomePartsFailed(Vec<String>, Vec<String>),
+    SomePartsFailed(Vec<String>),
 }
 
 impl StdError for ReloadError {}
@@ -51,22 +41,10 @@ impl fmt::Display for ReloadError {
         match self {
             CoreModulesFailure(e) => write!(fmt, "core modules failed to initialize: {e}"),
             ConfigParseError(e) => write!(fmt, "configuration error: {e}"),
-            SomePartsFailed(modules, workers) => {
+            SomePartsFailed(workers) => {
                 write!(
                     fmt,
-                    "{maybe_modules}{modules_list}{maybe_join}{maybe_workers}{workers_list}",
-                    maybe_modules = if !modules.is_empty() {
-                        "failed modules: "
-                    } else {
-                        ""
-                    },
-                    modules_list = modules.join(", "),
-                    maybe_join = if !modules.is_empty() { "; " } else { "" },
-                    maybe_workers = if !workers.is_empty() {
-                        "failed workers: "
-                    } else {
-                        ""
-                    },
+                    "failed workers: {workers_list}",
                     workers_list = workers.join(", "),
                 )
             }
@@ -104,15 +82,12 @@ impl BotManagerInner {
         };
         self.dispatcher_handle = dispatcher_handle;
 
-        let (registered_modules, failed_modules) =
-            crate::init_modules(&self.client, &self.config, &self.modules);
-        self.modules = registered_modules;
         let (registered_workers, failed_workers) =
             crate::init_workers(&self.client, &self.config, &self.workers);
         self.workers = registered_workers;
 
-        if !failed_workers.is_empty() || !failed_modules.is_empty() {
-            return Err(SomePartsFailed(failed_modules, failed_workers));
+        if !failed_workers.is_empty() {
+            return Err(SomePartsFailed(failed_workers));
         };
 
         Ok(())
@@ -171,14 +146,12 @@ impl BotManager {
                 }
             };
 
-        let (modules, _) = crate::init_modules(&client, &config, &Default::default());
         let (workers, _) = crate::init_workers(&client, &config, &Default::default());
 
         info!("finished initializing");
 
         Ok(BotManager {
             inner: Arc::new(Mutex::new(BotManagerInner {
-                modules,
                 workers,
                 config,
                 client,
@@ -332,7 +305,7 @@ impl BotManager {
                             .await?;
                             std::process::exit(1);
                         }
-                        ReloadError::SomePartsFailed(_, _) => {
+                        ReloadError::SomePartsFailed(_) => {
                             "configuration reloaded, but some parts failed. check logs"
                         }
                         ReloadError::ConfigParseError(_) => {

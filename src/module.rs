@@ -874,6 +874,17 @@ pub fn core_starter(
     };
     modules.push(reload);
 
+    let (shutdown_tx, shutdown_rx) = mpsc::channel::<ConsumerEvent>(1);
+    let shutdown = ModuleInfo {
+        name: "shutdown".s(),
+        help: "makes the bot process exit, literally".s(),
+        acl: vec![Acl::SpecificUsers(config.admins())],
+        trigger: TriggerType::Keyword(vec!["shutdown".s(), "die".s(), "exit".s()]),
+        channel: Some(shutdown_tx),
+        error_prefix: None,
+    };
+    modules.push(shutdown);
+
     registered_modules.extend(modules.clone());
     tokio::task::spawn(help_consumer(
         help_rx,
@@ -887,8 +898,22 @@ pub fn core_starter(
         registered_passthrough_modules.clone(),
     ));
     tokio::task::spawn(reload_consumer(reload_rx, reload_ev_tx));
+    tokio::task::spawn(shutdown_consumer(shutdown_rx));
 
     Ok(modules)
+}
+
+pub async fn shutdown_consumer(mut rx: mpsc::Receiver<ConsumerEvent>) -> anyhow::Result<()> {
+    match rx.recv().await {
+        Some(_) => (),
+        None => {
+            error!("channel closed, goodbye! :(");
+            bail!("channel closed");
+        }
+    };
+
+    info!("received process exit request");
+    std::process::exit(0);
 }
 
 pub async fn help_consumer(

@@ -49,7 +49,7 @@ pub(crate) fn starter(mx: &Client, config: &Config) -> anyhow::Result<Vec<Module
         channel: Some(join_tx),
         error_prefix: None,
     };
-    tokio::task::spawn(reload_consumer(join_rx, mx.clone(), autojoiner_handle));
+    tokio::task::spawn(join_consumer(join_rx, mx.clone(), autojoiner_handle));
 
     let (leave_tx, leave_rx) = mpsc::channel::<ConsumerEvent>(1);
     let leave = ModuleInfo {
@@ -79,7 +79,7 @@ pub async fn leave_processor(event: ConsumerEvent, config: ModuleConfig) -> anyh
     Ok(())
 }
 
-pub async fn reload_consumer(
+pub async fn join_consumer(
     mut rx: mpsc::Receiver<ConsumerEvent>,
     mx: Client,
     autojoiner_handle: EventHandlerHandle,

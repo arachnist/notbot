@@ -16,18 +16,6 @@ pub struct ModuleConfig {
     mun_path: String,
 }
 
-#[allow(deprecated)]
-pub(crate) fn modules() -> Vec<ModuleStarter> {
-    vec![(module_path!(), start_generic_dispatcher)]
-}
-
-pub(crate) fn start_generic_dispatcher(
-    client: &Client,
-    _: &Config,
-) -> anyhow::Result<EventHandlerHandle> {
-    Ok(client.add_event_handler(lua_generic_dispatcher))
-}
-
 async fn lua_generic_dispatcher(
     ev: AnySyncTimelineEvent,
     client: Client,
@@ -134,12 +122,9 @@ pub(crate) fn module_starter(client: &Client, config: &Config) -> anyhow::Result
     Ok(()) // Ok(client.add_event_handler(lua_dispatcher))
 }
 
-pub(crate) fn passthrough(
-    _: &Client,
-    config: &Config,
-) -> anyhow::Result<Vec<PassThroughModuleInfo>> {
+pub(crate) fn passthrough(mx: &Client, _: &Config) -> anyhow::Result<Vec<PassThroughModuleInfo>> {
     info!("registering modules");
-    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+    let lua_handler_handle = mx.add_event_handler(lua_generic_dispatcher);
 
     let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
     let notmun = PassThroughModuleInfo(ModuleInfo {
@@ -150,12 +135,33 @@ pub(crate) fn passthrough(
         channel: Some(tx),
         error_prefix: None,
     });
-    notmun.0.spawn(rx, module_config, processor);
+    tokio::task::spawn(join_consumer(rx, mx.clone(), lua_handler_handle));
 
     Ok(vec![notmun])
 }
 
-async fn processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
+pub async fn join_consumer(
+    mut rx: mpsc::Receiver<ConsumerEvent>,
+    mx: Client,
+    lua_handler_handle: EventHandlerHandle,
+) -> anyhow::Result<()> {
+    loop {
+        let event = match rx.recv().await {
+            Some(e) => e,
+            None => {
+                error!("channel closed, goodbye! :(");
+                info!("stopping mun handler");
+                mx.remove_event_handler(lua_handler_handle);
+                bail!("channel closed");
+            }
+        };
+        if let Err(e) = processor(event).await {
+            error!("couldn't join the room: {e}");
+        };
+    }
+}
+
+async fn processor(event: ConsumerEvent) -> anyhow::Result<()> {
     let target = room_name(&event.room);
     let handle_command = event.lua.load(chunk! {
         irc:HandleCommand(...)

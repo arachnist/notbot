@@ -3,7 +3,7 @@ pub use crate::config::Config;
 pub use crate::db::DBPools;
 
 #[allow(deprecated)]
-pub use crate::botmanager::{ModuleStarter, WorkerStarter};
+pub use crate::botmanager::WorkerStarter;
 pub use crate::module::{
     Acl, ConsumerEvent, Consumption, ModuleInfo, PassThroughModuleInfo, TriggerType,
 };

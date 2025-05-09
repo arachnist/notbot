@@ -22,57 +22,6 @@ pub mod wolfram;
 
 use crate::prelude::*;
 
-#[allow(deprecated)]
-fn register_modules(
-    mx: &Client,
-    config: &Config,
-    modules: &mut HashMap<String, Option<EventHandlerHandle>>,
-    failed: &mut Vec<String>,
-    starters: Vec<ModuleStarter>,
-) {
-    for (name, starter) in starters {
-        info!("registering: {name}");
-
-        let handle: Option<EventHandlerHandle> = match starter(mx, config) {
-            Ok(h) => Some(h),
-            Err(e) => {
-                error!("initializing module {name} failed: {e}");
-                failed.push(name.to_owned());
-                None
-            }
-        };
-
-        modules.insert(name.to_string(), handle);
-    }
-}
-
-pub(crate) fn init_modules(
-    mx: &Client,
-    config: &Config,
-    old_modules: &HashMap<String, Option<EventHandlerHandle>>,
-) -> (HashMap<String, Option<EventHandlerHandle>>, Vec<String>) {
-    let mut modules: HashMap<String, Option<EventHandlerHandle>> = Default::default();
-    let mut failed: Vec<String> = vec![];
-
-    for (name, module) in old_modules {
-        match &module {
-            Some(handle) => {
-                info!("deregistering: {name}");
-                mx.remove_event_handler(handle.to_owned());
-            }
-            None => info!("module was previously not registerd: {name}"),
-        };
-    }
-
-    for initializer in [
-        notmun::modules, // just the non-text events
-    ] {
-        register_modules(mx, config, &mut modules, &mut failed, initializer());
-    }
-
-    (modules, failed)
-}
-
 use tokio::task::AbortHandle;
 #[allow(deprecated)]
 fn register_workers(
