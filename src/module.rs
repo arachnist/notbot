@@ -435,10 +435,13 @@ pub async fn dispatcher(
         return Ok(());
     }
 
-    let MessageType::Text(ref content) = ev.content.msgtype else {
-        return Ok(());
-    };
-    let text = content.body.clone();
+    // filter unhandled message types
+    match ev.content.msgtype {
+        MessageType::Text(_) | MessageType::Notice(_) => (),
+        _ => return Ok(()),
+    }
+
+    let text = ev.content.body();
 
     trace!("new dispatcher: getting klacz permission level");
     let klacz_level = match klacz.get_level(&room, &sender).await {
