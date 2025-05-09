@@ -211,6 +211,7 @@ use matrix_sdk::ruma::OwnedUserId;
 use matrix_sdk::{Client, Room};
 
 use tokio::sync::mpsc;
+use tokio::task::AbortHandle;
 
 use mlua::Lua;
 
@@ -396,6 +397,87 @@ pub enum Consumption {
     Passthrough,
     // module wants this event exclusively. mostly for keyworded commands
     Exclusive,
+}
+
+/// Main worker object
+///
+/// Defines things needed from the worker by the help system
+/// Workers are intended to be used by background tasks that act on events outside of matrix, even if the do sometimes interact with matrix.
+/// Examples of such tasks include a web interface, or SpaceAPI observer.
+#[derive(Clone, Debug)]
+pub struct WorkerInfo {
+    /// Worker name
+    name: String,
+    /// Worker help/description
+    help: String,
+    /// Keyword to show worker status
+    keyword: String,
+    /// information about the helper module
+    helper_module: ModuleInfo,
+    /// Handle to trigger worker stopping
+    handle: AbortHandle,
+}
+
+impl WorkerInfo {
+    pub fn new<C, Fut>(
+        name: String,
+        help: String,
+        keyword: String,
+        mx: Client,
+        config: C,
+        worker: impl Fn(Client, C) -> Fut + Send + 'static,
+    ) -> anyhow::Result<WorkerInfo>
+    where
+        C: de::DeserializeOwned + Clone + Send + Sync + 'static,
+        Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
+    {
+        let handle = tokio::task::spawn(worker(mx.clone(), config.clone())).abort_handle();
+        let (tx, rx) = mpsc::channel(1);
+        let helper_module = ModuleInfo {
+            name: name.clone(),
+            help: help.clone(),
+            acl: vec![],
+            trigger: TriggerType::Keyword(vec![keyword.s()]),
+            channel: Some(tx),
+            error_prefix: None,
+        };
+        tokio::task::spawn(Self::status_consumer(rx, handle.clone()));
+        
+        Ok(WorkerInfo {
+            name,
+            help,
+            keyword,
+            helper_module,
+            handle,
+        })
+    }
+
+    async fn status_consumer(
+        mut rx: mpsc::Receiver<ConsumerEvent>,
+        worker_handle: AbortHandle,
+    ) -> anyhow::Result<()> {
+        loop {
+            let event = match rx.recv().await {
+                Some(e) => e,
+                None => {
+                    error!("channel closed, goodbyte! :(");
+                    worker_handle.abort();
+                    bail!("channel closed");
+                }
+            };
+
+            if let Err(e) = event
+                .room
+                .send(RoomMessageEventContent::text_plain(format!(
+                    "worker running: {}",
+                    !worker_handle.is_finished()
+                )))
+                .await
+            {
+                error!("error sending worker status response: {e}");
+            };
+        }
+    }
 }
 
 /// Main event dispatcher.
