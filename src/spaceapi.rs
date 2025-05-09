@@ -1,13 +1,6 @@
 use crate::prelude::*;
 
-use tokio::task::AbortHandle;
-
 use tokio::time::{interval, Duration};
-
-#[allow(deprecated)]
-pub(crate) fn workers() -> Vec<WorkerStarter> {
-    vec![(module_path!(), worker_starter)]
-}
 
 fn default_keywords() -> Vec<String> {
     vec!["at".s()]
@@ -71,13 +64,19 @@ async fn processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result
     Ok(())
 }
 
-fn worker_starter(client: &Client, config: &Config) -> anyhow::Result<AbortHandle> {
+pub(crate) fn workers(mx: &Client, config: &Config) -> anyhow::Result<Vec<WorkerInfo>> {
     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
-    let worker = tokio::task::spawn(presence_observer(client.clone(), module_config));
-    Ok(worker.abort_handle())
+    Ok(vec![WorkerInfo::new(
+        "observer",
+        "observes SpaceAPI endpoints for changes",
+        "spaceapi",
+        mx.clone(),
+        module_config,
+        presence_observer,
+    )?])
 }
 
-async fn presence_observer(client: Client, module_config: ModuleConfig) {
+async fn presence_observer(client: Client, module_config: ModuleConfig) -> anyhow::Result<()> {
     let mut interval = interval(Duration::from_secs(module_config.presence_interval));
     let mut present: HashMap<String, Vec<String>> = Default::default();
     let mut first_loop: HashMap<String, bool> = Default::default();

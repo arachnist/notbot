@@ -17,7 +17,6 @@ use axum_oidc::{
     OidcLoginLayer,
 };
 use tokio::net::TcpListener;
-use tokio::task::AbortHandle;
 use tower::ServiceBuilder;
 use tower_http::services::ServeDir;
 use tower_sessions::{
@@ -35,17 +34,18 @@ pub struct ModuleConfig {
     client_secret: Option<String>,
 }
 
-#[allow(deprecated)]
-pub(crate) fn workers() -> Vec<WorkerStarter> {
-    vec![(module_path!(), worker_starter)]
+pub(crate) fn workers(mx: &Client, config: &Config) -> anyhow::Result<Vec<WorkerInfo>> {
+    Ok(vec![WorkerInfo::new(
+        "webterface",
+        "exposes bot web interface",
+        "web",
+        mx.clone(),
+        config.clone(),
+        webterface,
+    )?])
 }
 
-fn worker_starter(client: &Client, config: &Config) -> anyhow::Result<AbortHandle> {
-    let worker = tokio::task::spawn(worker_entrypoint(client.clone(), config.clone()));
-    Ok(worker.abort_handle())
-}
-
-async fn worker_entrypoint(mx: Client, bot_config: Config) -> anyhow::Result<()> {
+async fn webterface(mx: Client, bot_config: Config) -> anyhow::Result<()> {
     let module_config: ModuleConfig = bot_config.module_config_value(module_path!())?.try_into()?;
 
     let app_state = WebAppState {

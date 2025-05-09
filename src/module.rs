@@ -197,10 +197,10 @@ use std::ops::{Add, Deref};
 use std::sync::LazyLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::de;
 use anyhow::bail;
 use futures::Future;
 use prometheus::{opts, register_int_counter_vec, IntCounterVec};
+use serde::de;
 use tracing::{debug, error, info, trace};
 
 use matrix_sdk::event_handler::{Ctx, EventHandlerHandle};
@@ -420,33 +420,33 @@ pub struct WorkerInfo {
 
 impl WorkerInfo {
     pub fn new<C, Fut>(
-        name: String,
-        help: String,
-        keyword: String,
+        name: &str,
+        help: &str,
+        keyword: &str,
         mx: Client,
         config: C,
         worker: impl Fn(Client, C) -> Fut + Send + 'static,
     ) -> anyhow::Result<WorkerInfo>
     where
-        C: de::DeserializeOwned + Clone + Send + Sync + 'static,
+        C: Clone + Send + Sync + 'static,
         Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
     {
         let handle = tokio::task::spawn(worker(mx.clone(), config.clone())).abort_handle();
         let (tx, rx) = mpsc::channel(1);
         let helper_module = ModuleInfo {
-            name: name.clone(),
-            help: help.clone(),
+            name: name.to_owned(),
+            help: help.to_owned(),
             acl: vec![],
             trigger: TriggerType::Keyword(vec![keyword.s()]),
             channel: Some(tx),
             error_prefix: None,
         };
         tokio::task::spawn(Self::status_consumer(rx, handle.clone()));
-        
+
         Ok(WorkerInfo {
-            name,
-            help,
-            keyword,
+            name: name.to_owned(),
+            help: help.to_owned(),
+            keyword: keyword.to_owned(),
             helper_module,
             handle,
         })
@@ -493,6 +493,7 @@ pub async fn dispatcher(
     config: Ctx<Config>,
     modules: Ctx<Vec<ModuleInfo>>,
     passthrough_modules: Ctx<Vec<PassThroughModuleInfo>>,
+    workers: Ctx<Vec<WorkerInfo>>,
     klacz: Ctx<KlaczDB>,
     lua: Ctx<Lua>,
 ) -> anyhow::Result<()> {
@@ -597,8 +598,12 @@ pub async fn dispatcher(
     let mut consumption = Inclusive;
 
     // go through all the modules first to figure out consumption priority
+    // for the purpose of matching keywords, workers are just sparkling modules.
     trace!("figuring out event consumption priority");
-    for module in modules.iter() {
+    for module in modules
+        .iter()
+        .chain(workers.iter().map(|w| &w.helper_module))
+    {
         trace!("considering module: {}", module.name);
         use TriggerType::*;
 
@@ -865,6 +870,7 @@ pub fn init_modules(
     let klacz = KlaczDB { handle: "main" };
     let mut modules: Vec<ModuleInfo> = vec![];
     let mut passthrough_modules: Vec<PassThroughModuleInfo> = vec![];
+    let mut workers: Vec<WorkerInfo> = vec![];
 
     // start moving notmun to becoming a 1st-class citizen
     match crate::notmun::module_starter(mx, config) {
@@ -896,11 +902,19 @@ pub fn init_modules(
         };
     }
 
+    for starter in [crate::webterface::workers, crate::spaceapi::workers] {
+        match starter(mx, config) {
+            Err(e) => error!("module initialization failed fatally: {e}"),
+            Ok(m) => workers.extend(m),
+        };
+    }
+
     match core_starter(
         config,
         reload_tx,
         modules.clone(),
         passthrough_modules.clone(),
+        workers.clone(),
     ) {
         Err(e) => error!("core modules module initialization failed fatally: {e}"),
         Ok(m) => modules.extend(m),
@@ -910,6 +924,7 @@ pub fn init_modules(
     mx.add_event_handler_context(config.clone());
     mx.add_event_handler_context(modules);
     mx.add_event_handler_context(passthrough_modules);
+    mx.add_event_handler_context(workers);
 
     Ok(mx.add_event_handler(dispatcher))
 }
@@ -919,6 +934,7 @@ pub fn core_starter(
     reload_ev_tx: mpsc::Sender<Room>,
     mut registered_modules: Vec<ModuleInfo>,
     registered_passthrough_modules: Vec<PassThroughModuleInfo>,
+    registered_workers: Vec<WorkerInfo>,
 ) -> anyhow::Result<Vec<ModuleInfo>> {
     info!("registering modules");
     let mut modules: Vec<ModuleInfo> = vec![];
@@ -973,11 +989,13 @@ pub fn core_starter(
         config.clone(),
         registered_modules.clone(),
         registered_passthrough_modules.clone(),
+        registered_workers.clone(),
     ));
     tokio::task::spawn(list_consumer(
         list_rx,
         registered_modules.clone(),
         registered_passthrough_modules.clone(),
+        registered_workers.clone(),
     ));
     tokio::task::spawn(reload_consumer(reload_rx, reload_ev_tx));
     tokio::task::spawn(shutdown_consumer(shutdown_rx));
@@ -1003,6 +1021,7 @@ pub async fn help_consumer(
     config: Config,
     registered_modules: Vec<ModuleInfo>,
     registered_passthrough_modules: Vec<PassThroughModuleInfo>,
+    registered_workers: Vec<WorkerInfo>,
 ) -> anyhow::Result<()> {
     loop {
         let event = match rx.recv().await {
@@ -1018,6 +1037,7 @@ pub async fn help_consumer(
             config.clone(),
             registered_modules.clone(),
             registered_passthrough_modules.clone(),
+            registered_workers.clone(),
         )
         .await
         {
@@ -1039,10 +1059,12 @@ pub async fn help_processor(
     config: Config,
     registered_modules: Vec<ModuleInfo>,
     registered_passthrough_modules: Vec<PassThroughModuleInfo>,
+    registered_workers: Vec<WorkerInfo>,
 ) -> anyhow::Result<()> {
     let generic_help = {
         let modules_num = registered_modules.len();
         let passthrough_num = registered_passthrough_modules.len();
+        let workers_num = registered_workers.len();
         let failed_num = registered_modules
             .iter()
             .filter(|x| x.channel.is_none())
@@ -1050,6 +1072,10 @@ pub async fn help_processor(
         let passthrough_failed_num = registered_passthrough_modules
             .iter()
             .filter(|x| x.0.channel.is_none())
+            .count();
+        let workers_failed_num = registered_workers
+            .iter()
+            .filter(|x| x.handle.is_finished())
             .count();
         let failed_mod_str = match failed_num {
             0 => String::new(),
@@ -1059,16 +1085,26 @@ pub async fn help_processor(
             0 => String::new(),
             _ => format!(", of which {passthrough_failed_num} did not initialize correctly"),
         };
+        let failed_workers_str = match workers_failed_num {
+            0 => String::new(),
+            _ => format!(", of which {workers_failed_num} stopped working"),
+        };
         let m_plural = if modules_num != 1 { "s" } else { "" };
         let p_plural = if passthrough_num != 1 { "s" } else { "" };
+        let w_plural = if workers_num != 1 { "s" } else { "" };
         let prefixes = config.prefixes();
         let plain = format!(
             r#"this is the notbot; source {source_url}; configured prefixes: {prefixes:?}
-there are currently {modules_num} module{m_plural} registered{failed_mod_str}{maybe_newline} {passthrough_num} passthrough module{p_plural} registered{failed_passthrough_str}<br />
+there are currently {modules_num} module{m_plural} registered{failed_mod_str}{mod_maybe_newline} {passthrough_num} passthrough module{p_plural} registered{failed_passthrough_str}{mod_and_pass_maybe_newline} {workers_num} worker{w_plural} registered{failed_workers_str}
 call «list-modules» to get a list of modules, or «help <module name>» for brief description of the module function
 documentation is WIP; you can find it at {docs_link}
 contact {mx_contact} or {fedi_contact} if you need more help"#,
-            maybe_newline = if failed_num == 0 {
+            mod_maybe_newline = if failed_num == 0 {
+                ", and "
+            } else {
+                "\nthere are currently "
+            },
+            mod_and_pass_maybe_newline = if failed_num == 0 && passthrough_failed_num == 0 {
                 ", and "
             } else {
                 "\nthere are currently "
@@ -1080,14 +1116,19 @@ contact {mx_contact} or {fedi_contact} if you need more help"#,
         );
         let html = format!(
             r#"this is the notbot; source {source_url}; configured prefixes: {prefixes:?}<br />
-there are currently {modules_num} module{m_plural} registered{failed_mod_str}{maybe_newline} {passthrough_num} passthrough module{p_plural} registered{failed_passthrough_str}<br />
+there are currently {modules_num} module{m_plural} registered{failed_mod_str}{mod_maybe_newline} {passthrough_num} passthrough module{p_plural} registered{failed_passthrough_str}{mod_and_pass_maybe_newline} {workers_num} worker{w_plural} registered{failed_workers_str}<br />
 call «list-modules» to get a list of modules, or «help <module name>» for brief description of the module function<br />
 documentation is WIP; you can find it at {docs_link}<br />
 contact {mx_contact} or {fedi_contact} if you need more help"#,
-            maybe_newline = if failed_num == 0 {
+            mod_maybe_newline = if failed_num == 0 {
                 ", and "
             } else {
                 "<br />\nthere are currently "
+            },
+            mod_and_pass_maybe_newline = if failed_num == 0 && passthrough_failed_num == 0 {
+                ", and "
+            } else {
+                "\nthere are currently "
             },
             source_url = r#"is <a href="https://code.hackerspace.pl/ar/notbot">here</a>"#,
             docs_link = "https://docs.rs/notbot/latest/notbot/",
@@ -1156,6 +1197,24 @@ contact {mx_contact} or {fedi_contact} if you need more help"#,
         };
     }
 
+    for module in registered_workers {
+        if module.name == maybe_module_name {
+            let response = format!(
+                r#"module {name} is {status}; help: {help}; status keyword: {keyword}"#,
+                name = module.name,
+                help = module.help,
+                status = if module.handle.is_finished() {
+                    "stopped"
+                } else {
+                    "working"
+                },
+                keyword = module.keyword,
+            );
+            specific_response = Some(RoomMessageEventContent::text_plain(response));
+            break;
+        };
+    }
+
     if let Some(response) = specific_response {
         event.room.send(response).await?;
     } else {
@@ -1168,6 +1227,7 @@ pub async fn list_consumer(
     mut rx: mpsc::Receiver<ConsumerEvent>,
     registered_modules: Vec<ModuleInfo>,
     registered_passthrough_modules: Vec<PassThroughModuleInfo>,
+    registered_workers: Vec<WorkerInfo>,
 ) -> anyhow::Result<()> {
     loop {
         let event = match rx.recv().await {
@@ -1201,9 +1261,20 @@ pub async fn list_consumer(
                 s
             })
             .collect();
+        let workers: Vec<String> = registered_workers
+            .iter()
+            .map(|x| {
+                let mut s = x.name.clone();
+                if x.handle.is_finished() {
+                    s.push('*');
+                    failed = true;
+                };
+                s
+            })
+            .collect();
 
         let response = format!(
-            r#"{maybe_modules}{modules_list}{maybe_newline}{maybe_passthrough}{passthrough_list}{maybe_failed}"#,
+            r#"{maybe_modules}{modules_list}{maybe_newline}{maybe_passthrough}{passthrough_list}{maybe_post_passthrough_newline}{maybe_workers}{workers_list}{maybe_failed}"#,
             maybe_modules = if !modules.is_empty() { "modules: " } else { "" },
             modules_list = modules.join(", "),
             maybe_newline = if !modules.is_empty() { "\n" } else { "" },
@@ -1213,8 +1284,11 @@ pub async fn list_consumer(
                 ""
             },
             passthrough_list = passthrough.join(", "),
+            maybe_post_passthrough_newline = if !passthrough.is_empty() { "\n" } else { "" },
+            maybe_workers = if !workers.is_empty() { "workers: " } else { "" },
+            workers_list = workers.join(", "),
             maybe_failed = if failed {
-                "modules marked with * are failed"
+                "\nmodules marked with * are failed"
             } else {
                 ""
             },

@@ -3,7 +3,6 @@ use crate::prelude::*;
 use std::ops::Add;
 
 use futures::lock::Mutex;
-use tokio::task::AbortHandle;
 
 use matrix_sdk::{
     authentication::matrix::MatrixSession, config::SyncSettings, Error as MatrixError, LoopCtrl,
@@ -11,14 +10,7 @@ use matrix_sdk::{
 
 use tokio::sync::mpsc::{Receiver, Sender};
 
-#[deprecated]
-pub type WorkerStarter = (
-    &'static str,
-    fn(&Client, &Config) -> anyhow::Result<AbortHandle>,
-);
-
 struct BotManagerInner {
-    workers: HashMap<String, Option<AbortHandle>>,
     config: Config,
     client: Client,
     session_file: PathBuf,
@@ -32,7 +24,6 @@ struct BotManagerInner {
 enum ReloadError {
     ConfigParseError(anyhow::Error),
     CoreModulesFailure(anyhow::Error),
-    SomePartsFailed(Vec<String>),
 }
 
 impl StdError for ReloadError {}
@@ -43,13 +34,6 @@ impl fmt::Display for ReloadError {
         match self {
             CoreModulesFailure(e) => write!(fmt, "core modules failed to initialize: {e}"),
             ConfigParseError(e) => write!(fmt, "configuration error: {e}"),
-            SomePartsFailed(workers) => {
-                write!(
-                    fmt,
-                    "failed workers: {workers_list}",
-                    workers_list = workers.join(", "),
-                )
-            }
         }
     }
 }
@@ -83,14 +67,6 @@ impl BotManagerInner {
             }
         };
         self.dispatcher_handle = dispatcher_handle;
-
-        let (registered_workers, failed_workers) =
-            crate::init_workers(&self.client, &self.config, &self.workers);
-        self.workers = registered_workers;
-
-        if !failed_workers.is_empty() {
-            return Err(SomePartsFailed(failed_workers));
-        };
 
         Ok(())
     }
@@ -148,13 +124,10 @@ impl BotManager {
                 }
             };
 
-        let (workers, _) = crate::init_workers(&client, &config, &Default::default());
-
         info!("finished initializing");
 
         Ok(BotManager {
             inner: Arc::new(Mutex::new(BotManagerInner {
-                workers,
                 config,
                 client,
                 session_file,
@@ -316,9 +289,6 @@ impl BotManager {
                             )))
                             .await?;
                             std::process::exit(1);
-                        }
-                        ReloadError::SomePartsFailed(_) => {
-                            "configuration reloaded, but some parts failed. check logs"
                         }
                         ReloadError::ConfigParseError(_) => {
                             "configuration parsing error, check logs"

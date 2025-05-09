@@ -41,6 +41,7 @@ async fn lua_generic_dispatcher(
         return Ok(());
     };
 
+    #[allow(clippy::single_match)]
     match event {
         AnyTimelineEvent::State(AnyStateEvent::RoomMember(RoomMemberEvent::Original(event))) => {
             info!(
