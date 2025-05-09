@@ -1,5 +1,7 @@
 use crate::prelude::*;
 
+use std::ops::Add;
+
 use tokio::sync::mpsc::{channel, Receiver};
 
 use futures::pin_mut;
@@ -29,12 +31,16 @@ async fn lua_generic_dispatcher(
         None => room.room_id().to_string(),
     };
 
-    if client.user_id().unwrap() == event.sender() {
+    let Some(ev_ts) = event.origin_server_ts().to_system_time() else {
+        error!("event timestamp couldn't get parsed to system time");
         return Ok(());
     };
 
-    // text-like events handled elsewhere
-    trace!("attempting to match event");
+    if ev_ts.add(Duration::from_secs(10)) < SystemTime::now() {
+        trace!("received too old event: {ev_ts:?}");
+        return Ok(());
+    };
+
     match event {
         AnyTimelineEvent::State(AnyStateEvent::RoomMember(RoomMemberEvent::Original(event))) => {
             info!(
@@ -42,11 +48,10 @@ async fn lua_generic_dispatcher(
                 event.membership_change(),
                 event.state_key
             );
-
             match event.membership_change() {
-                MembershipChange::Invited => {
-                    trace!("membership content: {event:#?}");
-                    // needed to properly fill-up channel objects
+                MembershipChange::Joined => {
+                    debug!("handling join");
+                    // needed to properly fill-up channel objects on joins
                     if event.state_key != client.user_id().unwrap() {
                         debug!(
                             "event not for us: {}, {}",
@@ -60,14 +65,31 @@ async fn lua_generic_dispatcher(
                         irc:Join($target)
                     })
                     .exec()?;
-
-                    Ok(())
                 }
-                _ => Ok(()),
+                MembershipChange::Invited => {
+                    trace!("membership content: {event:#?}");
+                    // needed to properly fill-up channel objects on inites
+                    if event.state_key != client.user_id().unwrap() {
+                        debug!(
+                            "event not for us: {}, {}",
+                            event.state_key,
+                            client.user_id().unwrap()
+                        );
+                        return Ok(());
+                    };
+                    debug!("calling irc:Join for {target}");
+                    lua.load(chunk! {
+                        irc:Join($target)
+                    })
+                    .exec()?;
+                }
+                _ => (),
             }
         }
-        _ => Ok(()),
-    }
+        _ => (),
+    };
+
+    Ok(())
 }
 
 pub(crate) fn module_starter(client: &Client, config: &Config) -> anyhow::Result<()> {

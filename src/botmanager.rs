@@ -1,5 +1,7 @@
 use crate::prelude::*;
 
+use std::ops::Add;
+
 use futures::lock::Mutex;
 use tokio::task::AbortHandle;
 
@@ -267,6 +269,16 @@ impl BotManager {
     }
 
     async fn message_logger(event: OriginalSyncRoomMessageEvent, room: Room) {
+        let Some(ev_ts) = event.origin_server_ts.to_system_time() else {
+            error!("event timestamp couldn't get parsed to system time");
+            return;
+        };
+
+        if ev_ts.add(Duration::from_secs(3)) < SystemTime::now() {
+            trace!("received too old event: {ev_ts:?}");
+            return;
+        };
+
         let MessageType::Text(text_content) = &event.content.msgtype else {
             return;
         };
