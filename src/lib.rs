@@ -65,8 +65,7 @@ pub(crate) fn init_modules(
     }
 
     for initializer in [
-        autojoiner::modules, // handle invites
-        notmun::modules,     // just the non-text events
+        notmun::modules, // just the non-text events
     ] {
         register_modules(mx, config, &mut modules, &mut failed, initializer());
     }

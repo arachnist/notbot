@@ -9,24 +9,157 @@ static ROOM_INVITES: LazyLock<Counter> = LazyLock::new(|| {
     register_counter!(opts!("room_invite_events_total", "Number of room invites",)).unwrap()
 });
 
-#[allow(deprecated)]
-pub(crate) fn modules() -> Vec<ModuleStarter> {
-    vec![(module_path!(), module_starter)]
-}
-
-fn module_starter(client: &Client, config: &Config) -> anyhow::Result<EventHandlerHandle> {
-    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
-    Ok(client.add_event_handler(move |ev, client, room| {
-        module_entrypoint(ev, client, room, module_config)
-    }))
-}
-
 #[derive(Clone, Deserialize)]
 pub struct ModuleConfig {
     pub homeservers: Vec<String>,
+    #[serde(default = "keywords_join")]
+    pub keywords_join: Vec<String>,
+    #[serde(default = "keywords_leave")]
+    pub keywords_leave: Vec<String>,
+    #[serde(default = "leave_message")]
+    pub leave_message: String,
 }
 
-async fn module_entrypoint(
+fn keywords_join() -> Vec<String> {
+    vec!["join".s(), "come".s()]
+}
+
+fn keywords_leave() -> Vec<String> {
+    vec!["leave".s(), "part".s()]
+}
+
+fn leave_message() -> String {
+    String::from("goodbye 😿")
+}
+
+pub(crate) fn starter(mx: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
+    info!("registering autojoiner");
+    let autojoiner_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+    let autojoiner_handle =
+        mx.add_event_handler(move |ev, mx, room| autojoiner(ev, mx, room, autojoiner_config));
+
+    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+
+    let (join_tx, join_rx) = mpsc::channel::<ConsumerEvent>(1);
+    let join = ModuleInfo {
+        name: "join".s(),
+        help: "makes the bot join a channel".s(),
+        acl: vec![Acl::SpecificUsers(config.admins())],
+        trigger: TriggerType::Keyword(module_config.keywords_join.clone()),
+        channel: Some(join_tx),
+        error_prefix: None,
+    };
+    tokio::task::spawn(reload_consumer(join_rx, mx.clone(), autojoiner_handle));
+
+    let (leave_tx, leave_rx) = mpsc::channel::<ConsumerEvent>(1);
+    let leave = ModuleInfo {
+        name: "leave".s(),
+        help: "makes the bot leave a channel".s(),
+        acl: vec![Acl::SpecificUsers(config.admins())],
+        trigger: TriggerType::Keyword(module_config.keywords_leave.clone()),
+        channel: Some(leave_tx),
+        error_prefix: Some("couldn't leave room".s()),
+    };
+    leave.spawn(leave_rx, module_config.clone(), leave_processor);
+
+    Ok(vec![join, leave])
+}
+
+pub async fn leave_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
+    let leave_room = if let Some(room_str) = event.args {
+        maybe_get_room(&event.room.client(), &room_str).await?
+    } else {
+        event.room
+    };
+
+    leave_room
+        .send(RoomMessageEventContent::text_plain(config.leave_message))
+        .await?;
+    leave_room.leave().await?;
+    Ok(())
+}
+
+pub async fn reload_consumer(
+    mut rx: mpsc::Receiver<ConsumerEvent>,
+    mx: Client,
+    autojoiner_handle: EventHandlerHandle,
+) -> anyhow::Result<()> {
+    loop {
+        let event = match rx.recv().await {
+            Some(e) => e,
+            None => {
+                error!("channel closed, goodbye! :(");
+                info!("stopping the autojoiner");
+                mx.remove_event_handler(autojoiner_handle);
+                bail!("channel closed");
+            }
+        };
+
+        if let Err(e) = join_processor(mx.clone(), event.clone()).await {
+            error!("couldn't join the room: {e}");
+            if let Err(ee) = event
+                .room
+                .send(RoomMessageEventContent::text_plain(format!(
+                    "couldn't join room: {e}"
+                )))
+                .await
+            {
+                error!("couldn't send error message: {ee}");
+            };
+        };
+    }
+}
+
+async fn join_processor(mx: Client, event: ConsumerEvent) -> anyhow::Result<()> {
+    if let Some(room_str) = event.args {
+        let room = maybe_get_room(&mx, &room_str).await?;
+        info!("joining room: {room_str} {}", room.room_id());
+        let mut delay = 2;
+        let mut joined = true;
+
+        while let Err(err) = room.join().await {
+            // retry autojoin due to synapse sending invites, before the
+            // invited user can join for more information see
+            // https://github.com/matrix-org/synapse/issues/4345
+            error!(
+                "Failed to join room {} ({err:?}), retrying in {delay}s",
+                room.room_id()
+            );
+
+            sleep(Duration::from_secs(delay)).await;
+            delay *= 2;
+
+            if delay > 3600 {
+                error!("Can't join room {} ({err:?})", room.room_id());
+                joined = false;
+                break;
+            }
+        }
+
+        if joined {
+            event
+                .room
+                .send(RoomMessageEventContent::text_plain(format!(
+                    "joined: {room_str}"
+                )))
+                .await?;
+        } else {
+            event
+                .room
+                .send(RoomMessageEventContent::text_plain(format!(
+                    "couldn't join: {room_str}"
+                )))
+                .await?;
+        };
+        trace!("Successfully joined room {}", room.room_id());
+    } else {
+        bail!("missing argument: room");
+    }
+
+    Ok(())
+}
+
+async fn autojoiner(
     room_member: StrippedRoomMemberEvent,
     client: Client,
     room: Room,

@@ -201,7 +201,6 @@ use crate::de;
 use anyhow::bail;
 use futures::Future;
 use prometheus::{opts, register_int_counter_vec, IntCounterVec};
-use serde_derive::Deserialize;
 use tracing::{debug, error, info, trace};
 
 use matrix_sdk::event_handler::{Ctx, EventHandlerHandle};
@@ -416,6 +415,8 @@ pub async fn dispatcher(
     lua: Ctx<Lua>,
 ) -> anyhow::Result<()> {
     use Consumption::*;
+
+    if ev.event_
 
     let sender: OwnedUserId = ev.sender.clone();
 
@@ -787,6 +788,7 @@ pub fn init_modules(
         crate::wolfram::starter,
         crate::sage::starter,
         crate::alerts::starter,
+        crate::autojoiner::starter,
     ] {
         match starter(mx, config) {
             Err(e) => error!("module initialization failed fatally: {e}"),
@@ -827,8 +829,6 @@ pub fn core_starter(
 ) -> anyhow::Result<Vec<ModuleInfo>> {
     info!("registering modules");
     let mut modules: Vec<ModuleInfo> = vec![];
-    let reloader_config: ReloaderConfig =
-        config.module_config_value("notbot::reloader")?.try_into()?;
 
     let (help_tx, help_rx) = mpsc::channel::<ConsumerEvent>(1);
     let help = ModuleInfo {
@@ -856,7 +856,7 @@ pub fn core_starter(
     let reload = ModuleInfo {
         name: "reload".s(),
         help: "reload bot configuration and modules".s(),
-        acl: vec![Acl::SpecificUsers(reloader_config.admins)],
+        acl: vec![Acl::SpecificUsers(config.admins())],
         trigger: TriggerType::Keyword(vec!["reload".s()]),
         channel: Some(reload_tx),
         error_prefix: None,
@@ -948,7 +948,7 @@ pub async fn help_processor(
             r#"this is the notbot; source {source_url}; configured prefixes: {prefixes:?}
 there are currently {modules_num} module{m_plural} registered{failed_mod_str}{maybe_newline} {passthrough_num} passthrough module{p_plural} registered{failed_passthrough_str}<br />
 call «list-modules» to get a list of modules, or «help <module name>» for brief description of the module function
-documentation is WIP
+documentation is WIP; you can find it at {docs_link}
 contact {mx_contact} or {fedi_contact} if you need more help"#,
             maybe_newline = if failed_num == 0 {
                 ", and "
@@ -956,6 +956,7 @@ contact {mx_contact} or {fedi_contact} if you need more help"#,
                 "\nthere are currently "
             },
             source_url = ": https://code.hackerspace.pl/ar/notbot",
+            docs_link = "https://docs.rs/notbot/latest/notbot/",
             mx_contact = "matrix: @ar:is-a.cat",
             fedi_contact = "fedi: @ar@is-a.cat",
         );
@@ -963,7 +964,7 @@ contact {mx_contact} or {fedi_contact} if you need more help"#,
             r#"this is the notbot; source {source_url}; configured prefixes: {prefixes:?}<br />
 there are currently {modules_num} module{m_plural} registered{failed_mod_str}{maybe_newline} {passthrough_num} passthrough module{p_plural} registered{failed_passthrough_str}<br />
 call «list-modules» to get a list of modules, or «help <module name>» for brief description of the module function<br />
-documentation is WIP<br />
+documentation is WIP; you can find it at {docs_link}<br />
 contact {mx_contact} or {fedi_contact} if you need more help"#,
             maybe_newline = if failed_num == 0 {
                 ", and "
@@ -971,6 +972,7 @@ contact {mx_contact} or {fedi_contact} if you need more help"#,
                 "<br />\nthere are currently "
             },
             source_url = r#"is <a href="https://code.hackerspace.pl/ar/notbot">here</a>"#,
+            docs_link = "https://docs.rs/notbot/latest/notbot/",
             mx_contact = r#"<a href="https://matrix.to/#/@ar:is-a.cat">@ar:is-a.cat</a>"#,
             fedi_contact = r#"<a href="https://is-a.cat/@ar">@ar@is-a.cat</a>"#,
         );
@@ -1133,9 +1135,4 @@ pub async fn reload_consumer(
 
         reservation.send(event.room);
     }
-}
-
-#[derive(Clone, Deserialize)]
-pub struct ReloaderConfig {
-    admins: Vec<String>,
 }

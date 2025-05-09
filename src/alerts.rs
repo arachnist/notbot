@@ -188,7 +188,8 @@ pub async fn receive_alerts(
             if let Some(grafana_config) = module_config.grafanas.get(&instance.clone().unwrap()) {
                 for room in grafana_config.rooms.clone() {
                     if let Ok(mx_room) = maybe_get_room(&app_state.mx, &room).await {
-                        let mx_message = to_matrix_message(alerts.clone(), instance.clone().unwrap());
+                        let mx_message =
+                            to_matrix_message(alerts.clone(), instance.clone().unwrap());
                         if let Err(e) = mx_room.send(mx_message).await {
                             trace!("failed to send room notification: {e}");
                         }
