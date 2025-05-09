@@ -193,9 +193,9 @@ use crate::config::Config;
 use crate::klaczdb::KlaczDB;
 use crate::tools::{membership_status, room_name, ToStringExt};
 
-use std::ops::Deref;
+use std::ops::{Add, Deref};
 use std::sync::LazyLock;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::de;
 use anyhow::bail;
@@ -416,7 +416,15 @@ pub async fn dispatcher(
 ) -> anyhow::Result<()> {
     use Consumption::*;
 
-    if ev.event_
+    let Some(ev_ts) = ev.origin_server_ts.to_system_time() else {
+        error!("event timestamp couldn't get parsed to system time");
+        return Ok(());
+    };
+
+    if ev_ts.add(Duration::from_secs(10)) < SystemTime::now() {
+        debug!("received too old event: {ev_ts:?}");
+        return Ok(());
+    };
 
     let sender: OwnedUserId = ev.sender.clone();
 
