@@ -16,7 +16,7 @@ pub mod tools;
 pub mod webterface;
 
 mod autojoiner;
-mod inviter;
+pub mod inviter;
 pub mod kasownik;
 mod notbottime;
 mod sage;

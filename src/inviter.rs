@@ -1,3 +1,40 @@
+//! Ease the process of inviting new members to member-only rooms and spaces
+//!
+//! # Configuration
+//!
+//! ```toml
+//! [module."notbot::inviter"]
+//! # Required; string; room on which we permit requests.
+//! requests = [ "#general:example.org" ]
+//! # Required; list of strings; trusted users that are allowed to approve invitation requests
+//! approvers = [
+//!     "@bar:example.com",
+//!     "@foo:hackerspace.pl",
+//!     "@baz:hackerspace.pl",
+//! ]
+//! # Required; list of strings; rooms and spaces that the new user will be invited to
+//! invite_to = [
+//!     "!LPEcDKoGvnCdhRSTJW:example.org",
+//!     "#bottest:example.org"
+//! ]
+//! # Required; string; known homeserver address for which we allow users to invite themselves using bot web interface.
+//! homeserver_selfservice_allow = "example.org"
+//! # Optional; list of strings; keywords the bot will listen for invitation requests
+//! keywords = [ "invite" ]
+//! ```
+//!
+//! # Usage
+//!
+//! New user is expected to write ".invite" on a public channel. A trusted user is then expected to confirm the invitation request
+//! by reacting with 👍 emoji. Color variants *should* work, but are not guaranteed to.
+//!
+//! There is also a prototype of the self-service through sso flow implemented, registered under `/mx/inviter/invite url`, that will
+//! attempt to extract username from the OIDC claim and invite a `@username:allowed-homeserver.org` user.
+//!
+//! # Future
+//!
+//! Support for processing room knocking events as requests. A better self-service flow once changes in relevant parts of the rest of hackerspace infrastructure are done.
+
 use crate::prelude::*;
 
 use crate::notbottime::{NotBotTime, NOTBOT_EPOCH};
@@ -12,7 +49,7 @@ fn default_keywords() -> Vec<String> {
 }
 
 #[derive(Clone, Deserialize)]
-pub struct ModuleConfig {
+struct ModuleConfig {
     pub requests: Vec<String>,
     pub approvers: Vec<String>,
     pub homeserver_selfservice_allow: String,
