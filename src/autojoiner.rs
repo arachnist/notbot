@@ -90,7 +90,7 @@ pub(crate) fn starter(mx: &Client, config: &Config) -> anyhow::Result<Vec<Module
     Ok(vec![join, leave])
 }
 
-pub async fn leave_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
+async fn leave_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
     let leave_room = if let Some(room_str) = event.args {
         maybe_get_room(&event.room.client(), &room_str).await?
     } else {
@@ -104,7 +104,7 @@ pub async fn leave_processor(event: ConsumerEvent, config: ModuleConfig) -> anyh
     Ok(())
 }
 
-pub async fn join_consumer(
+pub(crate) async fn join_consumer(
     mut rx: mpsc::Receiver<ConsumerEvent>,
     mx: Client,
     autojoiner_handle: EventHandlerHandle,
