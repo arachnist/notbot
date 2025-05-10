@@ -105,7 +105,7 @@
 //! irb(main):005> 547981114422.to_s(2)
 //! => "111111110010110001110000011110000110110"
 //! ```
-//!
+
 use crate::prelude::*;
 
 use convert_case::{Case, Casing};
@@ -384,6 +384,7 @@ impl KlaczDB {
     }
 }
 
+/// Maxmium OID value, as defined in the [hu.dwim.perec](https://hub.darcs.net/hu.dwim/hu.dwim.perec) ORM.
 #[allow(dead_code)]
 pub const OID_MAXIMUM_INSTANCE_ID: i64 = 281474976710655;
 /// Maximum value of the class id. Since the class id is stored in the lower
@@ -487,6 +488,7 @@ impl KlaczClass {
     }
 }
 
+/// Possible known errors when interacting with Klacz database.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum KlaczError {
     /// Unknown klacz object class.
@@ -514,11 +516,11 @@ fn default_remove_keywords() -> Vec<String> {
 }
 
 #[derive(Clone, Deserialize)]
-pub struct ModuleConfig {
+struct ModuleConfig {
     #[serde(default = "default_add_keywords")]
-    pub keywords_add: Vec<String>,
+    keywords_add: Vec<String>,
     #[serde(default = "default_remove_keywords")]
-    pub keywords_remove: Vec<String>,
+    keywords_remove: Vec<String>,
 }
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
