@@ -1137,7 +1137,7 @@ async fn help_processor(
             r#"this is the notbot; source {source_url}; configured prefixes: {prefixes:?}
 there are currently {modules_num} module{m_plural} registered{failed_mod_str}{mod_maybe_newline} {passthrough_num} passthrough module{p_plural} registered{failed_passthrough_str}{mod_and_pass_maybe_newline} {workers_num} worker{w_plural} registered{failed_workers_str}
 call «list-modules» to get a list of modules, or «help <module name>» for brief description of the module function
-documentation is WIP; you can find it at {docs_link}
+documentation is at {docs_link}
 contact {mx_contact} or {fedi_contact} if you need more help"#,
             mod_maybe_newline = if failed_num == 0 {
                 ", and "
@@ -1158,7 +1158,7 @@ contact {mx_contact} or {fedi_contact} if you need more help"#,
             r#"this is the notbot; source {source_url}; configured prefixes: {prefixes:?}<br />
 there are currently {modules_num} module{m_plural} registered{failed_mod_str}{mod_maybe_newline} {passthrough_num} passthrough module{p_plural} registered{failed_passthrough_str}{mod_and_pass_maybe_newline} {workers_num} worker{w_plural} registered{failed_workers_str}<br />
 call «list-modules» to get a list of modules, or «help <module name>» for brief description of the module function<br />
-documentation is WIP; you can find it at {docs_link}<br />
+documentation is at {docs_link}<br />
 contact {mx_contact} or {fedi_contact} if you need more help"#,
             mod_maybe_newline = if failed_num == 0 {
                 ", and "

@@ -25,7 +25,7 @@ path = "src/bin/main.rs"
 anyhow = "1.0.95"
 axum = { version = "0.8.3", features = ["macros"] }
 axum-core = "0.5.2"
-axum-oidc = { git = "https://github.com/pfzetto/axum-oidc.git", branch = "pfzetto" }
+axum-oidc = { git = "https://github.com/pfzetto/axum-oidc.git", branch = "pfzetto", version = "0.6.0" }
 bytes = { version = "1.10.1", features = ["serde"] }
 console-subscriber = "0.4.1"
 convert_case = { version = "0.8.0", features = ["random"] }

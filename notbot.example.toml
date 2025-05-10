@@ -1,58 +1,125 @@
-homeserver = "https://is-a.cat"
-user_id = "@notbot-test:is-a.cat"
+homeserver = "https://example.net"
+user_id = "@notbot-test:example.net"
 password = "…"
 device_id = "silly-rust-bot"
 data_dir = "./.notbot-data"
-
-[module.reloader]
-admins = [
-    "@ar:is-a.cat"
+prefixes = [ ".", "notbot,", "notbot:", "notbot", "siri,", "siri:", "siri", "test," ]
+acl_deny = [
+    "the bot knows where it is, because it knows where it isn't, and it isn't executing this command",
+    "i'm sorry, but the program cannot be executed because spindle is stuck",
 ]
+ignored = [ "@notbot:example.net", "@notbot-test:example.net", "@libera_mun:example.org", "@libera_oof:example.org" ]
+admins = [
+    "@ar:example.net",
+    "@someone:example.org",
+]
+
+[module."notbot::alerts".grafanas.hswaw]
+name = "hswaw"
+token = "…"
+rooms = [
+    "#infra:example.org",
+    "#bottest:example.net",
+    "#notbot-test-private-room:example.net",
+]
+
+[module."notbot::alerts".grafanas.cat]
+name = "cat"
+token = "…"
+rooms = [
+    "#bottest:example.net",
+    "#notbot-test-private-room:example.net",
+]
+
+[module."notbot::alerts"]
+rooms_purge = [
+    "#bottest:example.net",
+    "#infra:example.org",
+    "#notbot-test-private-room:example.net",
+    "!xnhydwPoIQeoVuJCaU:example.net",
+]
+no_firing_alerts_responses = [
+    "all systems operational",
+    "all crews reporting",
+    "battlecruiser operational",
+]
+
+[module."notbot::db".main]
+host = "database.example.org"
+port = 5432
+dbname = "klacz"
+user = "klacz"
+password = "…"
+
+[module."notbot::notmun"]
+mun_path = "../mun"
+
+[module."notbot::spaceapi"]
+presence_interval = 30
+empty_response = "Nikdo není doma..."
+
+[module."notbot::spaceapi".presence_map]
+"https://example.org/spaceapi" = [
+    "#members:example.org",
+    "#notbot-test-private-room:example.net",
+    "#bottest:example.net"
+]
+
+[module."notbot::spaceapi".room_map]
+"default" = "https://example.org/spaceapi"
+"#bottest" = "https://example.org/spaceapi"
 
 [module."notbot::wolfram"]
 app_id = "…"
 
-[module."notbot::spaceapi"]
-presence_interval = 3
-
-[module."notbot::spaceapi".presence_map]
-"https://hackerspace.pl/spaceapi" = [
-    "#members:hackerspace.pl",
-    "#notbot-test-private-room:is-a.cat",
-    "#bottest:is-a.cat"
-]
-
-[module."notbot::spaceapi".room_map]
-"default" = "https://hackerspace.pl/spaceapi"
-"#members" = "https://hackerspace.pl/spaceapi"
-"#gimbaza" = "https://hackerspace.pl/spaceapi"
-"#bottest" = "https://hackerspace.pl/spaceapi"
-
 [module."notbot::kasownik"]
-url_template = "https://kasownik.hackerspace.pl/api/months_due/{ member }.json"
 nag_channels = [
-    "#bottest:is-a.cat",
-    "#members:hackerspace.pl",
-    "#notbot-test-private-room:is-a.cat"
+    "#bottest:example.net",
+    "#notbot-test-private-room:example.net"
 ]
 nag_late_fees = 0
+due_others_allowed = [
+    "#bottest:example.net",
+    "#notbot-test-private-room:example.net"
+]
 
 [module."notbot::inviter"]
-requests = "#general:hackerspace.pl"
-confirmations = "#members:hackerspace.pl"
+requests = [ "#general:example.org" ]
 approvers = [
-    "@ar:is-a.cat"
-]
-homeservers_blanket_allow = [
-    "hackerspace.pl"
+    "@ar:example.net",
+    "@someone:example.org"
 ]
 invite_to = [
-    "!LPEcDKoGvnCdhRSTJW:is-a.cat",
-    "#bottest:is-a.cat"
+    "!LPEcDKoGvnCdhRSTJW:example.net",
+    "#bottest:example.net"
 ]
+homeserver_selfservice_allow = "example.org"
 
 [module."notbot::autojoiner"]
 homeservers = [
-    "is-a.cat",
-    "hackerspace.pl",
+    "example.net",
+    "example.org",
 ]
+leave_message = "goodbye 😿"
+
+[module."notbot::webterface"]
+listen_address = "127.0.0.1:6543"
+app_url = "https://notbot-test.example.net"
+issuer = "https://sso.example.org"
+client_id = "…"
+client_secret = "…"
+
+[module."notbot::sage"]
+protected = [
+    "@libera_klacz:example.org",
+    "@libera_oof:example.org",
+    "@libera_mun:example.org",
+    "@notbot:example.net",
+    "@notbot-test:example.net"
+]
+protected_reason = "You wanted *me* to remove *who*?!"
+reason = "Your behaviour is not conducive to the desired environment."
+no_target_response = "sorry fam, don't know 'em"
+
+[module."notbot::klaczdb"]
+handle = "main"
