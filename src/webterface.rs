@@ -15,12 +15,15 @@
 //! client_id = "0050e43c-b0dd-442c-b2b0-63e5ab27163a"
 //! # String; required; secret; OIDC client secret
 //! client_secret = "oQZPXk8CDUl4DJyM030Bb9kfc0U9UQ"
+//! ```
 //!
 //! # Usage
-//! ```
-//! ❯ curl -L notbot.is-a.cat
+//! ```text
+//! ❯ curl -L http://notbot.is-a.cat
 //! Hello anon!
 //! ```
+//!
+//! Other available functions include authenthication via hswaw sso, and invitations to defined rooms/spaces.
 //!
 //! # Future
 //! Current plan for 0.7.0 is to make endpoint configuration more dynamic, so that loaded bot modules would be able to provide
