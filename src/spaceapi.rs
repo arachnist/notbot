@@ -1,19 +1,73 @@
+//! Query SpaceAPI endpoints and observe membership changes.
+//!
+//! Retrieves and monitors members presence at the hackerspace using a compatible [SpaceAPI](https://spaceapi.io/)
+//!
+//! # Configuration
+//!
+//! ```toml
+//! # main configuration
+//! [module."notbot::spaceapi"]
+//! # Unsigned number; optional; how often should SpaceAPI endpoints be checked for presence changes; default: 30
+//! presence_interval = 30
+//! # String; optional; response used if noone is present; default: "Nikdo není doma..."
+//! empty_response = "Nikdo není doma..."
+//!
+//! # url -> list of rooms map to send presence updates to
+//! [module."notbot::spaceapi".presence_map]
+//! "https://hackerspace.pl/spaceapi" = [
+//!     "#members:hackerspace.pl",
+//!     "#notbot-test-private-room:is-a.cat",
+//!     "#bottest:is-a.cat"
+//! ]
+//!
+//! # room name -> url map to use when checking presence. special value "default" will be used when a room specific endpoint
+//! # is not defined
+//! [module."notbot::spaceapi".room_map]
+//! "default" = "https://hackerspace.pl/spaceapi"
+//! "#members" = "https://hackerspace.pl/spaceapi"
+//! ```
+//!
+//! # Usage
+//!
+//! Active query of SpaceAPI
+//! ```chat logs
+//! <ari> .at
+//! <notbot> ar
+//! ```
+//!
+//! Passive presence updates
+//! ```chat logs
+//! Notice(notbot) -> #members:hackerspace.pl: arrived: foo, also there: bar, baz
+//! Notice(notbot) -> #members:hackerspace.pl: left: foo, still there: bar, baz
+//! Notice(notbot) -> #members:hackerspace.pl: left: bar, still there: baz
+//! ```
+
 use crate::prelude::*;
 
 use tokio::time::{interval, Duration};
 
-fn default_keywords() -> Vec<String> {
-    vec!["at".s()]
-}
-
 #[derive(Clone, Deserialize)]
-pub struct ModuleConfig {
+struct ModuleConfig {
     room_map: HashMap<String, String>,
     presence_map: HashMap<String, Vec<String>>,
+    #[serde(default = "presence_interval")]
     presence_interval: u64,
+    #[serde(default = "empty_response")]
     empty_response: String,
-    #[serde(default = "default_keywords")]
-    pub keywords: Vec<String>,
+    #[serde(default = "keywords")]
+    keywords: Vec<String>,
+}
+
+fn presence_interval() -> u64 {
+    30
+}
+
+fn empty_response() -> String {
+    "Nikdo není doma...".s()
+}
+
+fn keywords() -> Vec<String> {
+    vec!["at".s()]
 }
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
@@ -48,7 +102,7 @@ async fn processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result
         }
     };
 
-    let data = fetch_and_decode_json::<SpaceAPI>(url.to_owned()).await?;
+    let data = fetch_and_decode_json::<space_api::SpaceAPI>(url.to_owned()).await?;
     let present: Vec<String> = names_dehighlighted(data.sensors.people_now_present);
 
     let response = if present.is_empty() {
@@ -91,7 +145,7 @@ async fn presence_observer(client: Client, module_config: ModuleConfig) -> anyho
 
         for (url, rooms) in &module_config.presence_map {
             trace!("fetching spaceapi url: {}", url);
-            let data = match fetch_and_decode_json::<SpaceAPI>(url.to_owned()).await {
+            let data = match fetch_and_decode_json::<space_api::SpaceAPI>(url.to_owned()).await {
                 Ok(d) => d,
                 Err(fe) => {
                     error!("error fetching data: {fe}");
@@ -182,7 +236,7 @@ async fn presence_observer(client: Client, module_config: ModuleConfig) -> anyho
     }
 }
 
-fn names_dehighlighted(present: Vec<PeopleNowPresent>) -> Vec<String> {
+fn names_dehighlighted(present: Vec<space_api::PeopleNowPresent>) -> Vec<String> {
     let mut dehighlighted: Vec<String> = vec![];
 
     for sensor in present {
@@ -198,96 +252,103 @@ fn names_dehighlighted(present: Vec<PeopleNowPresent>) -> Vec<String> {
     dehighlighted
 }
 
-#[allow(dead_code)]
-#[derive(Clone, Deserialize)]
-pub struct SpaceAPI {
-    pub api_compatibility: Vec<String>,
-    pub space: String,
-    pub logo: String,
-    pub url: String,
-    pub location: Location,
-    pub state: State,
-    pub contact: Contact,
-    pub projects: Vec<String>,
-    pub feeds: Feeds,
-    pub sensors: Sensors,
-}
+pub mod space_api {
+    //! Structure for data retrieved from SpaceAPI endpoints.
+    //!
+    //! Generated from the published json schema, and modified slightly.
 
-#[allow(dead_code)]
-#[derive(Clone, Deserialize)]
-pub struct Location {
-    pub lat: f64,
-    pub lon: f64,
-    pub address: String,
-}
+    use serde_derive::Deserialize;
+    #[allow(dead_code, missing_docs)]
+    #[derive(Clone, Deserialize)]
+    pub struct SpaceAPI {
+        pub api_compatibility: Vec<String>,
+        pub space: String,
+        pub logo: String,
+        pub url: String,
+        pub location: Location,
+        pub state: State,
+        pub contact: Contact,
+        pub projects: Vec<String>,
+        pub feeds: Feeds,
+        pub sensors: Sensors,
+    }
 
-#[allow(dead_code)]
-#[derive(Clone, Deserialize)]
-pub struct State {
-    pub open: bool,
-    pub message: String,
-    pub icon: Icon,
-}
+    #[allow(dead_code, missing_docs)]
+    #[derive(Clone, Deserialize)]
+    pub struct Location {
+        pub lat: f64,
+        pub lon: f64,
+        pub address: String,
+    }
 
-#[allow(dead_code)]
-#[derive(Clone, Deserialize)]
-pub struct Icon {
-    pub open: String,
-    pub closed: String,
-}
+    #[allow(dead_code, missing_docs)]
+    #[derive(Clone, Deserialize)]
+    pub struct State {
+        pub open: bool,
+        pub message: String,
+        pub icon: Icon,
+    }
 
-#[allow(dead_code)]
-#[derive(Clone, Deserialize)]
-pub struct Contact {
-    pub facebook: String,
-    pub irc: String,
-    pub mastodon: String,
-    pub matrix: String,
-    pub ml: String,
-    pub twitter: String,
-}
+    #[allow(dead_code, missing_docs)]
+    #[derive(Clone, Deserialize)]
+    pub struct Icon {
+        pub open: String,
+        pub closed: String,
+    }
 
-#[allow(dead_code)]
-#[derive(Clone, Deserialize)]
-pub struct Feeds {
-    pub blog: Blog,
-    pub calendar: Calendar,
-    pub wiki: Wiki,
-}
+    #[allow(dead_code, missing_docs)]
+    #[derive(Clone, Deserialize)]
+    pub struct Contact {
+        pub facebook: String,
+        pub irc: String,
+        pub mastodon: String,
+        pub matrix: String,
+        pub ml: String,
+        pub twitter: String,
+    }
 
-#[allow(dead_code)]
-#[derive(Clone, Deserialize)]
-pub struct Blog {
-    #[serde(rename = "type")]
-    pub type_field: String,
-    pub url: String,
-}
+    #[allow(dead_code, missing_docs)]
+    #[derive(Clone, Deserialize)]
+    pub struct Feeds {
+        pub blog: Blog,
+        pub calendar: Calendar,
+        pub wiki: Wiki,
+    }
 
-#[allow(dead_code)]
-#[derive(Clone, Deserialize)]
-pub struct Calendar {
-    #[serde(rename = "type")]
-    pub type_field: String,
-    pub url: String,
-}
+    #[allow(dead_code, missing_docs)]
+    #[derive(Clone, Deserialize)]
+    pub struct Blog {
+        #[serde(rename = "type")]
+        pub type_field: String,
+        pub url: String,
+    }
 
-#[allow(dead_code)]
-#[derive(Clone, Deserialize)]
-pub struct Wiki {
-    #[serde(rename = "type")]
-    pub type_field: String,
-    pub url: String,
-}
+    #[allow(dead_code, missing_docs)]
+    #[derive(Clone, Deserialize)]
+    pub struct Calendar {
+        #[serde(rename = "type")]
+        pub type_field: String,
+        pub url: String,
+    }
 
-#[allow(dead_code)]
-#[derive(Clone, Deserialize)]
-pub struct Sensors {
-    pub people_now_present: Vec<PeopleNowPresent>,
-}
+    #[allow(dead_code, missing_docs)]
+    #[derive(Clone, Deserialize)]
+    pub struct Wiki {
+        #[serde(rename = "type")]
+        pub type_field: String,
+        pub url: String,
+    }
 
-#[allow(dead_code)]
-#[derive(Clone, Deserialize)]
-pub struct PeopleNowPresent {
-    pub value: u32,
-    pub names: Vec<String>,
+    #[allow(dead_code, missing_docs)]
+    #[derive(Clone, Deserialize)]
+    pub struct Sensors {
+        pub people_now_present: Vec<PeopleNowPresent>,
+    }
+
+    #[allow(dead_code, missing_docs)]
+    #[derive(Clone, Deserialize)]
+    pub struct PeopleNowPresent {
+        pub value: u32,
+        pub names: Vec<String>,
+    }
 }
