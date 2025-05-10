@@ -1,44 +1,46 @@
-pub use crate::config::Config;
+pub(crate) use crate::config::Config;
 
-pub use crate::db::DBPools;
+pub(crate) use crate::db::DBPools;
 
-pub use crate::module::{
+pub(crate) use crate::module::{
     Acl, ConsumerEvent, Consumption, ModuleInfo, PassThroughModuleInfo, TriggerType, WorkerInfo,
 };
-pub use crate::webterface::{HswawAdditionalClaims, WebAppState};
+pub(crate) use crate::webterface::{HswawAdditionalClaims, WebAppState};
 
-pub use crate::klaczdb::KlaczDB;
+pub(crate) use crate::klaczdb::KlaczDB;
 
-pub use crate::tools::*;
+pub(crate) use crate::tools::*;
 
-pub use std::collections::HashMap;
-pub use std::convert::{From, TryFrom};
-pub use std::str::FromStr;
-pub use std::sync::{Arc, LazyLock, Mutex};
-pub use std::time::{Duration, Instant, SystemTime, SystemTimeError, UNIX_EPOCH};
-pub use std::{
+pub(crate) use std::collections::HashMap;
+pub(crate) use std::convert::{From, TryFrom};
+pub(crate) use std::str::FromStr;
+pub(crate) use std::sync::{Arc, LazyLock, Mutex};
+pub(crate) use std::time::{Duration, Instant, SystemTime, SystemTimeError, UNIX_EPOCH};
+pub(crate) use std::{
     fs, io,
     path::{Path, PathBuf},
 };
 
-pub use core::{error::Error as StdError, fmt};
+pub(crate) use core::{error::Error as StdError, fmt};
 
-pub use anyhow::{anyhow, bail};
+pub(crate) use anyhow::{anyhow, bail};
 
-pub use matrix_sdk::event_handler::{Ctx, EventHandlerHandle};
-pub use matrix_sdk::ruma::events::room::{
+pub(crate) use matrix_sdk::event_handler::{Ctx, EventHandlerHandle};
+pub(crate) use matrix_sdk::ruma::events::room::{
     member::{MembershipChange, RoomMemberEvent, RoomMemberEventContent, StrippedRoomMemberEvent},
     message::{MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent},
 };
-pub use matrix_sdk::ruma::events::{
+pub(crate) use matrix_sdk::ruma::events::{
     AnyStateEvent, AnySyncTimelineEvent, AnyTimelineEvent, Mentions,
 };
-pub use matrix_sdk::ruma::{OwnedEventId, OwnedRoomAliasId, OwnedRoomId, OwnedUserId, UserId};
-pub use matrix_sdk::{Client, Room};
+pub(crate) use matrix_sdk::ruma::{
+    OwnedEventId, OwnedRoomAliasId, OwnedRoomId, OwnedUserId, UserId,
+};
+pub(crate) use matrix_sdk::{Client, Room};
 
-pub use tokio::sync::mpsc;
+pub(crate) use tokio::sync::mpsc;
 
-pub use tracing::{debug, error, info, trace, warn};
+pub(crate) use tracing::{debug, error, info, trace, warn};
 
-pub use serde::de;
-pub use serde_derive::{Deserialize, Serialize};
+pub(crate) use serde::de;
+pub(crate) use serde_derive::{Deserialize, Serialize};
