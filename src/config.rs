@@ -3,7 +3,7 @@
 
 use crate::prelude::*;
 
-use toml::{Table, Value};
+use toml::Table;
 
 /// Known error types that can be returned when (re)loading configuration
 #[derive(Debug)]
@@ -146,16 +146,6 @@ impl Config {
     pub fn admins(&self) -> Vec<String> {
         let inner = &self.inner.lock().unwrap();
         inner.admins.clone()
-    }
-
-    /// Retrieve module configuration by section name
-    pub fn module_config_value(&self, n: &str) -> Result<Value, ConfigError> {
-        let inner = &self.inner.lock().unwrap();
-        if !inner.module.contains_key(n) {
-            return Err(ConfigError::NoModuleConfig(n.to_owned()));
-        };
-
-        Ok(inner.module[n].clone())
     }
 
     /// Retrieve module configuration by section name

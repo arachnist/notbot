@@ -1,3 +1,41 @@
+//! Interface with Postgres-compatible database.
+//!
+//! Mostly useful for writing other modules. Chat functionality in this module is limited to checking status of configured database pools
+//!
+//! # Configuration
+//!
+//! The configuration is defined as HashMap<name: Strin, [`deadpool_postgres::Config`]>, which is why there is no "main" configuration for the module.
+//!
+//! Configuration fields available in that module are passed verbatim to the database pool initialization functions.
+//!
+//! ```toml
+//! [module."notbot::db".name]
+//! host = "host.example.org"
+//! port = 5432
+//! dbname = "database"
+//! user = "user"
+//! password = "password"
+//! ```
+//!
+//! # Usage
+//!
+//! After aquiring a connection through [`DBPools::get_client`], [`deadpool_postgres`] configuration should be more relevant.
+//! Here's a short example
+//!
+//! ```rust
+//! use notbot::db::DBPools;
+//!
+//! fn get_instance_id() -> anyhow::Result<i64> {
+//!     let client = DBPools::get_client("main").await?;
+//!     let statement = client.prepare_cached("SELECT nextval('_instance_id')").await?;
+//!     let row = client.query_one(&statement, &[]).await?;
+//!     row.try_get(0)
+//!         .map_err(|e: tokio_postgres::Error| anyhow!(e))
+//! }
+//! ```
+//!
+//! More life-like examples can be found in other parts of the code, especially in the [`crate::klaczdb`] and [`crate::notmun`] modules.
+
 use crate::prelude::*;
 
 use deadpool_postgres::{
@@ -7,8 +45,10 @@ use tokio_postgres::NoTls;
 
 static DB_CONNECTIONS: LazyLock<DBPools> = LazyLock::new(Default::default);
 
+/// Aforementioned configuration format
 pub type DBConfig = HashMap<String, PGConfig>;
 
+/// Object for interacting with the collection of database pool
 #[derive(Default)]
 pub struct DBPools(Arc<Mutex<HashMap<String, Pool>>>);
 
@@ -27,7 +67,8 @@ impl DBPools {
         }
     }
 
-    pub(crate) async fn get_client(handle: &str) -> Result<DBClient, DBError> {
+    /// Acquire a client for a database by name.
+    pub async fn get_client(handle: &str) -> Result<DBClient, DBError> {
         let pool = {
             trace!("aquiring lock");
             let dbc = match DB_CONNECTIONS.0.lock() {
@@ -97,7 +138,8 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
     Ok(vec![db])
 }
 
-async fn dbstatus(event: ConsumerEvent, config: DBConfig) -> anyhow::Result<()> {
+/// Check status of database connections in the chat room.
+pub async fn dbstatus(event: ConsumerEvent, config: DBConfig) -> anyhow::Result<()> {
     let mut wip_response: String = "database status:".to_string();
 
     trace!("attempting to grab dbc lock");
@@ -128,10 +170,14 @@ async fn dbstatus(event: ConsumerEvent, config: DBConfig) -> anyhow::Result<()> 
     Ok(())
 }
 
+/// Database pool errors
 #[derive(Debug)]
 pub enum DBError {
+    /// Couldn't aquire connection collection lock.
     CollectionLock,
+    /// Database known under the handle not found in configuration.
     HandleNotFound,
+    /// Aquiring database client from the pool failed.
     GetClient,
 }
 
