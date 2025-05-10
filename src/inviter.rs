@@ -5,7 +5,7 @@ use crate::notbottime::{NotBotTime, NOTBOT_EPOCH};
 use matrix_sdk::ruma::events::reaction::OriginalSyncReactionEvent;
 
 use axum::{extract::State, response::IntoResponse};
-use tower_sessions::Session;
+use axum_oidc::OidcClaims;
 
 fn default_keywords() -> Vec<String> {
     vec!["invite".s()]
@@ -166,24 +166,18 @@ async fn inviter(client: Client, invitee: OwnedUserId, rooms: Vec<String>) -> an
 
 pub(crate) async fn web_inviter(
     State(app_state): State<WebAppState>,
-    session: Session,
+    OidcClaims(claims): OidcClaims<HswawAdditionalClaims>,
 ) -> Result<impl IntoResponse, (axum::http::StatusCode, &'static str)> {
     async {
-        let module_config: ModuleConfig = app_state
-            .bot_config
-            .module_config_value(module_path!())?
-            .try_into()?;
-
-        let user_data: OauthUserInfo = session.get("user.data").await.unwrap().unwrap();
+        let module_config: ModuleConfig = app_state.config.typed_module_config(module_path!())?;
 
         let user_id: OwnedUserId = UserId::parse(format!(
             "@{username}:{homeserver}",
-            username = user_data.sub,
+            username = claims.subject().as_str(),
             homeserver = module_config.homeserver_selfservice_allow
         ))?;
 
         inviter(app_state.mx, user_id, module_config.invite_to).await?;
-
         Ok(())
     }
     .await

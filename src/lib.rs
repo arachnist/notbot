@@ -1,7 +1,8 @@
+#![warn(missing_docs)]
+
 mod alerts;
 mod botmanager;
 mod metrics;
-mod webterface;
 
 pub use crate::botmanager::BotManager;
 pub mod config;
@@ -10,6 +11,7 @@ pub mod klaczdb;
 pub mod module;
 pub mod prelude;
 pub mod tools;
+pub mod webterface;
 
 mod autojoiner;
 mod inviter;

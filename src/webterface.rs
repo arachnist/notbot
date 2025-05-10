@@ -1,3 +1,31 @@
+//! Bot web interface
+//!
+//! Provides a complementary web interface for various bot functions.
+//!
+//! # Configuration
+//! ```toml
+//! [module."notbot::webterface"]
+//! # String; required; address:port pair for the web interface to bind to
+//! listen_address = "100.88.177.77:6543"
+//! # String; required; application url used for interacting with SSO
+//! app_url = "https://notbot-test.is-a.cat"
+//! # String; optional; OIDC token issuer address
+//! issuer = "https://sso.hackerspace.pl"
+//! # String; required; secret; OIDC client identifier
+//! client_id = "0050e43c-b0dd-442c-b2b0-63e5ab27163a"
+//! # String; required; secret; OIDC client secret
+//! client_secret = "oQZPXk8CDUl4DJyM030Bb9kfc0U9UQ"
+//!
+//! # Usage
+//! ```
+//! ❯ curl -L notbot.is-a.cat
+//! Hello anon!
+//! ```
+//!
+//! # Future
+//! Current plan for 0.7.0 is to make endpoint configuration more dynamic, so that loaded bot modules would be able to provide
+//! api endpoints and UI snippets.
+
 use crate::prelude::*;
 
 use crate::alerts::receive_alerts;
@@ -6,16 +34,17 @@ use crate::metrics::{serve_metrics, track_metrics};
 use axum::{
     error_handling::HandleErrorLayer,
     extract::State,
-    http::{StatusCode, Uri},
+    http::StatusCode,
     middleware, response,
     response::IntoResponse,
-    routing::{get, post},
+    routing::{any, get, post},
     Router,
 };
 use axum_oidc::{
-    error::MiddlewareError, EmptyAdditionalClaims, OidcAccessToken, OidcAuthLayer, OidcClaims,
-    OidcLoginLayer,
+    error::MiddlewareError, handle_oidc_redirect, AdditionalClaims, OidcAuthLayer, OidcClaims,
+    OidcClient, OidcLoginLayer,
 };
+use openidconnect::ClientSecret;
 use tokio::net::TcpListener;
 use tokio::time::{sleep, Duration as TokioDuration};
 use tower::ServiceBuilder;
@@ -26,13 +55,17 @@ use tower_sessions::{
 };
 
 #[derive(Clone, Deserialize, Debug)]
-pub struct ModuleConfig {
+struct ModuleConfig {
     listen_address: String,
     app_url: String,
-    userinfo_endpoint: String,
+    #[serde(default = "issuer")]
     issuer: String,
     client_id: String,
-    client_secret: Option<String>,
+    client_secret: ClientSecret,
+}
+
+fn issuer() -> String {
+    "https://sso.hackerspace.pl".s()
 }
 
 pub(crate) fn workers(mx: &Client, config: &Config) -> anyhow::Result<Vec<WorkerInfo>> {
@@ -52,7 +85,7 @@ async fn webterface(mx: Client, bot_config: Config) -> anyhow::Result<()> {
     let app_state = WebAppState {
         mx: mx.clone(),
         web_config: module_config.clone(),
-        bot_config: bot_config.clone(),
+        config: bot_config.clone(),
     };
 
     let session_store = MemoryStore::default();
@@ -61,28 +94,29 @@ async fn webterface(mx: Client, bot_config: Config) -> anyhow::Result<()> {
         .with_same_site(SameSite::Lax)
         .with_expiry(Expiry::OnInactivity(Duration::seconds(3600)));
 
-    let oidc_login_service = ServiceBuilder::new()
-        .layer(HandleErrorLayer::new(|e: MiddlewareError| async {
-            error!("Failed to handle some error: {e:?}");
+    let handle_error_layer: HandleErrorLayer<_, ()> =
+        HandleErrorLayer::new(|e: MiddlewareError| async {
+            error!(error = ?e, "An error occurred in OIDC middleware");
             e.into_response()
-        }))
-        .layer(OidcLoginLayer::<EmptyAdditionalClaims>::new());
+        });
+
+    let oidc_login_service = ServiceBuilder::new()
+        .layer(handle_error_layer.clone())
+        .layer(OidcLoginLayer::<HswawAdditionalClaims>::new());
+
+    let oidc_client = OidcClient::<HswawAdditionalClaims>::builder()
+        .with_default_http_client()
+        .with_redirect_url(format!("{}/oidc", module_config.app_url).parse()?)
+        .with_client_id(module_config.clone().client_id)
+        .with_client_secret(module_config.client_secret.secret().clone())
+        .add_scope("openid")
+        .discover(module_config.issuer.clone())
+        .await?
+        .build();
 
     let oidc_auth_service = ServiceBuilder::new()
-        .layer(HandleErrorLayer::new(|e: MiddlewareError| async {
-            e.into_response()
-        }))
-        .layer(
-            OidcAuthLayer::<EmptyAdditionalClaims>::discover_client(
-                Uri::from_str(&module_config.app_url).expect("valid APP_URL"),
-                module_config.clone().issuer,
-                module_config.clone().client_id,
-                module_config.clone().client_secret,
-                vec!["profile:read".to_string()],
-            )
-            .await
-            .unwrap(),
-        );
+        .layer(handle_error_layer)
+        .layer(OidcAuthLayer::new(oidc_client));
 
     let listen_address = module_config.clone().listen_address;
 
@@ -90,6 +124,7 @@ async fn webterface(mx: Client, bot_config: Config) -> anyhow::Result<()> {
         .route("/login", get(login))
         .route("/mx/inviter/invite", get(crate::inviter::web_inviter))
         .layer(oidc_login_service)
+        .route("/oidc", any(handle_oidc_redirect::<HswawAdditionalClaims>))
         .route("/", get(maybe_authenticated))
         .route("/logout", get(logout))
         .layer(oidc_auth_service)
@@ -119,12 +154,11 @@ async fn webterface(mx: Client, bot_config: Config) -> anyhow::Result<()> {
     }
 
     axum::serve(listener, app.into_make_service()).await?;
-
     Ok(())
 }
 
 async fn maybe_authenticated(
-    claims: Result<OidcClaims<EmptyAdditionalClaims>, axum_oidc::error::ExtractorError>,
+    claims: Result<OidcClaims<HswawAdditionalClaims>, axum_oidc::error::ExtractorError>,
 ) -> impl IntoResponse {
     if let Ok(claims) = claims {
         format!(
@@ -136,42 +170,11 @@ async fn maybe_authenticated(
     }
 }
 
-async fn login(
-    token: OidcAccessToken,
-    session: Session,
-    State(app_state): State<WebAppState>,
-) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
-    async {
-        session
-            .insert(
-                "user.data",
-                reqwest::ClientBuilder::new()
-                    .redirect(reqwest::redirect::Policy::none())
-                    .build()?
-                    .get(app_state.web_config.userinfo_endpoint)
-                    .bearer_auth(token.0)
-                    .send()
-                    .await?
-                    .json::<OauthUserInfo>()
-                    .await?,
-            )
-            .await?;
-
-        Ok(())
-    }
-    .await
-    .map_err(|err: anyhow::Error| {
-        error!("Failed to handle user info: {:?}", err);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Failed to handle user info",
-        )
-    })?;
-
+async fn login() -> Result<impl IntoResponse, (StatusCode, &'static str)> {
     Ok(response::Redirect::to("/"))
 }
 
-pub async fn logout(
+async fn logout(
     State(app_state): State<WebAppState>,
     session: Session,
 ) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
@@ -190,19 +193,28 @@ pub async fn logout(
     Ok(response::Redirect::to(&app_state.web_config.app_url))
 }
 
+/// Application state object
 #[derive(Debug, Clone)]
 pub struct WebAppState {
+    /// Matrix client
     pub mx: Client,
     web_config: ModuleConfig,
-    pub bot_config: Config,
+    /// Full bot configuration
+    pub config: Config,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-pub struct OauthUserInfo {
-    pub email: String,
-    pub groups: Vec<String>,
-    pub name: String,
-    pub nickname: String,
-    pub preferred_username: String,
-    pub sub: String,
+/// Additional user information retrieved from oauth userinfo endpoint.
+///
+/// In addition to claims defined here, some of the data returned from hswaw sso userinfo_endpoint
+/// gets mapped to standard claims.
+/// These include: sub, name, nickname, preferred_username, email
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HswawAdditionalClaims {
+    /// Groups the user belongs to
+    pub groups: Option<Vec<String>>,
+    /// Primary Matrix UserID of the user
+    pub matrix_user: Option<String>,
 }
+
+impl openidconnect::AdditionalClaims for HswawAdditionalClaims {}
+impl AdditionalClaims for HswawAdditionalClaims {}
