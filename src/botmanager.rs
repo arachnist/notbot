@@ -72,11 +72,18 @@ impl BotManagerInner {
     }
 }
 
+/// Object holding bot state.
+///
+/// The only value it holds is an Arc<Mutex<>> to the actual state.
 pub struct BotManager {
     inner: Arc<Mutex<BotManagerInner>>,
 }
 
 impl BotManager {
+    /// Bot initialization entrypoint.
+    ///
+    /// Prepares Matrix [`matrix_sdk::Client`], runs the initialization function for all the modules and workers, initializes default prometheus metrics registry,
+    /// and returns to the caller with BotManager object started.
     pub async fn new(config_path: String, reload_ev_tx: Sender<Room>) -> anyhow::Result<Self> {
         let config = Config::new(config_path.clone())?;
         let data_dir_str = config.data_dir();
@@ -107,11 +114,6 @@ impl BotManager {
             ))
             .unwrap();
 
-        // this is, surprisingly, core functionality
-        let klacz = KlaczDB { handle: "main" };
-
-        client.add_event_handler_context(klacz);
-
         let dispatcher_handle =
             match crate::module::init_modules(&client, &config, reload_ev_tx.clone()) {
                 Ok(h) => {
@@ -139,6 +141,9 @@ impl BotManager {
         })
     }
 
+    /// Main bot entrypoint. Starts the event loop provided by [`matrix_sdk::Client::sync_with_result_callback`]
+    ///
+    /// Must be started along with the [`Self::reload`] task for reloads to work.
     pub async fn run(&self) -> anyhow::Result<()> {
         let (sync_settings, session_file, client) = {
             debug!("run: attempting lock");
@@ -264,6 +269,11 @@ impl BotManager {
         info!("[{room_name}] {}: {}", event.sender, text_content.body)
     }
 
+    /// Function that triggers configuration reloading and module reinitialization
+    ///
+    /// Must be started along with the [`Self::run`] task for reloads to work. When
+    /// reload is complete, short information about completion of the task is sent to
+    /// the channel from which configuration reload was requested.
     pub async fn reload(&self, mut rx: Receiver<Room>) -> anyhow::Result<()> {
         loop {
             let room = match rx.recv().await {
