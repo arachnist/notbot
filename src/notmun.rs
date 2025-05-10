@@ -1,3 +1,24 @@
+//! Run a modified IRC bot inside your Matrix bot for fun and profit.
+//!
+//! Builds a Lua environment, and provides some helper/proxy functions to make a slightly modified version of
+//! [mun](https://code.hackerspace.pl/ar/notmun) work with not too many changes compared to the original.
+//!
+//! # Configuration
+//!
+//! ```toml
+//! [module."notbot::notmun"]
+//! # String; required; path to notmun
+//! mun_path = "../mun"
+//! ```
+//!
+//! # Usage
+//!
+//! Depends on what modules are enabled in the notmun version the configuration points at.
+//! Some core functions include:
+//! * `plugin-reload` - reloads a notmun plugin
+//! * `eval` - evaluates a bit of lua code in best-effort sandboxed environment
+//! * `eval-core` - evaluates a bit of lua code in the global notmun environment
+
 use crate::prelude::*;
 
 use std::ops::Add;
@@ -14,7 +35,7 @@ use mlua::{
 };
 
 #[derive(Clone, Deserialize)]
-pub struct ModuleConfig {
+struct ModuleConfig {
     mun_path: String,
 }
 
@@ -163,7 +184,7 @@ pub(crate) fn passthrough(mx: &Client, _: &Config) -> anyhow::Result<Vec<PassThr
     Ok(vec![notmun])
 }
 
-pub async fn join_consumer(
+async fn join_consumer(
     mut rx: mpsc::Receiver<ConsumerEvent>,
     mx: Client,
     lua_handler_handle: EventHandlerHandle,
@@ -419,7 +440,7 @@ async fn async_fetch_http(lua: Lua, uri: String) -> anyhow::Result<(String, u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-pub enum NotMunAction {
+pub(crate) enum NotMunAction {
     Say(String, String),
     Html(String, String, String),
     Notice(String, String),
@@ -546,7 +567,7 @@ impl TryFrom<Vec<String>> for NotMunAction {
 }
 
 #[derive(Debug)]
-pub enum NotMunError {
+pub(crate) enum NotMunError {
     #[allow(dead_code)]
     NoSuchRoom(String),
     UnknownAction,

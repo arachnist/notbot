@@ -20,7 +20,6 @@
 
 use crate::prelude::*;
 
-use serde_json::Value;
 use urlencoding::encode as uencode;
 
 /// Wolfram module configuration object
