@@ -1,14 +1,40 @@
-use crate::prelude::*;
+//! Main bot structure
+//!
+//! Handles the event loop, reloads, logging, and holding Matrix client state.
 
+use core::{error::Error as StdError, fmt};
+
+use std::fs;
 use std::ops::Add;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
-use futures::lock::Mutex;
+use crate::config::Config;
 
 use matrix_sdk::{
-    authentication::matrix::MatrixSession, config::SyncSettings, Error as MatrixError, LoopCtrl,
+    authentication::matrix::MatrixSession,
+    config::SyncSettings,
+    event_handler::EventHandlerHandle,
+    ruma::events::room::message::{
+        MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
+    },
+    Client, Error as MatrixError, LoopCtrl, Room,
 };
 
-use tokio::sync::mpsc::{Receiver, Sender};
+use tracing::{debug, error, info, trace};
+
+use anyhow::bail;
+
+use serde_derive::{Deserialize, Serialize};
+
+use futures::future::try_join;
+use futures::lock::Mutex;
+
+use tokio::sync::{
+    mpsc,
+    mpsc::{Receiver, Sender},
+};
 
 struct BotManagerInner {
     config: Config,
@@ -144,7 +170,7 @@ impl BotManager {
     /// Main bot entrypoint. Starts the event loop provided by [`matrix_sdk::Client::sync_with_result_callback`]
     ///
     /// Must be started along with the [`Self::reload`] task for reloads to work.
-    pub async fn run(&self) -> anyhow::Result<()> {
+    async fn run(&self) -> anyhow::Result<()> {
         let (sync_settings, session_file, client) = {
             debug!("run: attempting lock");
             let inner = self.inner.lock().await;
@@ -269,12 +295,22 @@ impl BotManager {
         info!("[{room_name}] {}: {}", event.sender, text_content.body)
     }
 
+    /// Main bot entrypoint. Takes config path, and starts everything accordingly.
+    pub async fn serve(config_path: String) -> anyhow::Result<((), ())> {
+        let (tx, rx) = mpsc::channel::<matrix_sdk::Room>(1);
+        let notbot = &BotManager::new(config_path, tx).await?;
+
+        let pair = try_join(notbot.reload(rx), notbot.run());
+
+        pair.await
+    }
+
     /// Function that triggers configuration reloading and module reinitialization
     ///
     /// Must be started along with the [`Self::run`] task for reloads to work. When
     /// reload is complete, short information about completion of the task is sent to
     /// the channel from which configuration reload was requested.
-    pub async fn reload(&self, mut rx: Receiver<Room>) -> anyhow::Result<()> {
+    async fn reload(&self, mut rx: Receiver<Room>) -> anyhow::Result<()> {
         loop {
             let room = match rx.recv().await {
                 Some(e) => e,

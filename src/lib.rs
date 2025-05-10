@@ -1,11 +1,11 @@
 #![warn(missing_docs)]
-
-mod alerts;
-mod botmanager;
+//! Here are some docs, lmao
 
 mod prelude;
 
-pub use crate::botmanager::BotManager;
+pub mod alerts;
+pub mod autojoiner;
+pub mod botmanager;
 pub mod config;
 pub mod db;
 pub mod klaczdb;
@@ -15,7 +15,6 @@ pub mod notmun;
 pub mod tools;
 pub mod webterface;
 
-mod autojoiner;
 pub mod inviter;
 pub mod kasownik;
 mod notbottime;
