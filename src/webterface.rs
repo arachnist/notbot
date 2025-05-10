@@ -83,7 +83,7 @@ pub(crate) fn workers(mx: &Client, config: &Config) -> anyhow::Result<Vec<Worker
 }
 
 async fn webterface(mx: Client, bot_config: Config) -> anyhow::Result<()> {
-    let module_config: ModuleConfig = bot_config.module_config_value(module_path!())?.try_into()?;
+    let module_config: ModuleConfig = bot_config.typed_module_config(module_path!())?;
 
     let app_state = WebAppState {
         mx: mx.clone(),

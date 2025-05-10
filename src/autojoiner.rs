@@ -34,11 +34,11 @@ fn leave_message() -> String {
 
 pub(crate) fn starter(mx: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
     info!("registering autojoiner");
-    let autojoiner_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+    let autojoiner_config: ModuleConfig = config.typed_module_config(module_path!())?;
     let autojoiner_handle =
         mx.add_event_handler(move |ev, mx, room| autojoiner(ev, mx, room, autojoiner_config));
 
-    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+    let module_config: ModuleConfig = config.typed_module_config(module_path!())?;
 
     let (join_tx, join_rx) = mpsc::channel::<ConsumerEvent>(1);
     let join = ModuleInfo {

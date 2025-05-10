@@ -115,7 +115,7 @@ async fn lua_generic_dispatcher(
 }
 
 pub(crate) fn module_starter(client: &Client, config: &Config) -> anyhow::Result<()> {
-    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+    let module_config: ModuleConfig = config.typed_module_config(module_path!())?;
 
     let lua: Lua = Lua::new();
     let lua_globals: Table = lua.globals();
