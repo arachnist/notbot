@@ -317,25 +317,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "axum-oidc"
-version = "0.6.0"
-source = "git+https://github.com/pfzetto/axum-oidc.git?branch=pfzetto#65cb17560304ab31d342ebdb37db6cf4ed3aae99"
-dependencies = [
- "axum 0.8.4",
- "axum-core 0.5.2",
- "futures-util",
- "http",
- "openidconnect",
- "reqwest",
- "serde",
- "thiserror 2.0.12",
- "tower-layer",
- "tower-service",
- "tower-sessions",
- "urlencoding",
-]
-
-[[package]]
 name = "backon"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2474,7 +2455,6 @@ dependencies = [
  "anyhow",
  "axum 0.8.4",
  "axum-core 0.5.2",
- "axum-oidc",
  "bytes",
  "console-subscriber",
  "convert_case",
@@ -2487,6 +2467,7 @@ dependencies = [
  "hyper-util",
  "matrix-sdk",
  "mlua",
+ "notbot-axum-oidc",
  "openidconnect",
  "prometheus",
  "reqwest",
@@ -2504,6 +2485,26 @@ dependencies = [
  "tower-sessions",
  "tracing",
  "tracing-subscriber",
+ "urlencoding",
+]
+
+[[package]]
+name = "notbot-axum-oidc"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d5524b711ded9a467fba1d0fceb0c6d38953f07c2107116b02e27d400222dfb7"
+dependencies = [
+ "axum 0.8.4",
+ "axum-core 0.5.2",
+ "futures-util",
+ "http",
+ "openidconnect",
+ "reqwest",
+ "serde",
+ "thiserror 2.0.12",
+ "tower-layer",
+ "tower-service",
+ "tower-sessions",
  "urlencoding",
 ]
 
