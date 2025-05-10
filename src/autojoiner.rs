@@ -1,3 +1,28 @@
+//! Make the bot join and leave rooms as instructed.
+//!
+//! # Configuration
+//!
+//! ```toml
+//! [module."notbot::autojoiner"]
+//! # Required; list of strings; list of homeservers to which room ids belong to that the bot will be allowed to join
+//! homeservers = [
+//!     "is-a.cat",
+//!     "hackerspace.pl",
+//! ]
+//! # Optional; string; message the bot will send to the channel when instructed to leave
+//! leave_message = "goodbye 😿"
+//! ```
+//!
+//! # Usage
+//!
+//! The bot responds to chat commands only from bot admins.
+//!
+//! Keywords:
+//! * `join room-name` - attempts to join a room by name.
+//! * `leave (room-name)` - will leave either the named, or - if name's not present - current room.
+//!
+//! The bot will also attempt to join rooms when invited, and the room has room_id on one of the allowed homeservers.
+
 use crate::prelude::*;
 
 use tokio::time::{sleep, Duration};
@@ -10,18 +35,18 @@ static ROOM_INVITES: LazyLock<Counter> = LazyLock::new(|| {
 });
 
 #[derive(Clone, Deserialize)]
-pub struct ModuleConfig {
-    pub homeservers: Vec<String>,
+struct ModuleConfig {
+    homeservers: Vec<String>,
     #[serde(default = "keywords_join")]
-    pub keywords_join: Vec<String>,
+    keywords_join: Vec<String>,
     #[serde(default = "keywords_leave")]
-    pub keywords_leave: Vec<String>,
+    keywords_leave: Vec<String>,
     #[serde(default = "leave_message")]
-    pub leave_message: String,
+    leave_message: String,
 }
 
 fn keywords_join() -> Vec<String> {
-    vec!["join".s(), "come".s()]
+    vec!["join".s()]
 }
 
 fn keywords_leave() -> Vec<String> {
