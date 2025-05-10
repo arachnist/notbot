@@ -1,13 +1,21 @@
+//! Configuration module for the bot. Handles loading the configuration from file, global configuration values, and
+//! retrieving module-specific sections.
+
 use crate::prelude::*;
 
 use toml::{Table, Value};
 
+/// Known error types that can be returned when (re)loading configuration
 #[derive(Debug)]
 pub enum ConfigError {
+    /// I/O error - file couldn't be (fully) read for whatever reason.
     Io(std::io::Error),
+    /// Parsing error - provided configuration file is not valid TOML
     Parse(toml::de::Error),
-    NoPath(String),
+    /// Requested module section does not exist.
     NoModuleConfig(String),
+    /// Module deserializing faile, likely due to missing fields.
+    ModuleConfigDeserialize,
 }
 
 impl StdError for ConfigError {}
@@ -26,11 +34,12 @@ impl From<toml::de::Error> for ConfigError {
 
 impl fmt::Display for ConfigError {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        use ConfigError::*;
         match self {
-            ConfigError::Io(e) => write!(fmt, "IO error: {}", e),
-            ConfigError::Parse(e) => write!(fmt, "parsing error: {}", e),
-            ConfigError::NoPath(e) => write!(fmt, "No config path provided: {}", e),
-            ConfigError::NoModuleConfig(e) => write!(fmt, "No configuration for module: {}", e),
+            Io(e) => write!(fmt, "IO error: {e}"),
+            Parse(e) => write!(fmt, "parsing error: {e}"),
+            NoModuleConfig(e) => write!(fmt, "No configuration for module: {e}"),
+            ModuleConfigDeserialize => write!(fmt, "Module configuration failed deserialization"),
         }
     }
 }
@@ -58,6 +67,9 @@ impl TryFrom<String> for ConfigInner {
     }
 }
 
+/// Object holding bot configuration.
+///
+/// The only value it holds is an Arc<Mutex<>> to the actual configuration structure.
 #[derive(Clone, Debug)]
 pub struct Config {
     inner: Arc<Mutex<ConfigInner>>,
@@ -72,75 +84,71 @@ impl TryFrom<String> for Config {
     }
 }
 
-impl TryFrom<Option<String>> for Config {
-    type Error = ConfigError;
-    fn try_from(maybe_path: Option<String>) -> Result<Self, Self::Error> {
-        let path = match maybe_path {
-            Some(p) => p,
-            None => return Err(ConfigError::NoPath("no path provided".to_string())),
-        };
-
-        path.try_into()
-    }
-}
-
 impl Config {
+    /// Creates a new Configuration object using the string provided
     pub fn new(path: String) -> anyhow::Result<Self> {
         Ok(path.try_into()?)
     }
 
-    #[allow(dead_code)]
+    /// Reload configuration from file
     pub fn reload(mut self, path: String) -> anyhow::Result<Config> {
         let new_cfg = Arc::new(Mutex::new(TryInto::<ConfigInner>::try_into(path)?));
         self.inner = new_cfg;
         Ok(self)
     }
 
-    pub fn homeserver(&self) -> String {
+    pub(crate) fn homeserver(&self) -> String {
         let inner = &self.inner.lock().unwrap();
         inner.homeserver.clone()
     }
 
-    pub fn user_id(&self) -> String {
+    pub(crate) fn user_id(&self) -> String {
         let inner = &self.inner.lock().unwrap();
         inner.user_id.clone()
     }
 
-    pub fn password(&self) -> String {
+    pub(crate) fn password(&self) -> String {
         let inner = &self.inner.lock().unwrap();
         inner.password.clone()
     }
 
-    pub fn data_dir(&self) -> String {
+    pub(crate) fn data_dir(&self) -> String {
         let inner = &self.inner.lock().unwrap();
         inner.data_dir.clone()
     }
 
-    pub fn device_id(&self) -> String {
+    pub(crate) fn device_id(&self) -> String {
         let inner = &self.inner.lock().unwrap();
         inner.device_id.clone()
     }
 
+    /// Prefixes bot responds to
     pub fn prefixes(&self) -> Vec<String> {
         let inner = &self.inner.lock().unwrap();
         inner.prefixes.clone()
     }
 
+    /// Messages to choose from when denying a request.
     pub fn acl_deny(&self) -> Vec<String> {
         let inner = &self.inner.lock().unwrap();
         inner.acl_deny.clone()
     }
 
+    /// Known ignored User IDs.
+    /// Not ignored at Matrix (protocol) level (see: [`matrix_sdk::Account::ignore_user`]),
+    /// as we still might want to log them.
     pub fn ignored(&self) -> Vec<String> {
         let inner = &self.inner.lock().unwrap();
         inner.ignored.clone()
     }
 
+    /// Bot admins.
     pub fn admins(&self) -> Vec<String> {
         let inner = &self.inner.lock().unwrap();
         inner.admins.clone()
     }
 
+    /// Retrieve module configuration by section name
     pub fn module_config_value(&self, n: &str) -> Result<Value, ConfigError> {
         let inner = &self.inner.lock().unwrap();
         if !inner.module.contains_key(n) {
@@ -148,5 +156,22 @@ impl Config {
         };
 
         Ok(inner.module[n].clone())
+    }
+
+    /// Retrieve module configuration by section name
+    pub fn typed_module_config<C>(&self, n: &str) -> Result<C, ConfigError>
+    where
+        C: de::DeserializeOwned + Clone + Send + Sync + 'static, {
+        let inner = &self.inner.lock().unwrap();
+        if !inner.module.contains_key(n) {
+            return Err(ConfigError::NoModuleConfig(n.to_owned()));
+        };
+
+        let config: C = match inner.module[n].clone().try_into() {
+            Ok(c) => c,
+            Err(_) => return Err(ConfigError::ModuleConfigDeserialize),
+        };
+
+        Ok(config)
     }
 }
