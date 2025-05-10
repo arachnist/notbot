@@ -1,11 +1,34 @@
+//! calculate things using WolframAlpha API
+//!
+//! Retrieves information using the simple API: <https://products.wolframalpha.com/simple-api/documentation>
+//!
+//! # Configuration
+//! ```toml
+//! [module."notbot::wolfram"]
+//! # String; required; secret application identifier.
+//! app_id = "…"
+//! # List of strings; optional; keywords the bot will respond to; default: c, wolfram
+//! keywords = [ "…" ]
+//! ```
+//!
+//! # Usage
+//!
+//! ```chat logs
+//! <ari> .c distance from stockholm to warsaw
+//! <notbot> Result: 811.3 km (kilometers)
+//! ```
+
 use crate::prelude::*;
 
 use serde_json::Value;
 use urlencoding::encode as uencode;
 
+/// Wolfram module configuration object
 #[derive(Clone, Deserialize)]
 pub struct ModuleConfig {
+    /// Secret token for using the API
     pub app_id: String,
+    /// Keywords the module should respond to
     #[serde(default = "default_keywords")]
     pub keywords: Vec<String>,
 }
@@ -14,9 +37,9 @@ fn default_keywords() -> Vec<String> {
     vec!["c".s(), "wolfram".s()]
 }
 
-pub fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
+pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
     info!("registering modules");
-    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+    let module_config: ModuleConfig = config.typed_module_config(module_path!())?;
 
     let (tx, rx) = mpsc::channel(1);
     let wolfram = ModuleInfo {
@@ -32,6 +55,9 @@ pub fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
     Ok(vec![wolfram])
 }
 
+/// Event processor for WolframAlpha
+///
+/// Constructs url by encoding event arguments using urlencode, and then tries to extract a short response from the data returned.
 pub async fn processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
     let Some(text_query) = event.args else {
         event
@@ -79,14 +105,18 @@ pub async fn processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Re
     Ok(())
 }
 
+/// Schema for data retrieved from WolframAlpha
+///
+/// Ever so slightly tweaked from what an online [json to serde](https://transform.tools/json-to-rust-serde) converter returned.
 #[derive(Clone, Deserialize)]
 pub struct WolframAlpha {
-    pub queryresult: Queryresult,
+    #[allow(dead_code, missing_docs)]
+    pub queryresult: WolframQueryresult,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, missing_docs)]
 #[derive(Clone, Deserialize)]
-pub struct Queryresult {
+pub struct WolframQueryresult {
     pub success: bool,
     pub error: bool,
     pub numpods: i64,
@@ -103,36 +133,36 @@ pub struct Queryresult {
     pub related: String,
     pub version: String,
     pub inputstring: String,
-    pub pods: Vec<Pod>,
+    pub pods: Vec<WolframPod>,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, missing_docs)]
 #[derive(Clone, Deserialize)]
-pub struct Pod {
+pub struct WolframPod {
     pub title: String,
     pub scanner: String,
     pub id: String,
     pub position: i64,
     pub error: bool,
     pub numsubpods: i64,
-    pub subpods: Vec<Subpod>,
+    pub subpods: Vec<WolframSubpod>,
     pub expressiontypes: Value,
     pub primary: Option<bool>,
     #[serde(default)]
-    pub states: Vec<State>,
+    pub states: Vec<WolframState>,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, missing_docs)]
 #[derive(Clone, Deserialize)]
-pub struct Subpod {
+pub struct WolframSubpod {
     pub title: String,
-    pub img: Img,
+    pub img: WolframImg,
     pub plaintext: String,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, missing_docs)]
 #[derive(Clone, Deserialize)]
-pub struct Img {
+pub struct WolframImg {
     pub src: String,
     pub alt: String,
     pub title: String,
@@ -145,9 +175,9 @@ pub struct Img {
     pub contenttype: String,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, missing_docs)]
 #[derive(Clone, Deserialize)]
-pub struct State {
+pub struct WolframState {
     pub name: String,
     pub input: String,
 }
