@@ -1,26 +1,82 @@
+//! Send alerts to the bot from grafana instances.
+//!
+//! # Configuration
+//!
+//! Entries under `grafanas` are a map of strings to grafana instance configurations.
+//!
+//! ```toml
+//! [module."notbot::alerts".grafanas.hswaw]
+//! # String; required; name of the grafana configuration; for technical reasons currently must be identical with the configuration entry name
+//! name = "hswaw"
+//! # String; required; secret token used for Bearer auth in grafana webhook configuration.
+//! token = "…"
+//! # List of strings; required; names of rooms to which incoming alert state changes will be sent to
+//! rooms = [
+//!     "#infra:example.org",
+//!     "#bottest:example.com",
+//!     "#notbot-test-private-room:example.com",
+//! ]
+//!
+//! [module."notbot::alerts".grafanas.cat]
+//! name = "cat"
+//! token = "…"
+//! rooms = [
+//!     "#bottest:example.com",
+//!     "#notbot-test-private-room:example.com",
+//! ]
+//!
+//! [module."notbot::alerts"]
+//! # List of strings; required; rooms on which admins will be able to request purging the list of known alerts
+//! rooms_purge = [
+//!     "#bottest:example.org",
+//!     "!xnhydwPoIQeoVuJCaU:example.com",
+//! ]
+//! # List of strings; optional; possible messages to respond with if no alerts are firing
+//! no_firing_alerts_responses = [
+//!     "all systems operational",
+//!     "all crews reporting",
+//!     "battlecruiser operational",
+//! ]
+//! # List of strings; optional; keywords to which bot will respond with list of known alerts per instance with firing alerts
+//! keywords_alerting = [ "alerting", "alerts" ]
+//! # List of strings; optional; keywords on which bot will purge known alerts.
+//! keywords_purge = [ "purge", "alerts_purge" ]
+//! ```
+//!
+//! # Usage
+//!
+//! Keywords the module will respond to:
+//! * `alerting`, `alerts` - list currently firing alerts
+//! * `purge`, `alerts_purge` - empty the lists of known alerts
+//!
+//! Urls the module will handle:
+//! * `/hook/alerts` - handle incoming webhooks from grafana.
+
 use crate::prelude::*;
+
+use crate::webterface::AuthBearer;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use matrix_sdk::ruma::events::MessageLikeEventContent;
-use serde_json::Value;
 
 use axum::{
     extract::{Json, State},
-    http::{header::AUTHORIZATION, request::Parts, StatusCode},
+    http::StatusCode,
     response::IntoResponse,
 };
-use axum_core::extract::FromRequestParts;
+
+use grafana::{Alert, AlertStatus, Alerts};
 
 static FIRING_ALERTS: LazyLock<FiringAlerts> = LazyLock::new(Default::default);
 
 #[derive(Default)]
-pub struct FiringAlerts {
+struct FiringAlerts {
     inner: Arc<Mutex<HashMap<String, Vec<Alert>>>>,
 }
 
 impl FiringAlerts {
-    pub fn fire(&self, name: String, alerts: Vec<Alert>) -> anyhow::Result<Vec<Alert>> {
+    fn fire(&self, name: String, alerts: Vec<Alert>) -> anyhow::Result<Vec<Alert>> {
         trace!("gathering alerts to fire");
         let mut inner = match self.inner.lock() {
             Ok(i) => i,
@@ -55,7 +111,7 @@ impl FiringAlerts {
         Ok(changed)
     }
 
-    pub fn resolve(&self, name: String, alerts: Vec<Alert>) -> anyhow::Result<Vec<Alert>> {
+    fn resolve(&self, name: String, alerts: Vec<Alert>) -> anyhow::Result<Vec<Alert>> {
         let mut inner = match self.inner.lock() {
             Ok(i) => i,
             Err(e) => bail!("failed locking alerts map: {e}"),
@@ -73,7 +129,7 @@ impl FiringAlerts {
         Ok(alerts)
     }
 
-    pub fn get(&self, name: String) -> Option<Vec<Alert>> {
+    fn get(&self, name: String) -> Option<Vec<Alert>> {
         let inner = match self.inner.lock() {
             Ok(i) => i,
             Err(_) => return None,
@@ -85,7 +141,7 @@ impl FiringAlerts {
     }
 
     // our known state has desynched for whatever reason, start from empty slate
-    pub fn purge(&self) -> anyhow::Result<()> {
+    fn purge(&self) -> anyhow::Result<()> {
         let mut inner = match self.inner.lock() {
             Ok(i) => i,
             Err(e) => bail!("failed locking alerts map: {e}"),
@@ -102,14 +158,14 @@ impl FiringAlerts {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct GrafanaConfig {
+struct GrafanaConfig {
     name: String,
     token: String,
     rooms: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct ModuleConfig {
+struct ModuleConfig {
     grafanas: HashMap<String, GrafanaConfig>,
     #[serde(default = "keywords_alerting")]
     keywords_alerting: Vec<String>,
@@ -133,7 +189,7 @@ fn no_firing_alerts_responses() -> Vec<String> {
 }
 
 #[axum::debug_handler]
-pub async fn receive_alerts(
+pub(crate) async fn receive_alerts(
     State(app_state): State<WebAppState>,
     AuthBearer(token): AuthBearer,
     Json(alerts): Json<Alerts>,
@@ -315,36 +371,7 @@ async fn alerting_processor(event: ConsumerEvent, config: ModuleConfig) -> anyho
     Ok(())
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Default)]
-pub enum AlertStatus {
-    #[serde(rename = "resolved")]
-    Resolved,
-    #[serde(rename = "firing")]
-    #[default]
-    Firing,
-}
-
-impl fmt::Display for AlertStatus {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        use AlertStatus::*;
-        match self {
-            Resolved => write!(fmt, "Resolved"),
-            Firing => write!(fmt, "Firing"),
-        }
-    }
-}
-
-impl AlertStatus {
-    pub fn into_emoji(self) -> &'static str {
-        use AlertStatus::*;
-        match self {
-            Firing => "🔥",
-            Resolved => "🩷",
-        }
-    }
-}
-
-pub fn to_matrix_message(va: Vec<Alert>, instance: String) -> impl MessageLikeEventContent {
+fn to_matrix_message(va: Vec<grafana::Alert>, instance: String) -> impl MessageLikeEventContent {
     let mut response_html = format!("instance: <b>{instance}</b><br />");
     let mut response = format!("instance: {instance}\n");
 
@@ -386,88 +413,81 @@ since: {since}<br />"#,
     RoomMessageEventContent::text_html(response, response_html)
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Alerts {
-    pub receiver: String,
-    pub status: AlertStatus,
-    pub org_id: i64,
-    pub alerts: Vec<Alert>,
-    pub group_labels: HashMap<String, String>,
-    pub common_labels: HashMap<String, String>,
-    pub common_annotations: HashMap<String, String>,
-    #[serde(rename = "externalURL")]
-    pub external_url: String,
-    pub version: String,
-    pub group_key: String,
-    pub truncated_alerts: i64,
-    pub title: String,
-    pub state: String,
-    pub message: String,
-}
+pub(crate) mod grafana {
+    //! Grafana webhook payload structure.
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct Alert {
-    pub status: AlertStatus,
-    pub labels: HashMap<String, String>,
-    pub annotations: HashMap<String, String>,
-    pub starts_at: String,
-    pub ends_at: String,
-    #[serde(rename = "generatorURL")]
-    pub generator_url: String,
-    pub fingerprint: String,
-    #[serde(rename = "silenceURL")]
-    pub silence_url: String,
-    #[serde(rename = "dashboardURL")]
-    pub dashboard_url: String,
-    #[serde(rename = "panelURL")]
-    pub panel_url: String,
-    pub values: Value,
-}
+    use serde_derive::{Deserialize, Serialize};
+    use serde_json::Value;
+    use std::collections::HashMap;
+    use std::fmt;
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct AuthBearer(pub String);
-
-impl<B> FromRequestParts<B> for AuthBearer
-where
-    B: Send + Sync,
-{
-    type Rejection = (StatusCode, &'static str);
-
-    async fn from_request_parts(req: &mut Parts, _: &B) -> Result<Self, Self::Rejection> {
-        Self::decode_request_parts(req)
+    #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Default)]
+    pub(crate) enum AlertStatus {
+        #[serde(rename = "resolved")]
+        Resolved,
+        #[serde(rename = "firing")]
+        #[default]
+        Firing,
     }
-}
 
-impl AuthBeaererCustom for AuthBearer {
-    const ERROR_CODE: StatusCode = StatusCode::FORBIDDEN;
-
-    fn from_header(contents: &str) -> Self {
-        Self(contents.to_string())
-    }
-}
-
-pub trait AuthBeaererCustom: Sized {
-    const ERROR_CODE: StatusCode;
-
-    fn from_header(contents: &str) -> Self;
-
-    fn decode_request_parts(req: &mut Parts) -> Result<Self, (StatusCode, &'static str)> {
-        // Get authorization header
-        let authorization = req
-            .headers
-            .get(AUTHORIZATION)
-            .ok_or((Self::ERROR_CODE, "Authorization header missing"))?
-            .to_str()
-            .map_err(|_| (Self::ERROR_CODE, "Authorization header couldn't be decoded"))?;
-
-        // Check that its a well-formed bearer and return
-        let split = authorization.split_once(' ');
-        match split {
-            // Found proper bearer
-            Some(("Bearer", contents)) => Ok(Self::from_header(contents)),
-            _ => Err((Self::ERROR_CODE, "Authorization header invalid")),
+    impl fmt::Display for AlertStatus {
+        fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+            use AlertStatus::*;
+            match self {
+                Resolved => write!(fmt, "Resolved"),
+                Firing => write!(fmt, "Firing"),
+            }
         }
+    }
+
+    impl AlertStatus {
+        pub(crate) fn into_emoji(self) -> &'static str {
+            use AlertStatus::*;
+            match self {
+                Firing => "🔥",
+                Resolved => "🩷",
+            }
+        }
+    }
+
+    #[allow(dead_code, missing_docs)]
+    #[derive(Debug, Clone, Deserialize, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub(crate) struct Alerts {
+        pub receiver: String,
+        pub status: AlertStatus,
+        pub org_id: i64,
+        pub alerts: Vec<Alert>,
+        pub group_labels: HashMap<String, String>,
+        pub common_labels: HashMap<String, String>,
+        pub common_annotations: HashMap<String, String>,
+        #[serde(rename = "externalURL")]
+        pub external_url: String,
+        pub version: String,
+        pub group_key: String,
+        pub truncated_alerts: i64,
+        pub title: String,
+        pub state: String,
+        pub message: String,
+    }
+
+    #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+    #[serde(rename_all = "camelCase")]
+    pub(crate) struct Alert {
+        pub status: AlertStatus,
+        pub labels: HashMap<String, String>,
+        pub annotations: HashMap<String, String>,
+        pub starts_at: String,
+        pub ends_at: String,
+        #[serde(rename = "generatorURL")]
+        pub generator_url: String,
+        pub fingerprint: String,
+        #[serde(rename = "silenceURL")]
+        pub silence_url: String,
+        #[serde(rename = "dashboardURL")]
+        pub dashboard_url: String,
+        #[serde(rename = "panelURL")]
+        pub panel_url: String,
+        pub values: Value,
     }
 }

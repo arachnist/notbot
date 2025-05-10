@@ -37,12 +37,13 @@ use crate::metrics::{serve_metrics, track_metrics};
 use axum::{
     error_handling::HandleErrorLayer,
     extract::State,
-    http::StatusCode,
+    http::{header::AUTHORIZATION, request::Parts, StatusCode},
     middleware, response,
     response::IntoResponse,
     routing::{any, get, post},
     Router,
 };
+use axum_core::extract::FromRequestParts;
 use axum_oidc::{
     error::MiddlewareError, handle_oidc_redirect, AdditionalClaims, OidcAuthLayer, OidcClaims,
     OidcClient, OidcLoginLayer,
@@ -221,3 +222,46 @@ pub struct HswawAdditionalClaims {
 
 impl openidconnect::AdditionalClaims for HswawAdditionalClaims {}
 impl AdditionalClaims for HswawAdditionalClaims {}
+
+/// Simple extractor for Bearer auth.
+///
+/// Will check if `Authorization: Bearer …` header is present, and return the contents (after `Bearer`)
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct AuthBearer(pub String);
+
+impl<B> FromRequestParts<B> for AuthBearer
+where
+    B: Send + Sync,
+{
+    type Rejection = (StatusCode, &'static str);
+
+    async fn from_request_parts(req: &mut Parts, _: &B) -> Result<Self, Self::Rejection> {
+        Self::decode_request_parts(req)
+    }
+}
+
+impl AuthBearer {
+    const ERROR_CODE: StatusCode = StatusCode::FORBIDDEN;
+
+    fn from_header(contents: &str) -> Self {
+        Self(contents.to_string())
+    }
+
+    fn decode_request_parts(req: &mut Parts) -> Result<Self, (StatusCode, &'static str)> {
+        // Get authorization header
+        let authorization = req
+            .headers
+            .get(AUTHORIZATION)
+            .ok_or((Self::ERROR_CODE, "Authorization header missing"))?
+            .to_str()
+            .map_err(|_| (Self::ERROR_CODE, "Authorization header couldn't be decoded"))?;
+
+        // Check that its a well-formed bearer and return
+        let split = authorization.split_once(' ');
+        match split {
+            // Found proper bearer
+            Some(("Bearer", contents)) => Ok(Self::from_header(contents)),
+            _ => Err((Self::ERROR_CODE, "Authorization header invalid")),
+        }
+    }
+}
