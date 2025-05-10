@@ -5,11 +5,11 @@
 //!
 //! # Writing modules.
 //!
-//! Start by including [`crate::prelude`] which re-exports types, functions, and macros used
-//! throughout the project.
+//! If you're modifying the bot code directly, you can start with `use crate::prelude::*;` which re-exports types,
+//! functions, and macros commonly used throughout the project.
 //!
 //! ```
-//! use notbot::prelude::*;
+//! use crate::prelude::*;
 //!
 //! use serde_json::Value;
 //! use urlencoding::encode as uencode;
@@ -19,7 +19,7 @@
 //! reasonable default values, if applicable.
 //!
 //! ```
-//! use notbot::prelude::*;
+//! use crate::prelude::*;
 //!
 //! #[derive(Clone, Deserialize)]
 //! pub struct ModuleConfig {
@@ -48,23 +48,23 @@
 //! Next step is to define a `starter` function, whose signature is as follows:
 //!
 //! ```
-//! use notbot::prelude::*;
+//! use crate::prelude::*;
 //!
 //! pub fn starter(mx: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> { Ok(vec![]) }
 //! ```
 //!
 //! The arguments are:
 //! - `mx`: [`matrix_sdk::Client`] - global matrix client
-//! - `config`: [`crate::Config`] - global bot configuration
+//! - `config`: [`crate::config::Config`] - global bot configuration
 //!
 //! And the function is expected to return [`anyhow::Result`] of a vector of [`ModuleInfo`]s.
 //!
 //! A good example of a function registering just a single module is [`crate::wolfram`]
 //!
 //! ```rust
-//! use notbot::prelude::*;
+//! use crate::prelude::*;
 //!
-//! use notbot::wolfram::{ModuleConfig, WolframAlpha, processor};
+//! use crate::wolfram::{ModuleConfig, WolframAlpha, processor};
 //!
 //! pub fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
 //!     info!("registering modules");
@@ -119,7 +119,7 @@
 //! needs to handle things specific to it:
 //!
 //! ```rust
-//! use notbot::prelude::*;
+//! use crate::prelude::*;
 //!
 //! use serde_json::Value;
 //! use urlencoding::encode as uencode;
@@ -154,7 +154,7 @@
 //!
 //!     // [`crate::tools::fetch_and_decode_json`] used here as a helper function to query
 //!     // WolframAlpha json api, and decode its response.
-//!     let Ok(data) = fetch_and_decode_json::<WolframAlpha>(url).await else {
+//!     let Ok(data) = fetch_and_decode_json::<wolfram_alpha::WolframAlpha>(url).await else {
 //!         bail!("couldn't fetch data from wolfram")
 //!     };
 //!
@@ -391,13 +391,13 @@ pub enum Acl {
 /// first one checked wins.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Debug)]
 pub enum Consumption {
-    // module doesn't want this event
+    /// module doesn't want this event
     Reject,
-    // module wants this event, but in a passive way; shouldn't be later rejected with ACLs (noisy)
+    /// module wants this event, but in a passive way; shouldn't be later rejected with ACLs (noisy)
     Inclusive,
-    // module wants this event exclusively, but doesn't mind if passthrough modules catch it as well
+    /// module wants this event exclusively, but doesn't mind if passthrough modules catch it as well
     Passthrough,
-    // module wants this event exclusively. mostly for keyworded commands
+    /// module wants this event exclusively. mostly for keyworded commands
     Exclusive,
 }
 
@@ -421,6 +421,7 @@ pub struct WorkerInfo {
 }
 
 impl WorkerInfo {
+    /// Builds a new WokrerInfo object, and spawns the worker and its associated helper module.
     pub fn new<C, Fut>(
         name: &str,
         help: &str,
@@ -932,7 +933,7 @@ pub fn init_modules(
     Ok(mx.add_event_handler(dispatcher))
 }
 
-pub fn core_starter(
+fn core_starter(
     config: &Config,
     reload_ev_tx: mpsc::Sender<Room>,
     registered_modules: Vec<ModuleInfo>,
@@ -1042,7 +1043,7 @@ impl From<&ModuleInfo> for WeakModuleInfo {
     }
 }
 
-pub async fn shutdown_consumer(mut rx: mpsc::Receiver<ConsumerEvent>) -> anyhow::Result<()> {
+async fn shutdown_consumer(mut rx: mpsc::Receiver<ConsumerEvent>) -> anyhow::Result<()> {
     match rx.recv().await {
         Some(_) => (),
         None => {
@@ -1343,7 +1344,7 @@ async fn list_consumer(
     }
 }
 
-pub async fn reload_consumer(
+async fn reload_consumer(
     mut rx: mpsc::Receiver<ConsumerEvent>,
     reload_tx: mpsc::Sender<Room>,
 ) -> anyhow::Result<()> {
