@@ -368,7 +368,7 @@ async fn lua_db_query(
     statement_str: &str,
     query_args: Variadic<String>,
 ) -> LuaResult<Table> {
-    trace!("aquiring client for {handle}");
+    trace!("acquiring client for {handle}");
     let client = DBPools::get_client(handle).await.into_lua_err()?;
     trace!("preparing statement with {statement_str}");
     let statement = client.prepare(statement_str).await.into_lua_err()?;
