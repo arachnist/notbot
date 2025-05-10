@@ -531,7 +531,7 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         help: "add an entry to knowledge base".s(),
         acl: vec![],
         trigger: TriggerType::Keyword(module_config.keywords_add.clone()),
-        channel: Some(addtx),
+        channel: addtx,
         error_prefix: Some("error adding entry".s()),
     };
     add.spawn(addrx, module_config.clone(), add_processor);
@@ -542,7 +542,7 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         help: "remove an entry to knowledge base".s(),
         acl: vec![Acl::KlaczLevel(10)],
         trigger: TriggerType::Keyword(module_config.keywords_remove.clone()),
-        channel: Some(removetx),
+        channel: removetx,
         error_prefix: Some("error removing entry".s()),
     };
     remove.spawn(removerx, module_config.clone(), remove_processor);

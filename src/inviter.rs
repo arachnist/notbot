@@ -31,7 +31,7 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         help: "processes invite requests to hackerspace matrix rooms and spaces".s(),
         acl: vec![Acl::Room(module_config.requests.clone())],
         trigger: TriggerType::Keyword(module_config.keywords.clone()),
-        channel: Some(tx),
+        channel: tx,
         error_prefix: Some("couldn't process invite request".s()),
     };
     inviter.spawn(rx, module_config, invite_request);

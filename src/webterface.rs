@@ -17,6 +17,7 @@ use axum_oidc::{
     OidcLoginLayer,
 };
 use tokio::net::TcpListener;
+use tokio::time::{sleep, Duration as TokioDuration};
 use tower::ServiceBuilder;
 use tower_http::services::ServeDir;
 use tower_sessions::{
@@ -99,7 +100,23 @@ async fn webterface(mx: Client, bot_config: Config) -> anyhow::Result<()> {
         .route_layer(middleware::from_fn(track_metrics))
         .with_state(app_state);
 
-    let listener = TcpListener::bind(listen_address).await.unwrap();
+    let mut delay = 1;
+    let listener: TcpListener;
+
+    loop {
+        let maybe_listener = TcpListener::bind(listen_address.clone()).await;
+        match maybe_listener {
+            Ok(l) => {
+                listener = l;
+                break;
+            }
+            Err(e) => {
+                error!("failed setting up tcp listener: {e}; retrying in {delay}s");
+                sleep(TokioDuration::from_secs(delay)).await;
+                delay += 2;
+            }
+        };
+    }
 
     axum::serve(listener, app.into_make_service()).await?;
 

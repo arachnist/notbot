@@ -221,7 +221,7 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         help: "shows which alerts are now firing".s(),
         acl: vec![],
         trigger: TriggerType::Keyword(module_config.keywords_alerting.clone()),
-        channel: Some(alerting_tx),
+        channel: alerting_tx,
         error_prefix: Some("error".s()),
     };
     alerting.spawn(alerting_rx, module_config.clone(), alerting_processor);
@@ -232,7 +232,7 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         help: "reset the firing alerts to empty state".s(),
         acl: vec![Acl::Room(module_config.rooms_purge.clone())],
         trigger: TriggerType::Keyword(module_config.keywords_purge.clone()),
-        channel: Some(purge_tx),
+        channel: purge_tx,
         error_prefix: Some("error purging state".s()),
     };
     purge.spawn(purge_rx, module_config, purge_processor);

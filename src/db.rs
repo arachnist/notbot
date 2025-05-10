@@ -89,7 +89,7 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         help: "check status of database connections".s(),
         acl: vec![],
         trigger: TriggerType::Keyword(vec!["db".s()]),
-        channel: Some(tx),
+        channel: tx,
         error_prefix: Some("error getting database status".s()),
     };
     db.spawn(rx, module_config, dbstatus);

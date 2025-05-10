@@ -155,7 +155,7 @@ pub(crate) fn passthrough(mx: &Client, _: &Config) -> anyhow::Result<Vec<PassThr
         help: "run mun runtime for fun and questionable profit".s(),
         acl: vec![],
         trigger: TriggerType::Catchall(|_, _, _, _, _| Ok(Consumption::Inclusive)),
-        channel: Some(tx),
+        channel: tx,
         error_prefix: None,
     });
     tokio::task::spawn(join_consumer(rx, mx.clone(), lua_handler_handle));
@@ -172,7 +172,7 @@ pub async fn join_consumer(
         let event = match rx.recv().await {
             Some(e) => e,
             None => {
-                error!("channel closed, goodbye! :(");
+                warn!("channel closed");
                 info!("stopping mun handler");
                 mx.remove_event_handler(lua_handler_handle);
                 bail!("channel closed");

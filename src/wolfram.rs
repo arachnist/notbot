@@ -24,7 +24,7 @@ pub fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
         help: "calculate something using wolfram alpha".s(),
         acl: vec![],
         trigger: TriggerType::Keyword(module_config.keywords.clone()),
-        channel: Some(tx),
+        channel: tx,
         error_prefix: Some("error getting wolfram response".s()),
     };
     wolfram.spawn(rx, module_config, processor);

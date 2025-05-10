@@ -46,7 +46,7 @@ pub(crate) fn starter(mx: &Client, config: &Config) -> anyhow::Result<Vec<Module
         help: "makes the bot join a channel".s(),
         acl: vec![Acl::SpecificUsers(config.admins())],
         trigger: TriggerType::Keyword(module_config.keywords_join.clone()),
-        channel: Some(join_tx),
+        channel: join_tx,
         error_prefix: None,
     };
     tokio::task::spawn(join_consumer(join_rx, mx.clone(), autojoiner_handle));
@@ -57,7 +57,7 @@ pub(crate) fn starter(mx: &Client, config: &Config) -> anyhow::Result<Vec<Module
         help: "makes the bot leave a channel".s(),
         acl: vec![Acl::SpecificUsers(config.admins())],
         trigger: TriggerType::Keyword(module_config.keywords_leave.clone()),
-        channel: Some(leave_tx),
+        channel: leave_tx,
         error_prefix: Some("couldn't leave room".s()),
     };
     leave.spawn(leave_rx, module_config.clone(), leave_processor);
@@ -88,7 +88,7 @@ pub async fn join_consumer(
         let event = match rx.recv().await {
             Some(e) => e,
             None => {
-                error!("channel closed, goodbye! :(");
+                warn!("channel closed");
                 info!("stopping the autojoiner");
                 mx.remove_event_handler(autojoiner_handle);
                 bail!("channel closed");

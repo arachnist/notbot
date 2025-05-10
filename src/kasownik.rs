@@ -33,7 +33,7 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         help: "checks how many membership fees a member is missing".s(),
         acl: vec![Acl::Room(module_config.due_others_allowed.clone())],
         trigger: TriggerType::Keyword(module_config.keywords_due.clone()),
-        channel: Some(duetx),
+        channel: duetx,
         error_prefix: Some("error checking membership fees".s()),
     };
     due.spawn(duerx, module_config.clone(), due_processor);
@@ -44,7 +44,7 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         help: "checks how many membership fees you are missing".s(),
         acl: vec![],
         trigger: TriggerType::Keyword(module_config.keywords_due_me.clone()),
-        channel: Some(due_metx),
+        channel: due_metx,
         error_prefix: Some("error checking membership fees".s()),
     };
     due_me.spawn(due_merx, module_config.clone(), due_me_processor);
@@ -153,7 +153,7 @@ pub(crate) fn passthrough(
         help: "nags users about missing membership fees".s(),
         acl: vec![Acl::Room(module_config.nag_channels.clone())],
         trigger: TriggerType::Catchall(|_, _, _, _, _| Ok(Consumption::Inclusive)),
-        channel: Some(nagtx),
+        channel: nagtx,
         error_prefix: None,
     });
     nag.0.spawn(nagrx, module_config, nag_processor);

@@ -86,9 +86,10 @@
 //!         acl: vec![],
 //!         // [`TriggerType`] for the module. Note how triggers can be defined in configuration.
 //!         trigger: TriggerType::Keyword(module_config.keywords.clone()),
-//!         // Option of channel sender. If the module performs a more sophisticated
-//!         // initialization process that failed, you can pass None here.
-//!         channel: Some(tx),
+//!         // Channel sender. If the module performs a more sophisticated
+//!         // initialization process that failed, the receiver should get dropped and
+//!         // channel should be considered closed.
+//!         channel: tx,
 //!         // Option of error message prefixes. If processing an event for the module fails, and
 //!         // is not `None`, the error message will be posted to the channel.
 //!         error_prefix: Some("error getting wolfram response".s()),
@@ -201,7 +202,7 @@ use anyhow::bail;
 use futures::Future;
 use prometheus::{opts, register_int_counter_vec, IntCounterVec};
 use serde::de;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 
 use matrix_sdk::event_handler::{Ctx, EventHandlerHandle};
 use matrix_sdk::ruma::events::room::message::{
@@ -263,7 +264,7 @@ pub struct ModuleInfo {
     /// Type of module trigger
     pub trigger: TriggerType,
     /// mpsc channel for sending events to the module
-    pub channel: Option<mpsc::Sender<ConsumerEvent>>,
+    pub channel: mpsc::Sender<ConsumerEvent>,
     /// A prefix for error messages sent to the channel. If `None`, errors will be only
     /// written to logs.
     pub error_prefix: Option<String>,
@@ -283,12 +284,12 @@ impl ModuleInfo {
         C: de::DeserializeOwned + Clone + Send + Sync + 'static,
         Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
     {
-        let prefix = self.error_prefix.clone();
         tokio::task::spawn(Self::consumer(
             rx,
             config.clone(),
-            prefix.clone(),
+            self.error_prefix.clone(),
             processor,
+            self.name.clone(),
         ));
     }
 
@@ -301,6 +302,7 @@ impl ModuleInfo {
         config: C,
         error_prefix: Option<String>,
         processor: impl Fn(ConsumerEvent, C) -> Fut,
+        name: String,
     ) -> anyhow::Result<()>
     where
         C: de::DeserializeOwned + Clone + Send + Sync,
@@ -310,7 +312,7 @@ impl ModuleInfo {
             let event = match rx.recv().await {
                 Some(e) => e,
                 None => {
-                    error!("channel closed, goodbye! :(");
+                    warn!("{name} channel closed");
                     bail!("channel closed");
                 }
             };
@@ -438,10 +440,10 @@ impl WorkerInfo {
             help: help.to_owned(),
             acl: vec![],
             trigger: TriggerType::Keyword(vec![keyword.s()]),
-            channel: Some(tx),
+            channel: tx,
             error_prefix: None,
         };
-        tokio::task::spawn(Self::status_consumer(rx, handle.clone()));
+        tokio::task::spawn(Self::status_consumer(rx, handle.clone(), name.to_owned()));
 
         Ok(WorkerInfo {
             name: name.to_owned(),
@@ -455,12 +457,13 @@ impl WorkerInfo {
     async fn status_consumer(
         mut rx: mpsc::Receiver<ConsumerEvent>,
         worker_handle: AbortHandle,
+        name: String,
     ) -> anyhow::Result<()> {
         loop {
             let event = match rx.recv().await {
                 Some(e) => e,
                 None => {
-                    error!("channel closed, goodbyte! :(");
+                    warn!("{name} channel closed");
                     worker_handle.abort();
                     bail!("channel closed");
                 }
@@ -607,7 +610,7 @@ pub async fn dispatcher(
         trace!("considering module: {}", module.name);
         use TriggerType::*;
 
-        if module.channel.is_none() {
+        if module.channel.is_closed() {
             debug!("failed module, skipping");
             continue;
         };
@@ -713,7 +716,7 @@ pub async fn dispatcher(
             }
 
             for module in run_passthrough_modules {
-                if module.channel.is_none() {
+                if module.channel.is_closed() {
                     debug!("failed module, skipping");
                     continue;
                 };
@@ -842,7 +845,7 @@ pub async fn dispatch_module(
 
     trace!("attempting to reserve channel space");
     // .unwrap() is safe here because star
-    let reservation = match module.channel.clone().unwrap().try_reserve_owned() {
+    let reservation = match module.channel.clone().try_reserve_owned() {
         Ok(r) => r,
         Err(e) => {
             error!("module {} channel can't accept message: {e}", module.name);
@@ -932,7 +935,7 @@ pub fn init_modules(
 pub fn core_starter(
     config: &Config,
     reload_ev_tx: mpsc::Sender<Room>,
-    mut registered_modules: Vec<ModuleInfo>,
+    registered_modules: Vec<ModuleInfo>,
     registered_passthrough_modules: Vec<PassThroughModuleInfo>,
     registered_workers: Vec<WorkerInfo>,
 ) -> anyhow::Result<Vec<ModuleInfo>> {
@@ -945,7 +948,7 @@ pub fn core_starter(
         help: "get help about the bot or its basic functions".s(),
         acl: vec![],
         trigger: TriggerType::Keyword(vec!["help".s(), "status".s()]),
-        channel: Some(help_tx),
+        channel: help_tx,
         error_prefix: None,
     };
     modules.push(help);
@@ -956,7 +959,7 @@ pub fn core_starter(
         help: "get the list of currently registered modules".s(),
         acl: vec![],
         trigger: TriggerType::Keyword(vec!["list".s(), "list-functions".s()]),
-        channel: Some(list_tx),
+        channel: list_tx,
         error_prefix: None,
     };
     modules.push(list);
@@ -967,7 +970,7 @@ pub fn core_starter(
         help: "reload bot configuration and modules".s(),
         acl: vec![Acl::SpecificUsers(config.admins())],
         trigger: TriggerType::Keyword(vec!["reload".s()]),
-        channel: Some(reload_tx),
+        channel: reload_tx,
         error_prefix: None,
     };
     modules.push(reload);
@@ -978,22 +981,28 @@ pub fn core_starter(
         help: "makes the bot process exit, literally".s(),
         acl: vec![Acl::SpecificUsers(config.admins())],
         trigger: TriggerType::Keyword(vec!["shutdown".s(), "die".s(), "exit".s()]),
-        channel: Some(shutdown_tx),
+        channel: shutdown_tx,
         error_prefix: None,
     };
     modules.push(shutdown);
 
-    registered_modules.extend(modules.clone());
+    // avoids a cyclic reference of help/list holding their own receivers and senders at the same time
+    let weak_registered_modules: Vec<WeakModuleInfo> = registered_modules
+        .iter()
+        .chain(&modules)
+        .map(|m| m.into())
+        .collect();
+
     tokio::task::spawn(help_consumer(
         help_rx,
         config.clone(),
-        registered_modules.clone(),
+        weak_registered_modules.clone(),
         registered_passthrough_modules.clone(),
         registered_workers.clone(),
     ));
     tokio::task::spawn(list_consumer(
         list_rx,
-        registered_modules.clone(),
+        weak_registered_modules.clone(),
         registered_passthrough_modules.clone(),
         registered_workers.clone(),
     ));
@@ -1003,11 +1012,41 @@ pub fn core_starter(
     Ok(modules)
 }
 
+#[derive(Clone)]
+struct WeakModuleInfo {
+    name: String,
+    help: String,
+    trigger: TriggerType,
+    channel: mpsc::WeakSender<ConsumerEvent>,
+}
+
+impl From<ModuleInfo> for WeakModuleInfo {
+    fn from(m: ModuleInfo) -> Self {
+        WeakModuleInfo {
+            name: m.name,
+            help: m.help,
+            trigger: m.trigger,
+            channel: m.channel.downgrade(),
+        }
+    }
+}
+
+impl From<&ModuleInfo> for WeakModuleInfo {
+    fn from(m: &ModuleInfo) -> Self {
+        WeakModuleInfo {
+            name: m.name.to_owned(),
+            help: m.help.to_owned(),
+            trigger: m.trigger.to_owned(),
+            channel: m.channel.downgrade(),
+        }
+    }
+}
+
 pub async fn shutdown_consumer(mut rx: mpsc::Receiver<ConsumerEvent>) -> anyhow::Result<()> {
     match rx.recv().await {
         Some(_) => (),
         None => {
-            error!("channel closed, goodbye! :(");
+            warn!("shutdown channel closed");
             bail!("channel closed");
         }
     };
@@ -1016,10 +1055,10 @@ pub async fn shutdown_consumer(mut rx: mpsc::Receiver<ConsumerEvent>) -> anyhow:
     std::process::exit(0);
 }
 
-pub async fn help_consumer(
+async fn help_consumer(
     mut rx: mpsc::Receiver<ConsumerEvent>,
     config: Config,
-    registered_modules: Vec<ModuleInfo>,
+    registered_modules: Vec<WeakModuleInfo>,
     registered_passthrough_modules: Vec<PassThroughModuleInfo>,
     registered_workers: Vec<WorkerInfo>,
 ) -> anyhow::Result<()> {
@@ -1027,7 +1066,7 @@ pub async fn help_consumer(
         let event = match rx.recv().await {
             Some(e) => e,
             None => {
-                error!("channel closed, goodbye! :(");
+                warn!("help channel closed");
                 bail!("channel closed");
             }
         };
@@ -1054,10 +1093,10 @@ pub async fn help_consumer(
     }
 }
 
-pub async fn help_processor(
+async fn help_processor(
     event: ConsumerEvent,
     config: Config,
-    registered_modules: Vec<ModuleInfo>,
+    registered_modules: Vec<WeakModuleInfo>,
     registered_passthrough_modules: Vec<PassThroughModuleInfo>,
     registered_workers: Vec<WorkerInfo>,
 ) -> anyhow::Result<()> {
@@ -1067,11 +1106,11 @@ pub async fn help_processor(
         let workers_num = registered_workers.len();
         let failed_num = registered_modules
             .iter()
-            .filter(|x| x.channel.is_none())
+            .filter(|x| x.channel.upgrade().unwrap().is_closed())
             .count();
         let passthrough_failed_num = registered_passthrough_modules
             .iter()
-            .filter(|x| x.0.channel.is_none())
+            .filter(|x| x.0.channel.is_closed())
             .count();
         let workers_failed_num = registered_workers
             .iter()
@@ -1165,10 +1204,10 @@ contact {mx_contact} or {fedi_contact} if you need more help"#,
                 r#"module {name} is {status}; help: {help}{keywords}"#,
                 name = module.name,
                 help = module.help,
-                status = if module.channel.is_some() {
-                    "running"
-                } else {
+                status = if module.channel.upgrade().unwrap().is_closed() {
                     "failed"
+                } else {
+                    "running"
                 },
             );
             specific_response = Some(RoomMessageEventContent::text_plain(response));
@@ -1186,10 +1225,10 @@ contact {mx_contact} or {fedi_contact} if you need more help"#,
                 r#"module {name} is {status}; help: {help}{keywords}"#,
                 name = module.0.name,
                 help = module.0.help,
-                status = if module.0.channel.is_some() {
-                    "running"
-                } else {
+                status = if module.0.channel.is_closed() {
                     "failed"
+                } else {
+                    "running"
                 },
             );
             specific_response = Some(RoomMessageEventContent::text_plain(response));
@@ -1223,9 +1262,9 @@ contact {mx_contact} or {fedi_contact} if you need more help"#,
     Ok(())
 }
 
-pub async fn list_consumer(
+async fn list_consumer(
     mut rx: mpsc::Receiver<ConsumerEvent>,
-    registered_modules: Vec<ModuleInfo>,
+    registered_modules: Vec<WeakModuleInfo>,
     registered_passthrough_modules: Vec<PassThroughModuleInfo>,
     registered_workers: Vec<WorkerInfo>,
 ) -> anyhow::Result<()> {
@@ -1233,7 +1272,7 @@ pub async fn list_consumer(
         let event = match rx.recv().await {
             Some(e) => e,
             None => {
-                error!("channel closed, goodbye! :(");
+                warn!("list channel closed");
                 bail!("channel closed");
             }
         };
@@ -1243,7 +1282,7 @@ pub async fn list_consumer(
             .iter()
             .map(|x| {
                 let mut s = x.name.clone();
-                if x.channel.is_none() {
+                if x.channel.upgrade().unwrap().is_closed() {
                     s.push('*');
                     failed = true;
                 }
@@ -1254,7 +1293,7 @@ pub async fn list_consumer(
             .iter()
             .map(|x| {
                 let mut s = x.0.name.clone();
-                if x.0.channel.is_none() {
+                if x.0.channel.is_closed() {
                     s.push('*');
                     failed = true;
                 }
@@ -1312,7 +1351,7 @@ pub async fn reload_consumer(
         let event = match rx.recv().await {
             Some(e) => e,
             None => {
-                error!("channel closed, goodbye! :(");
+                warn!("reload channel closed");
                 bail!("channel closed");
             }
         };

@@ -24,7 +24,7 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         help: "lol, lmao".s(),
         acl: vec![],
         trigger: TriggerType::Keyword(module_config.keywords.clone()),
-        channel: Some(tx),
+        channel: tx,
         error_prefix: Some("failed to remove them".s()),
     };
     sage.spawn(rx, module_config.clone(), processor);
