@@ -39,3 +39,6 @@ pub(crate) use tracing::{debug, error, info, trace, warn};
 
 pub(crate) use serde::de;
 pub(crate) use serde_derive::{Deserialize, Serialize};
+
+// hack
+pub(crate) use notbot_axum_oidc as axum_oidc;
