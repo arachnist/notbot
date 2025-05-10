@@ -5,7 +5,7 @@ pub use crate::db::DBPools;
 pub use crate::module::{
     Acl, ConsumerEvent, Consumption, ModuleInfo, PassThroughModuleInfo, TriggerType, WorkerInfo,
 };
-pub use crate::webterface::{OauthUserInfo, WebAppState};
+pub use crate::webterface::{HswawAdditionalClaims, WebAppState};
 
 pub use crate::klaczdb::KlaczDB;
 
