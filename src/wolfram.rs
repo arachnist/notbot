@@ -1,4 +1,4 @@
-//! calculate things using WolframAlpha API
+//! Calculate things using WolframAlpha API
 //!
 //! Retrieves information using the simple API: <https://products.wolframalpha.com/simple-api/documentation>
 //!
@@ -77,7 +77,7 @@ pub async fn processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Re
         + config.app_id.as_str()
         + "&output=json";
 
-    let Ok(data) = fetch_and_decode_json::<WolframAlpha>(url).await else {
+    let Ok(data) = fetch_and_decode_json::<wolfram_alpha::WolframAlpha>(url).await else {
         bail!("couldn't fetch data from wolfram")
     };
 
@@ -105,79 +105,85 @@ pub async fn processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Re
     Ok(())
 }
 
-/// Schema for data retrieved from WolframAlpha
-///
-/// Ever so slightly tweaked from what an online [json to serde](https://transform.tools/json-to-rust-serde) converter returned.
-#[derive(Clone, Deserialize)]
-pub struct WolframAlpha {
+pub mod wolfram_alpha {
+    //! Structure for data retrieved from WolframAlpha
+    //!
+    //! Ever so slightly tweaked from what an online [json to serde](https://transform.tools/json-to-rust-serde) converter returned.
+
+    use serde_derive::Deserialize;
+    use serde_json::Value;
+    #[allow(missing_docs)]
+    #[derive(Clone, Deserialize)]
+    pub struct WolframAlpha {
+        #[allow(dead_code, missing_docs)]
+        pub queryresult: WolframQueryresult,
+    }
+
     #[allow(dead_code, missing_docs)]
-    pub queryresult: WolframQueryresult,
-}
+    #[derive(Clone, Deserialize)]
+    pub struct WolframQueryresult {
+        pub success: bool,
+        pub error: bool,
+        pub numpods: i64,
+        pub datatypes: String,
+        pub timedout: String,
+        pub timedoutpods: String,
+        pub timing: f64,
+        pub parsetiming: f64,
+        pub parsetimedout: bool,
+        pub recalculate: String,
+        pub id: String,
+        pub host: String,
+        pub server: String,
+        pub related: String,
+        pub version: String,
+        pub inputstring: String,
+        pub pods: Vec<WolframPod>,
+    }
 
-#[allow(dead_code, missing_docs)]
-#[derive(Clone, Deserialize)]
-pub struct WolframQueryresult {
-    pub success: bool,
-    pub error: bool,
-    pub numpods: i64,
-    pub datatypes: String,
-    pub timedout: String,
-    pub timedoutpods: String,
-    pub timing: f64,
-    pub parsetiming: f64,
-    pub parsetimedout: bool,
-    pub recalculate: String,
-    pub id: String,
-    pub host: String,
-    pub server: String,
-    pub related: String,
-    pub version: String,
-    pub inputstring: String,
-    pub pods: Vec<WolframPod>,
-}
+    #[allow(dead_code, missing_docs)]
+    #[derive(Clone, Deserialize)]
+    pub struct WolframPod {
+        pub title: String,
+        pub scanner: String,
+        pub id: String,
+        pub position: i64,
+        pub error: bool,
+        pub numsubpods: i64,
+        pub subpods: Vec<WolframSubpod>,
+        pub expressiontypes: Value,
+        pub primary: Option<bool>,
+        #[serde(default)]
+        pub states: Vec<WolframState>,
+    }
 
-#[allow(dead_code, missing_docs)]
-#[derive(Clone, Deserialize)]
-pub struct WolframPod {
-    pub title: String,
-    pub scanner: String,
-    pub id: String,
-    pub position: i64,
-    pub error: bool,
-    pub numsubpods: i64,
-    pub subpods: Vec<WolframSubpod>,
-    pub expressiontypes: Value,
-    pub primary: Option<bool>,
-    #[serde(default)]
-    pub states: Vec<WolframState>,
-}
+    #[allow(dead_code, missing_docs)]
+    #[derive(Clone, Deserialize)]
+    pub struct WolframSubpod {
+        pub title: String,
+        pub img: WolframImg,
+        pub plaintext: String,
+    }
 
-#[allow(dead_code, missing_docs)]
-#[derive(Clone, Deserialize)]
-pub struct WolframSubpod {
-    pub title: String,
-    pub img: WolframImg,
-    pub plaintext: String,
-}
+    #[allow(dead_code, missing_docs)]
+    #[derive(Clone, Deserialize)]
+    pub struct WolframImg {
+        pub src: String,
+        pub alt: String,
+        pub title: String,
+        pub width: i64,
+        pub height: i64,
+        #[serde(rename = "type")]
+        pub type_field: String,
+        pub themes: String,
+        pub colorinvertable: bool,
+        pub contenttype: String,
+    }
 
-#[allow(dead_code, missing_docs)]
-#[derive(Clone, Deserialize)]
-pub struct WolframImg {
-    pub src: String,
-    pub alt: String,
-    pub title: String,
-    pub width: i64,
-    pub height: i64,
-    #[serde(rename = "type")]
-    pub type_field: String,
-    pub themes: String,
-    pub colorinvertable: bool,
-    pub contenttype: String,
-}
-
-#[allow(dead_code, missing_docs)]
-#[derive(Clone, Deserialize)]
-pub struct WolframState {
-    pub name: String,
-    pub input: String,
+    #[allow(dead_code, missing_docs)]
+    #[derive(Clone, Deserialize)]
+    pub struct WolframState {
+        pub name: String,
+        pub input: String,
+    }
 }
