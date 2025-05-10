@@ -19,7 +19,7 @@
 //!
 //! # Usage
 //!
-//! After aquiring a connection through [`DBPools::get_client`], [`deadpool_postgres`] configuration should be more relevant.
+//! After acquiring a connection through [`DBPools::get_client`], [`deadpool_postgres`] configuration should be more relevant.
 //! Here's a short example
 //!
 //! ```rust
@@ -54,13 +54,13 @@ pub struct DBPools(Arc<Mutex<HashMap<String, Pool>>>);
 
 impl DBPools {
     pub(crate) async fn get_pool(handle: &str) -> Result<Pool, DBError> {
-        trace!("aquiring lock");
+        trace!("acquiring lock");
         let dbc = match DB_CONNECTIONS.0.lock() {
             Ok(d) => d,
             Err(_) => return Err(DBError::CollectionLock),
         };
 
-        trace!("aquiring pool");
+        trace!("acquiring pool");
         match dbc.get(handle) {
             Some(p) if !p.is_closed() => Ok(p.clone()),
             _ => Err(DBError::HandleNotFound),
@@ -70,23 +70,23 @@ impl DBPools {
     /// Acquire a client for a database by name.
     pub async fn get_client(handle: &str) -> Result<DBClient, DBError> {
         let pool = {
-            trace!("aquiring lock");
+            trace!("acquiring lock");
             let dbc = match DB_CONNECTIONS.0.lock() {
                 Ok(d) => d,
                 Err(_) => return Err(DBError::CollectionLock),
             };
 
-            trace!("aquiring pool");
+            trace!("acquiring pool");
             match dbc.get(handle) {
                 Some(p) if !p.is_closed() => p.clone(),
                 _ => return Err(DBError::HandleNotFound),
             }
         };
 
-        trace!("aquiring client");
+        trace!("acquiring client");
         match pool.get().await {
             Ok(client) => {
-                trace!("client aquired");
+                trace!("client acquired");
                 Ok(client)
             }
             Err(_) => {
@@ -173,11 +173,11 @@ pub async fn dbstatus(event: ConsumerEvent, config: DBConfig) -> anyhow::Result<
 /// Database pool errors
 #[derive(Debug)]
 pub enum DBError {
-    /// Couldn't aquire connection collection lock.
+    /// Couldn't acquire connection collection lock.
     CollectionLock,
     /// Database known under the handle not found in configuration.
     HandleNotFound,
-    /// Aquiring database client from the pool failed.
+    /// Acquiring database client from the pool failed.
     GetClient,
 }
 
@@ -186,7 +186,7 @@ impl StdError for DBError {}
 impl fmt::Display for DBError {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            DBError::CollectionLock => write!(fmt, "Couldn't aquire connection collection lock"),
+            DBError::CollectionLock => write!(fmt, "Couldn't acquire connection collection lock"),
             DBError::HandleNotFound => write!(fmt, "Handle not found in connections"),
             DBError::GetClient => write!(fmt, "Couldn't get client from pool"),
         }
