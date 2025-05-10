@@ -70,7 +70,7 @@
 //!     info!("registering modules");
 //!
 //!     // object representing module configuration
-//!     let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+//!     let module_config: ModuleConfig = config.typed_module_config(module_path!())?;
 //!
 //!     // [`tokio::sync::mpsc`] channel for passing events to the module. If the module is not
 //!     // expected to take significant amount of time for processing the events, capacity of `1`

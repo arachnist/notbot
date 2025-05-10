@@ -140,12 +140,9 @@ pub async fn receive_alerts(
 ) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
     use AlertStatus::*;
     let module_config: ModuleConfig = {
-        match app_state.bot_config.module_config_value(module_path!()) {
+        match app_state.config.typed_module_config(module_path!()) {
             Err(_) => return Err((StatusCode::INTERNAL_SERVER_ERROR, "no auth configuration")),
-            Ok(v) => match v.try_into() {
-                Err(_) => return Err((StatusCode::INTERNAL_SERVER_ERROR, "no auth configuration")),
-                Ok(d) => d,
-            },
+            Ok(v) => v,
         }
     };
 
@@ -213,7 +210,7 @@ pub async fn receive_alerts(
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
     info!("registering grafana modules");
-    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+    let module_config: ModuleConfig = config.typed_module_config(module_path!())?;
 
     let (alerting_tx, alerting_rx) = mpsc::channel::<ConsumerEvent>(1);
     let alerting = ModuleInfo {

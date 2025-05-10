@@ -56,7 +56,7 @@ struct ModuleConfig {
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
     info!("registering modules");
-    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+    let module_config: ModuleConfig = config.typed_module_config(module_path!())?;
 
     let (duetx, duerx) = mpsc::channel::<ConsumerEvent>(1);
     let due = ModuleInfo {
@@ -176,7 +176,7 @@ pub(crate) fn passthrough(
     config: &Config,
 ) -> anyhow::Result<Vec<PassThroughModuleInfo>> {
     info!("registering passthrough modules");
-    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+    let module_config: ModuleConfig = config.typed_module_config(module_path!())?;
 
     let (nagtx, nagrx) = mpsc::channel::<ConsumerEvent>(1);
     let nag = PassThroughModuleInfo(ModuleInfo {

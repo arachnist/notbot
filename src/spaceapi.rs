@@ -72,7 +72,7 @@ fn keywords() -> Vec<String> {
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
     info!("registering modules");
-    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+    let module_config: ModuleConfig = config.typed_module_config(module_path!())?;
 
     let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
     let at = ModuleInfo {
@@ -119,7 +119,7 @@ async fn processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result
 }
 
 pub(crate) fn workers(mx: &Client, config: &Config) -> anyhow::Result<Vec<WorkerInfo>> {
-    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+    let module_config: ModuleConfig = config.typed_module_config(module_path!())?;
     Ok(vec![WorkerInfo::new(
         "observer",
         "observes SpaceAPI endpoints for changes",

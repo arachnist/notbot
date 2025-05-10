@@ -16,7 +16,7 @@ pub struct ModuleConfig {
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
     info!("registering modules");
-    let module_config: ModuleConfig = config.module_config_value(module_path!())?.try_into()?;
+    let module_config: ModuleConfig = config.typed_module_config(module_path!())?;
 
     let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
     let sage = ModuleInfo {

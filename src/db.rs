@@ -99,7 +99,7 @@ impl DBPools {
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
     info!("registering modules");
-    let mut module_config: DBConfig = config.module_config_value(module_path!())?.try_into()?;
+    let mut module_config: DBConfig = config.typed_module_config(module_path!())?;
 
     let mut dbc = DB_CONNECTIONS.0.lock().unwrap();
     for (name, pool) in dbc.iter() {
