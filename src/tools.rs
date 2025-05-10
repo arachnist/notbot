@@ -1,3 +1,5 @@
+//! Various helper and utility functions commonly used in the bot.
+
 use anyhow::{anyhow, bail};
 use serde::de;
 use serde_derive::Deserialize;
