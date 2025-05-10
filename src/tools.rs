@@ -16,14 +16,20 @@ use tokio::sync::Mutex;
 static MEMBERSHIPS: LazyLock<Mutex<ExpiringMap<String, MembershipStatus>>> =
     LazyLock::new(Default::default);
 
+/// Possible states of hackerspace membership
 #[derive(Clone)]
 pub enum MembershipStatus {
+    /// User is active and ahead on membership fees (negative values), or behind (positive values)
     Active(i64),
+    /// User is known, but is inactive
     Inactive,
+    /// Reserved for special cases
     Stoned,
+    /// User is not known
     NotAMember,
 }
 
+/// Shorthand for making an http request to retrieve a json object, and deserialize it.
 pub async fn fetch_and_decode_json<D: de::DeserializeOwned>(url: String) -> anyhow::Result<D> {
     let client = RClient::new();
 
@@ -32,6 +38,7 @@ pub async fn fetch_and_decode_json<D: de::DeserializeOwned>(url: String) -> anyh
     Ok(data.json::<D>().await?)
 }
 
+/// Given a string (either an alias, or a room id), try to resolve it to a room object.
 pub async fn maybe_get_room(c: &Client, maybe_room: &str) -> anyhow::Result<Room> {
     let room_id: OwnedRoomId = match maybe_room.try_into() {
         Ok(r) => r,
@@ -45,6 +52,7 @@ pub async fn maybe_get_room(c: &Client, maybe_room: &str) -> anyhow::Result<Room
     c.get_room(&room_id).ok_or(anyhow!("no room"))
 }
 
+/// Retrieve the canonical room alias, if known. Otherwise return room id.
 pub fn room_name(room: &Room) -> String {
     match room.canonical_alias() {
         Some(a) => a.to_string(),
@@ -53,6 +61,7 @@ pub fn room_name(room: &Room) -> String {
 }
 
 // TODO: implement configurable urls
+/// Return membership status for a given user. Best effort.
 pub async fn membership_status(user: OwnedUserId) -> anyhow::Result<MembershipStatus> {
     use MembershipStatus::*;
     // TODO: implement membership/mxid mapping
@@ -102,29 +111,25 @@ pub async fn membership_status(user: OwnedUserId) -> anyhow::Result<MembershipSt
     Ok(membership)
 }
 
+/// Kasownik API response structure.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
-pub struct Kasownik {
-    pub status: String,
-    pub content: Value,
-    pub modified: String,
+struct Kasownik {
+    /// Member status. "ok" means they're an active member
+    status: String,
+    /// Number of late membership fees.
+    /// Not an int type as older implementations guarded against data returned here not being parsable as a number.
+    content: Value,
+    /// Date of last recorded bank transfer in kasownik, globally.
+    modified: String,
 }
 
+/// Shorter to_string() alias
 pub trait ToStringExt: ToString {
+    #[allow(missing_docs)]
     fn s(&self) -> String {
         self.to_string()
     }
 }
+
 impl<T> ToStringExt for T where T: ToString {}
-
-pub mod sync {
-    use reqwest::blocking::Client as RClient;
-    use serde::de;
-
-    #[allow(dead_code)]
-    pub fn fetch_and_decode_json<D: de::DeserializeOwned>(url: String) -> anyhow::Result<D> {
-        let client = RClient::new();
-        let data = client.get(url).send()?;
-        Ok(data.json::<D>()?)
-    }
-}
