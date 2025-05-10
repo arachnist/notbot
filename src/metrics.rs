@@ -1,3 +1,49 @@
+//! Gather metrics about the bot functions, and served http requests and expose metrics endpoint.
+//!
+//! Metrics exposed by the bot include:
+//! * number of events consumed by bot modules.
+//! * general tokio runtime statistics
+//! * general http statistics
+//! * general process statistics
+//!
+//! Specific modules may also define their own metrics using the [`prometheus`] crate:
+//! ```
+//! use std::sync::LazyLock;
+//! use prometheus::{opts, register_int_counter_vec, IntCounterVec};
+//!
+//! static MODULE_EVENTS: LazyLock<IntCounterVec> = LazyLock::new(|| {
+//!     register_int_counter_vec!(
+//!         opts!(
+//!             "module_event_counts",
+//!             "Number of events a module has consumed"
+//!         ),
+//!         &["event"]
+//!     )
+//!     .unwrap()
+//! });
+//! ```
+//!
+//! The macro provided by [`prometheus`] crate automatically registers the metrics for exposure on the metrics endpoint.
+//!
+//! # Configuration
+//!
+//! None, this module is used directly by [`crate::webterface`]
+//!
+//! # Usage
+//!
+//! Point your favourite prometheus-compatible metrics consumer at the bot. Ad-hoc calls might also be useful in development.
+//!
+//! ```text
+//! ❯ curl --silent https://notbot.is-a.cat/metrics | grep '^process'
+//! process_cpu_seconds_total 60
+//! process_max_fds 1024
+//! process_open_fds 27
+//! process_resident_memory_bytes 74407936
+//! process_start_time_seconds 1746860343
+//! process_threads 34
+//! process_virtual_memory_bytes 2567520256
+//! ```
+
 use crate::prelude::*;
 
 use axum::{

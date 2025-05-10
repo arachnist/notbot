@@ -161,7 +161,8 @@ impl Config {
     /// Retrieve module configuration by section name
     pub fn typed_module_config<C>(&self, n: &str) -> Result<C, ConfigError>
     where
-        C: de::DeserializeOwned + Clone + Send + Sync + 'static, {
+        C: de::DeserializeOwned + Clone + Send + Sync + 'static,
+    {
         let inner = &self.inner.lock().unwrap();
         if !inner.module.contains_key(n) {
             return Err(ConfigError::NoModuleConfig(n.to_owned()));

@@ -2,7 +2,6 @@
 
 mod alerts;
 mod botmanager;
-mod metrics;
 
 mod prelude;
 
@@ -10,6 +9,7 @@ pub use crate::botmanager::BotManager;
 pub mod config;
 pub mod db;
 pub mod klaczdb;
+pub mod metrics;
 pub mod module;
 pub mod notmun;
 pub mod tools;
