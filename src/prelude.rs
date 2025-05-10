@@ -14,10 +14,7 @@ pub(crate) use std::convert::{From, TryFrom};
 pub(crate) use std::str::FromStr;
 pub(crate) use std::sync::{Arc, LazyLock, Mutex};
 pub(crate) use std::time::{Duration, Instant, SystemTime};
-pub(crate) use std::{
-    fs, io,
-    path::{Path, PathBuf},
-};
+pub(crate) use std::{fs, io, path::Path};
 
 pub(crate) use core::{error::Error as StdError, fmt};
 
@@ -26,7 +23,7 @@ pub(crate) use anyhow::{anyhow, bail};
 pub(crate) use matrix_sdk::event_handler::{Ctx, EventHandlerHandle};
 pub(crate) use matrix_sdk::ruma::events::room::{
     member::{MembershipChange, RoomMemberEvent, RoomMemberEventContent, StrippedRoomMemberEvent},
-    message::{MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent},
+    message::{MessageType, RoomMessageEventContent},
 };
 pub(crate) use matrix_sdk::ruma::events::{
     AnyStateEvent, AnySyncTimelineEvent, AnyTimelineEvent, Mentions,

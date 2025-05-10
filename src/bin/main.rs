@@ -1,6 +1,4 @@
-use futures::future::try_join;
-use notbot::BotManager;
-use tokio::sync::mpsc::channel;
+use notbot::botmanager::BotManager;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -25,14 +23,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     tracing::trace!("provided config: {:#?}", config_path);
-    let (tx, rx) = channel::<matrix_sdk::Room>(1);
-    let notbot = &BotManager::new(config_path, tx)
-        .await
-        .expect("initialization failed");
 
-    let pair = try_join(notbot.reload(rx), notbot.run());
-
-    pair.await.expect("critical error occured");
-
+    BotManager::serve(config_path).await?;
     Ok(())
 }
