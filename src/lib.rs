@@ -1,5 +1,6 @@
 #![warn(missing_docs)]
-//! Here are some docs, lmao
+
+#![doc = include_str!("../README.md")]
 
 mod prelude;
 
