@@ -17,7 +17,7 @@ pub mod webterface;
 
 mod autojoiner;
 mod inviter;
-mod kasownik;
+pub mod kasownik;
 mod notbottime;
 mod sage;
 pub mod spaceapi;

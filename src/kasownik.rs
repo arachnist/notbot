@@ -1,3 +1,36 @@
+//! Interact with Warsaw Hackerspace membership fees tracking system
+//!
+//! # Configuration
+//!
+//! ```toml
+//! [module."notbot::kasownik"]
+//! # List of strings; required; rooms on which bot will nag active members about late membership fees.
+//! nag_channels = [
+//!     "#bottest:example.com",
+//!     "#members:example.org",
+//!     "#notbot-test-private-room:example.com"
+//! ]
+//! # Late fees leniency in months
+//! nag_late_fees = 0
+//! # List of strings; required; channels on which known members are allowed to check fees status of other members.
+//! due_others_allowed = [
+//!     "#bottest:example.com",
+//!     "#members:example.org",
+//!     "#notbot-test-private-room:example.com"
+//! ]
+//! ```
+//!
+//! # Usage
+//!
+//! ```chat logs
+//! <foo> ~due bar
+//! <notbot> bar is 5 months ahead. Cool!
+//! <baz> ~due-me
+//! <notbot> baz needs to pay 8 membership fees.
+//! <xyz123> hi
+//! <notbot> @xyz123:example.org: pay your membership fees! you are 2 months behind!
+//! ```
+
 use crate::prelude::*;
 
 use crate::notbottime::NotBotTime;
@@ -11,16 +44,14 @@ fn default_due_me_keywords() -> Vec<String> {
 }
 
 #[derive(Clone, Deserialize)]
-pub struct ModuleConfig {
-    #[allow(dead_code)]
-    pub url_template: String,
-    pub nag_channels: Vec<String>,
-    pub nag_late_fees: i64,
-    pub due_others_allowed: Vec<String>,
+struct ModuleConfig {
+    nag_channels: Vec<String>,
+    nag_late_fees: i64,
+    due_others_allowed: Vec<String>,
     #[serde(default = "default_due_keywords")]
-    pub keywords_due: Vec<String>,
+    keywords_due: Vec<String>,
     #[serde(default = "default_due_me_keywords")]
-    pub keywords_due_me: Vec<String>,
+    keywords_due_me: Vec<String>,
 }
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
