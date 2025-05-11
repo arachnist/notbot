@@ -4,15 +4,14 @@
 //!
 //! # Configuration
 //!
-//! ```toml
-//! # main configuration
-//! [module."notbot::spaceapi"]
-//! # Unsigned number; optional; how often should SpaceAPI endpoints be checked for presence changes; default: 30
-//! presence_interval = 30
-//! # String; optional; response used if noone is present; default: "Nikdo není doma..."
-//! empty_response = "Nikdo není doma..."
+//! [`ModuleConfig`]
 //!
-//! # url -> list of rooms map to send presence updates to
+//! ```toml
+//! [module."notbot::spaceapi"]
+//! presence_interval = 30
+//! empty_response = "Nikdo není doma..."
+//! # keywords = [ "at" ]
+//!
 //! [module."notbot::spaceapi".presence_map]
 //! "https://hackerspace.pl/spaceapi" = [
 //!     "#members:hackerspace.pl",
@@ -20,8 +19,6 @@
 //!     "#bottest:is-a.cat"
 //! ]
 //!
-//! # room name -> url map to use when checking presence. special value "default" will be used when a room specific endpoint
-//! # is not defined
 //! [module."notbot::spaceapi".room_map]
 //! "default" = "https://hackerspace.pl/spaceapi"
 //! "#members" = "https://hackerspace.pl/spaceapi"
@@ -29,13 +26,10 @@
 //!
 //! # Usage
 //!
-//! Active query of SpaceAPI
-//! ```chat logs
-//! <ari> .at
-//! <notbot> ar
-//! ```
+//! Keywords:
+//! * `at` - [`at_processor`] - return the list of names listed as present by SpaceAPI endpoint set for current room.
 //!
-//! Passive presence updates
+//! Passive presence updates: [`presence_observer`]
 //! ```chat logs
 //! Notice(notbot) -> #members:hackerspace.pl: arrived: foo, also there: bar, baz
 //! Notice(notbot) -> #members:hackerspace.pl: left: foo, still there: bar, baz
@@ -46,16 +40,22 @@ use crate::prelude::*;
 
 use tokio::time::{interval, Duration};
 
+/// SpaceAPI module configuration
 #[derive(Clone, Deserialize)]
-struct ModuleConfig {
-    room_map: HashMap<String, String>,
-    presence_map: HashMap<String, Vec<String>>,
+pub struct ModuleConfig {
+    /// Room to SpaceAPI endpoint map. special value "default" will be used when a room specific endpoint.
+    pub room_map: HashMap<String, String>,
+    /// Map of SpaceAPI endpoints to a list of rooms.
+    pub presence_map: HashMap<String, Vec<String>>,
+    /// How often should the presence observer check for presence changes, in seconds. Default is 30.
     #[serde(default = "presence_interval")]
-    presence_interval: u64,
+    pub presence_interval: u64,
+    /// String to reply with when queried for currently present members, and no members are present. Default is `Nikdo není doma...`
     #[serde(default = "empty_response")]
-    empty_response: String,
+    pub empty_response: String,
+    /// Keywords to respond to for checking currently present members. Default is `at`
     #[serde(default = "keywords")]
-    keywords: Vec<String>,
+    pub keywords: Vec<String>,
 }
 
 fn presence_interval() -> u64 {
@@ -83,12 +83,13 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         channel: tx,
         error_prefix: Some("error getting presence status".s()),
     };
-    at.spawn(rx, module_config, processor);
+    at.spawn(rx, module_config, at_processor);
 
     Ok(vec![at])
 }
 
-async fn processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
+/// query SpaceAPI for present state.
+pub async fn at_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
     let name = room_name(&event.room);
 
     let url = match config.room_map.get(&name) {
@@ -130,7 +131,8 @@ pub(crate) fn workers(mx: &Client, config: &Config) -> anyhow::Result<Vec<Worker
     )?])
 }
 
-async fn presence_observer(client: Client, module_config: ModuleConfig) -> anyhow::Result<()> {
+/// Worker observing SpaceAPI endpoints for changes and providing updates to configured rooms.
+pub async fn presence_observer(client: Client, module_config: ModuleConfig) -> anyhow::Result<()> {
     let mut interval = interval(Duration::from_secs(module_config.presence_interval));
     let mut present: HashMap<String, Vec<String>> = Default::default();
     let mut first_loop: HashMap<String, bool> = Default::default();
@@ -236,7 +238,15 @@ async fn presence_observer(client: Client, module_config: ModuleConfig) -> anyho
     }
 }
 
-fn names_dehighlighted(present: Vec<space_api::PeopleNowPresent>) -> Vec<String> {
+/// Insert `\u{200B}` - unicode Zero Width Space - in between the first and remaining characters
+/// of present people names, to avoid unnecessary mentions in the chat Room of people present.
+///
+/// Primarily used to avoid mentions on channels bridged with IRC, but Matrix clients can also
+/// send a notification on strings matching the configured displayname. Some Matrix clients,
+/// in particular, old Element versions for apple mobile devices, did render this as `&zwsp` in
+/// the middle of names, making the notifications less readable for them, so it can be a trade-off
+/// in certain situations.
+pub fn names_dehighlighted(present: Vec<space_api::PeopleNowPresent>) -> Vec<String> {
     let mut dehighlighted: Vec<String> = vec![];
 
     for sensor in present {

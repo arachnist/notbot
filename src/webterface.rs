@@ -2,32 +2,43 @@
 //!
 //! Provides a complementary web interface for various bot functions.
 //!
+//! [`ModuleConfig`]
+//!
 //! # Configuration
 //! ```toml
 //! [module."notbot::webterface"]
-//! # String; required; address:port pair for the web interface to bind to
 //! listen_address = "100.88.177.77:6543"
-//! # String; required; application url used for interacting with SSO
 //! app_url = "https://notbot-test.is-a.cat"
-//! # String; optional; OIDC token issuer address
 //! issuer = "https://sso.hackerspace.pl"
-//! # String; required; secret; OIDC client identifier
 //! client_id = "…"
-//! # String; required; secret; OIDC client secret
 //! client_secret = "…"
 //! ```
 //!
 //! # Usage
+//!
+//! Web interface entrypoint: [`webterface`]
+//!
+//! Sets up an OIDC client, auth and login layers, session store, some - for the time being - hardcoded routes, listens on the configured socket, and starts serving requests.
+//! Currently handled endpoints:
+//! * `/login` - [`login`] - static known url responding, after auth, with redirect to `/`, to force users to go through OIDC flow.
+//! * `/mx/inviter/invite` - [`crate::inviter::web_inviter`] - Proof-of-concept for the self-service matrix Room inviter.
+//! * `/oidc` - [`handle_oidc_redirect`] - Handler for OIDC redirects, requesting additional hswaw-specific claims (account properties known by the issuer).
+//! * `/` - [`maybe_authenticated`] - Main endpoint if it can be called that. Responds with different text for authenthicated users.
+//! * `/static` - [`ServeDir`] - serving files from `webui/static`, if there are any.
+//! * `/metrics` - [`serve_metrics`] - serves prometheus metrics exported by the bot.
+//! * `/hook/alerts` - [`receive_alerts`] - endpoint for receiving webhook requests from grafana instances configured in [`crate::alerts`] module
+//!
 //! ```text
-//! ❯ curl -L http://notbot.is-a.cat
+//! ❯ curl https://notbot.is-a.cat
 //! Hello anon!
 //! ```
 //!
-//! Other available functions include authenthication via hswaw sso, and invitations to defined rooms/spaces.
-//!
 //! # Future
+//!
 //! Current plan for 0.7.0 is to make endpoint configuration more dynamic, so that loaded bot modules would be able to provide
 //! api endpoints and UI snippets.
+//!
+//! Persistence for sessions maybe?
 
 use crate::prelude::*;
 
@@ -58,14 +69,20 @@ use tower_sessions::{
     Expiry, MemoryStore, Session, SessionManagerLayer,
 };
 
+/// Web interface configuration
 #[derive(Clone, Deserialize, Debug)]
-struct ModuleConfig {
-    listen_address: String,
-    app_url: String,
+pub struct ModuleConfig {
+    /// Address to listen on. Passed directly to [`TcpListener::bind`]
+    pub listen_address: String,
+    /// App url, used for constructing redirects for OIDC purposes.
+    pub app_url: String,
+    /// OIDC token issuer address.
     #[serde(default = "issuer")]
-    issuer: String,
-    client_id: String,
-    client_secret: ClientSecret,
+    pub issuer: String,
+    /// Unique OIDC client identifier for the bot instance.
+    pub client_id: String,
+    /// OIDC client secret token.
+    pub client_secret: ClientSecret,
 }
 
 fn issuer() -> String {
@@ -83,7 +100,8 @@ pub(crate) fn workers(mx: &Client, config: &Config) -> anyhow::Result<Vec<Worker
     )?])
 }
 
-async fn webterface(mx: Client, bot_config: Config) -> anyhow::Result<()> {
+/// Sets up an OIDC client, auth and login layers, session store, some - for the time being - hardcoded routes, listens on the configured socket, and starts serving requests.
+pub async fn webterface(mx: Client, bot_config: Config) -> anyhow::Result<()> {
     let module_config: ModuleConfig = bot_config.typed_module_config(module_path!())?;
 
     let app_state = WebAppState {
@@ -161,7 +179,8 @@ async fn webterface(mx: Client, bot_config: Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn maybe_authenticated(
+/// Temporary main response for the web interface. Responds with different strings, depending on whether or not the user is authenthicated.
+pub async fn maybe_authenticated(
     claims: Result<OidcClaims<HswawAdditionalClaims>, axum_oidc::error::ExtractorError>,
 ) -> impl IntoResponse {
     if let Ok(claims) = claims {
@@ -174,11 +193,13 @@ async fn maybe_authenticated(
     }
 }
 
-async fn login() -> Result<impl IntoResponse, (StatusCode, &'static str)> {
+/// Dummy handler for `/login` endpoint, to make unauthenthicated users go through OIDC flow.
+pub async fn login() -> Result<impl IntoResponse, (StatusCode, &'static str)> {
     Ok(response::Redirect::to("/"))
 }
 
-async fn logout(
+/// Handler for the `/logout` endpoint. Removes local app/user specific session information.
+pub async fn logout(
     State(app_state): State<WebAppState>,
     session: Session,
 ) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
