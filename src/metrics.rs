@@ -31,7 +31,14 @@
 //!
 //! # Usage
 //!
-//! Point your favourite prometheus-compatible metrics consumer at the bot. Ad-hoc calls might also be useful in development.
+//! Exposes all metrics gathered by the bot under the `/metrics` endpoint. [`serve_metrics`]
+//!
+//! Metrics exposed from this module using [`track_metrics`] middleware:
+//! * [`HTTP_COUNTER`] - `http_requests_total` - Counts the number of http requests, grouped by method and response status.
+//! * [`HTTP_BODY_HISTOGRAM`] - `http_response_size_bytes` - Best effort grouping of http request response sizes. Relies on [`axum_core::body::Body::size_hint`]
+//! * [`HTTP_REQ_HISTOGRAM`] - `http_request_duration_seconds` - time spent processing http requests, grouped by method and response status.
+//!
+//! Point your favourite prometheus-compatible metrics consumer at the bot. Ad-hoc calls can also be useful in development.
 //!
 //! ```text
 //! ❯ curl --silent https://notbot.is-a.cat/metrics | grep '^process'
@@ -53,14 +60,16 @@ use axum::{
 use prometheus::{opts, register_histogram_vec, register_int_counter_vec};
 use prometheus::{HistogramVec, IntCounterVec, TextEncoder};
 
-static HTTP_COUNTER: LazyLock<IntCounterVec> = LazyLock::new(|| {
+/// Counts the number of http requests, grouped by method and response status.
+pub static HTTP_COUNTER: LazyLock<IntCounterVec> = LazyLock::new(|| {
     register_int_counter_vec!(
         opts!("http_requests_total", "Number of HTTP requests made."),
         &["method", "status"]
     )
     .unwrap()
 });
-static HTTP_BODY_HISTOGRAM: LazyLock<HistogramVec> = LazyLock::new(|| {
+/// Best effort grouping of http request response sizes. Relies on [`axum_core::body::Body::size_hint`]
+pub static HTTP_BODY_HISTOGRAM: LazyLock<HistogramVec> = LazyLock::new(|| {
     register_histogram_vec!(
         "http_response_size_bytes",
         "The HTTP response lower bound sizes in bytes.",
@@ -69,7 +78,8 @@ static HTTP_BODY_HISTOGRAM: LazyLock<HistogramVec> = LazyLock::new(|| {
     )
     .unwrap()
 });
-static HTTP_REQ_HISTOGRAM: LazyLock<HistogramVec> = LazyLock::new(|| {
+/// Http request processing time, grouped by method and response status.
+pub static HTTP_REQ_HISTOGRAM: LazyLock<HistogramVec> = LazyLock::new(|| {
     register_histogram_vec!(
         "http_request_duration_seconds",
         "The HTTP request latencies in seconds.",
@@ -78,7 +88,8 @@ static HTTP_REQ_HISTOGRAM: LazyLock<HistogramVec> = LazyLock::new(|| {
     .unwrap()
 });
 
-pub(crate) async fn serve_metrics() -> Result<impl IntoResponse, (StatusCode, &'static str)> {
+/// Exposes metrics gathered by the bot.
+pub async fn serve_metrics() -> Result<impl IntoResponse, (StatusCode, &'static str)> {
     let encoder = TextEncoder::new();
     let metric_families = prometheus::gather();
     let body = encoder.encode_to_string(&metric_families).map_err(|err| {
@@ -92,7 +103,8 @@ pub(crate) async fn serve_metrics() -> Result<impl IntoResponse, (StatusCode, &'
     Ok(body)
 }
 
-pub(crate) async fn track_metrics(req: Request, next: Next) -> impl IntoResponse {
+/// Middleware layer to collect http request processing metrics.
+pub async fn track_metrics(req: Request, next: Next) -> impl IntoResponse {
     let method: String = req.method().clone().to_string();
     let timer = Instant::now();
 
