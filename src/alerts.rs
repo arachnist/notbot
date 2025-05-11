@@ -4,7 +4,7 @@
 //!
 //! Entries under `grafanas` are a map of strings to grafana instance configurations.
 //!
-//! [`crate::alerts::ModuleConfig`]
+//! [`ModuleConfig`]
 //!
 //! ```toml
 //! [module."notbot::alerts".grafanas.hswaw]
@@ -41,11 +41,11 @@
 //! # Usage
 //!
 //! Keywords the module will respond to:
-//! * `alerting`, `alerts` - list currently firing alerts
-//! * `purge`, `alerts_purge` - empty the lists of known alerts
+//! * `alerting`, `alerts` - list currently firing alerts. [`alerting_processor`]
+//! * `purge`, `alerts_purge` - empty the lists of known alerts [`purge_processor`]
 //!
 //! Urls the module will handle:
-//! * `/hook/alerts` - handle incoming webhooks from grafana.
+//! * `/hook/alerts` - handle incoming webhooks from grafana. [`receive_alerts`]
 
 use crate::prelude::*;
 
@@ -301,9 +301,21 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
     Ok(vec![alerting, purge])
 }
 
-async fn purge_processor(_: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
+/// Removes entries from the list of known alerts.
+///
+/// Also, a perfect example of how using acls and triggers reduces the amount of code.
+pub async fn purge_processor(ev: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
     trace!("purging alerts");
-    FIRING_ALERTS.purge()
+    let response = match FIRING_ALERTS.purge() {
+        Ok(_) => "alerts purged",
+        Err(e) => return Err(e),
+    };
+
+    ev.room
+        .send(RoomMessageEventContent::text_plain(response))
+        .await?;
+
+    Ok(())
 }
 
 /// Handles requests to display current status of known alerts
@@ -381,7 +393,10 @@ pub async fn alerting_processor(event: ConsumerEvent, config: ModuleConfig) -> a
 }
 
 /// Convert a vector of alerts into an html formatted matrix message.
-pub fn to_matrix_message(va: Vec<grafana::Alert>, instance: String) -> impl MessageLikeEventContent {
+pub fn to_matrix_message(
+    va: Vec<grafana::Alert>,
+    instance: String,
+) -> impl MessageLikeEventContent {
     let mut response_html = format!("instance: <b>{instance}</b><br />");
     let mut response = format!("instance: {instance}\n");
 
