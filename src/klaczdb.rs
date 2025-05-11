@@ -1,6 +1,27 @@
 //! KlaczDB module
 //!
-//! This part of the documentation is more of a story of how this module came to be.
+//! # Configuration
+//!
+//! [`ModuleConfig`]
+//!
+//! ```toml
+//! [module."notbot::klaczdb"]
+//! handle = "main"
+//! ```
+//!
+//! # Usage
+//!
+//! Keywords:
+//! * `add` - [`add_processor`] - adds an entry to the knowledge database
+//! * `remove` - [`remove_processor`] - removes a single entry from the knowledge database; removes the term if it removed the last entry
+//!
+//! # Usage as a module developer
+//!
+//! Reference to the [`KlaczDB`] object is passed in [`crate::module::ConsumerEvent`], which lets a module developer
+//! manipulate the klacz database objects. The functions provided *should* maintain a state consistent with the ORM/persistence
+//! layer used by [klacz](https://code.hackerspace.pl/hswaw/klacz)
+//!
+//! # How this module came to be
 //!
 //! The [klacz](https://code.hackerspace.pl/hswaw/klacz) irc bot is using a silly clisp ORM: [hu.dwim.perec](https://hub.darcs.net/hu.dwim/hu.dwim.perec)
 //! among other things:
@@ -116,15 +137,17 @@ use tokio_postgres::types::Type as dbtype;
 #[derive(Clone)]
 /// KlaczDB struct
 ///
-/// Holds just a name of the database handle that will be requested from the [`crate::db`] module.
+/// Just holds a name of the database handle that will be requested from the [`crate::db`] module.
 pub struct KlaczDB {
-    pub(crate) handle: &'static str,
+    /// Name of the database handle.
+    pub handle: &'static str,
 }
 
 /// Functions for interacting with the klacz database in less-naive ways.
 impl KlaczDB {
     /// Get next value from the `_instance_id` sequence
     pub const GET_INSTANCE_ID: &str = "SELECT nextval('_instance_id')";
+
     /// Function for getting next value from the `_instance_id` sequence.
     async fn get_instance_id(&self) -> anyhow::Result<i64> {
         let client = DBPools::get_client(self.handle).await?;
@@ -142,6 +165,7 @@ impl KlaczDB {
             _channel = $1
             AND _account = $2
         LIMIT 1"#;
+
     /// Function returning permission level defined in Klacz database for a given user/room pair.
     pub async fn get_level(&self, room: &Room, user: &UserId) -> anyhow::Result<i64> {
         let name = room_name(room);
@@ -165,9 +189,11 @@ impl KlaczDB {
     /// Delete existing permission levels for a given `_channel` and `_account` pair.
     pub const DELETE_LEVELS: &str = "DELETE FROM _level WHERE _channel = $1 and _account = $2";
     /// Add new permission level.
+    ///
     /// The schema has almost no unique constraints, so `insert on conflict update` can't be used.
     pub const INSERT_LEVELS: &str = r#"INSERT INTO _level (_oid, _channel, _account, _level)
         VALUES ($1, $2, $3, $4)"#;
+
     /// Function for setting the permission level for a given user/room pair.
     pub async fn add_level(&self, room: &Room, user: &UserId, level: i64) -> anyhow::Result<()> {
         let name = room_name(room);
@@ -214,7 +240,8 @@ impl KlaczDB {
         FROM _term
         WHERE _name = $1"#;
     /// Retrieve a random entry for a given term.
-    /// This could be done in a single query, but splitting it into two lets us handle error cases nicer.
+    ///
+    /// This could be done in a single query, but splitting it into two lets us handle error cases in a more user-friendly way.
     pub const GET_TERM_ENTRY: &str = r#"SELECT _text
         FROM _entry
         WHERE _term_oid = $1
@@ -515,12 +542,15 @@ fn default_remove_keywords() -> Vec<String> {
     vec!["remove".s()]
 }
 
+/// Module configuration
 #[derive(Clone, Deserialize)]
-struct ModuleConfig {
+pub struct ModuleConfig {
+    /// Keywords to which the add function should respond to
     #[serde(default = "default_add_keywords")]
-    keywords_add: Vec<String>,
+    pub keywords_add: Vec<String>,
+    /// Keywords to which the remove function should respond to
     #[serde(default = "default_remove_keywords")]
-    keywords_remove: Vec<String>,
+    pub keywords_remove: Vec<String>,
 }
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
@@ -552,8 +582,8 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
     Ok(vec![add, remove])
 }
 
-/// Event processor for adding entries/terms to the database.
-async fn add_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
+/// Adds entries/terms to the database.
+pub async fn add_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
     let Some(body) = event.args else {
         event
             .room
@@ -596,8 +626,8 @@ async fn add_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<
     Ok(())
 }
 
-/// Event processor for removing terms from the database.
-async fn remove_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
+/// Removes entries/terms from the database.
+pub async fn remove_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
     let Some(body) = event.args else {
         event
             .room
