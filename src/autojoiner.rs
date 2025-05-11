@@ -19,7 +19,7 @@
 //!
 //! Keywords:
 //! * `join room-name` - attempts to join a room by name. [`join_processor`], [`join_consumer`].
-//! * `leave (room-name)` - will leave either the named, or - if name's not present - current room. [`leave_processor`]
+//! * `leave [room-name]` - will leave either the named, or - if name's not present - current room. [`leave_processor`]
 //!
 //! The bot will also attempt to join rooms when invited, and the room has room_id on one of the allowed homeservers. [`autojoiner`]
 

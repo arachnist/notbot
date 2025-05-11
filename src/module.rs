@@ -3,9 +3,22 @@
 //! Provides some structure for defining additional functionality for the bot,
 //! as well as functionality not provided by the upstream
 //!
+//! # Usage
+//!
+//! ## Keywords:
+//! * `help`, `status` - [`help_processor`] - displays help for the bot and known modules, passthrough modules, and workers.
+//! * `list`, `list-functions` - [`list_consumer`] - lists known modules, passthrough modules, and workers
+//! * `reload` - [`reload_consumer`] - reloads the bot configuration and reinitializes known modules, passthrough modules, and workers
+//! * `shutdown`, `die`, `exit` - [`shutdown_consumer`] - causes the bot process to shutdown
+//!
+//! ## Metrics exposed from this module
+//! * [`MODULE_EVENTS`] - `module_event_counts` - number of events consumed, grouped by module.
+//! * [`MODULE_ACL_REJECTS`] - `module_acl_failures` - number of ACL checks that failed, preventing an event from being sent to a module, grouped by module
+//! * [`MODULE_CHANNEL_FULL`] - `module_channel_full` - number of times the module event channel was full, preventing an event from being sent to a module, grouped by module
+//!
 //! # Writing modules.
 //!
-//! This section is directly based on the [`notbot::wolfram`] bot module.
+//! This section is directly based on the [`crate::wolfram`] bot module.
 //!
 //! If you're modifying the bot code directly, you can start with importing [`crate::prelude`] which re-exports types,
 //! functions, and macros commonly used throughout the project.
@@ -222,13 +235,38 @@ use tokio::task::AbortHandle;
 
 use mlua::Lua;
 
-static MODULE_EVENTS: LazyLock<IntCounterVec> = LazyLock::new(|| {
+/// Number of events consumed, grouped by module
+pub static MODULE_EVENTS: LazyLock<IntCounterVec> = LazyLock::new(|| {
     register_int_counter_vec!(
         opts!(
             "module_event_counts",
             "Number of events a module has consumed"
         ),
-        &["event"]
+        &["module"]
+    )
+    .unwrap()
+});
+
+/// Number acl checks failed, grouped by module
+pub static MODULE_ACL_REJECTS: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!(
+        opts!(
+            "module_acl_failures",
+            "Number acl checks failed, grouped by module"
+        ),
+        &["module"]
+    )
+    .unwrap()
+});
+
+/// Number of times an attempt was made to pass an event to a module, but the module channel was full.
+pub static MODULE_CHANNEL_FULL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!(
+        opts!(
+            "module_channel_full",
+            "Number of events a module did not consume due to event channel being full"
+        ),
+        &["module"]
     )
     .unwrap()
 });
@@ -829,6 +867,7 @@ pub async fn dispatch_module(
     }
 
     if failed {
+        MODULE_ACL_REJECTS.with_label_values(&[&module.name]).inc();
         if general {
             let mut response = "busy figuring out why time behaves weirdly";
             let options = config.acl_deny();
@@ -855,6 +894,7 @@ pub async fn dispatch_module(
     let reservation = match module.channel.clone().try_reserve_owned() {
         Ok(r) => r,
         Err(e) => {
+            MODULE_CHANNEL_FULL.with_label_values(&[&module.name]).inc();
             error!("module {} channel can't accept message: {e}", module.name);
             return Ok(());
         }
@@ -939,7 +979,8 @@ pub fn init_modules(
     Ok(mx.add_event_handler(dispatcher))
 }
 
-fn core_starter(
+/// Initializes help, list, reload, and shutdown modules.
+pub fn core_starter(
     config: &Config,
     reload_ev_tx: mpsc::Sender<Room>,
     registered_modules: Vec<ModuleInfo>,
@@ -1019,12 +1060,55 @@ fn core_starter(
     Ok(modules)
 }
 
+/// Simplified structure for holding information on registered modules. Used by [`help_processor`] and [`list_consumer`], and stores
+/// just the information used by those modules.
+///
+/// [`tokio::sync::mpsc`] channels are kept alive by the runtime for as long as at least one [`tokio::sync::mpsc::Sender`] exists.
+/// When the last sender gets dropped, the channel gets closed, and [`tokio::sync::mpsc::Receiver::recv`] returns `None`, allowing a
+/// task awaiting on the channel to cleanly exit. An existing [`tokio::sync::mpsc::Sender`] can also be downgraded to
+/// [`tokio::sync::mpsc::WeakSender`], which does not count towards the number of references keeping a channel open.
+///
+/// Help [`help_processor`] and list [`list_consumer`] modules are mostly typical modules, with information about them being held
+/// in the [`ModuleInfo`] list, returned by a starter function [`core_starter`], similar to starter functions used by other modules,
+/// and added by [`init_modules`] to the matrix client event handler contexts, used by the [`dispatcher`]. This creates the first
+/// "strong" reference to the module sender channels, which gets dropped when a new list of modules is added to the event handler
+/// context.
+///
+/// Because of their functionality, help and list modules also "want" to know about themselves. If they held a normal full list of
+/// [`ModuleInfo`] objects, this would create a second "strong" reference to the channel objects, including their own senders.
+/// This reference would not be affected by the module list being replaced in event handler context map, and thus the event channels
+/// - including their own - would be kept open forever. And they also keep a full list of [`PassThroughModuleInfo`] and [`WorkerInfo`]
+/// objects. This would create a reference cycle that could not be dropped by the runtime, and kept all tasks spawned by all the modules
+/// and workers alive. While most of the bot functionality would stay unaffected, with the only side effect being module objects being
+/// kept alive and waiting forever on channels to which nothing would ever send, this meant that workers would stay forever alive as
+/// well, possibly keeping external exclusive resources occupied (tcp like listening sockets), and preventing new workers, with new
+/// configuration from being started.
+///
+/// Because of this, a [`WeakModuleInfo`] list is created and passed to help and list modules, with the major difference between it
+/// and normal [`ModuleInfo`] being that the channel sender is converted to [`tokio::sync::mpsc::WeakSender`]. Thanks to this, the
+/// help and list modules only hold a weak reference to senders for their own channels, meaning that their channels will close, and
+/// they will cleanly exit.
+///
+/// Thus, the object drop order is now:
+/// 1. (old) global lists of modules, passthrough modules, and workers
+/// 1. "primary" strong event channel references for modules, passthrough modules, and workers
+/// 1. event channels for modules being closed.
+/// 1. help and list event consumer loops exiting, along with all the other "normal" modules
+/// 1. "secondary" lists of passthrough modules and workers previously held by help and list modules
+/// 1. strong channel references for passthrough modules and worker helpers
+/// 1. event channels for passthrough modules and workers being closed
+/// 1. passthrough modules and worker helpers event consumer loops exiting
+/// 1. workers being stopped when their helper consumer loops exit, by calling [`tokio::task::AbortHandle::abort`] on their handles.
 #[derive(Clone)]
-struct WeakModuleInfo {
-    name: String,
-    help: String,
-    trigger: TriggerType,
-    channel: mpsc::WeakSender<ConsumerEvent>,
+pub struct WeakModuleInfo {
+    /// Name of the module
+    pub name: String,
+    /// Help for the module
+    pub help: String,
+    /// Module trigger type
+    pub trigger: TriggerType,
+    /// Weak reference to the consumer event channel
+    pub channel: mpsc::WeakSender<ConsumerEvent>,
 }
 
 impl From<ModuleInfo> for WeakModuleInfo {
@@ -1049,7 +1133,8 @@ impl From<&ModuleInfo> for WeakModuleInfo {
     }
 }
 
-async fn shutdown_consumer(mut rx: mpsc::Receiver<ConsumerEvent>) -> anyhow::Result<()> {
+/// Processes bot shutdown request. Singular. This is not a loop, as the process is will exit.
+pub async fn shutdown_consumer(mut rx: mpsc::Receiver<ConsumerEvent>) -> anyhow::Result<()> {
     match rx.recv().await {
         Some(_) => (),
         None => {
@@ -1100,7 +1185,9 @@ async fn help_consumer(
     }
 }
 
-async fn help_processor(
+/// Processes help events. If provided with an argument, will try to match it against a name of known modules, passthrough modules, or
+/// workers, to provide more specific help.
+pub async fn help_processor(
     event: ConsumerEvent,
     config: Config,
     registered_modules: Vec<WeakModuleInfo>,
@@ -1269,7 +1356,8 @@ contact {mx_contact} or {fedi_contact} if you need more help"#,
     Ok(())
 }
 
-async fn list_consumer(
+/// Provides a list of all registered modules, passthrough modules, and workers.
+pub async fn list_consumer(
     mut rx: mpsc::Receiver<ConsumerEvent>,
     registered_modules: Vec<WeakModuleInfo>,
     registered_passthrough_modules: Vec<PassThroughModuleInfo>,
@@ -1350,7 +1438,9 @@ async fn list_consumer(
     }
 }
 
-async fn reload_consumer(
+/// Reloads bot configuration, and reinitializes all modules, tasks, and workers, including [`crate::notmun`] state.
+/// Is a loop to handle the case where a reload fails due to configuration errors.
+pub async fn reload_consumer(
     mut rx: mpsc::Receiver<ConsumerEvent>,
     reload_tx: mpsc::Sender<Room>,
 ) -> anyhow::Result<()> {
