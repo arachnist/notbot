@@ -97,11 +97,13 @@ impl Config {
         Ok(self)
     }
 
-    pub(crate) fn homeserver(&self) -> String {
+    /// Homeserver the bot is configured to connect to.
+    pub fn homeserver(&self) -> String {
         let inner = &self.inner.lock().unwrap();
         inner.homeserver.clone()
     }
 
+    /// Bots matrix user id.
     pub(crate) fn user_id(&self) -> String {
         let inner = &self.inner.lock().unwrap();
         inner.user_id.clone()
