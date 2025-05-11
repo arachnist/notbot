@@ -1076,8 +1076,8 @@ pub fn core_starter(
 ///
 /// Because of their functionality, help and list modules also "want" to know about themselves. If they held a normal full list of
 /// [`ModuleInfo`] objects, this would create a second "strong" reference to the channel objects, including their own senders.
-/// This reference would not be affected by the module list being replaced in event handler context map, and thus the event channels
-/// - including their own - would be kept open forever. And they also keep a full list of [`PassThroughModuleInfo`] and [`WorkerInfo`]
+/// This reference would not be affected by the module list being replaced in event handler context map, and thus the event channels -
+/// including their own - would be kept open forever. And they also keep a full list of [`PassThroughModuleInfo`] and [`WorkerInfo`]
 /// objects. This would create a reference cycle that could not be dropped by the runtime, and kept all tasks spawned by all the modules
 /// and workers alive. While most of the bot functionality would stay unaffected, with the only side effect being module objects being
 /// kept alive and waiting forever on channels to which nothing would ever send, this meant that workers would stay forever alive as
