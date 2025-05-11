@@ -2,38 +2,38 @@
 //!
 //! # Configuration
 //!
+//! [`ModuleConfig`]
+//!
 //! ```toml
 //! [module."notbot::inviter"]
-//! # Required; string; room on which we permit requests.
 //! requests = [ "#general:example.org" ]
-//! # Required; list of strings; trusted users that are allowed to approve invitation requests
 //! approvers = [
 //!     "@bar:example.com",
 //!     "@foo:hackerspace.pl",
 //!     "@baz:hackerspace.pl",
 //! ]
-//! # Required; list of strings; rooms and spaces that the new user will be invited to
 //! invite_to = [
 //!     "!LPEcDKoGvnCdhRSTJW:example.org",
 //!     "#bottest:example.org"
 //! ]
-//! # Required; string; known homeserver address for which we allow users to invite themselves using bot web interface.
 //! homeserver_selfservice_allow = "example.org"
-//! # Optional; list of strings; keywords the bot will listen for invitation requests
 //! keywords = [ "invite" ]
 //! ```
 //!
 //! # Usage
 //!
-//! New user is expected to write ".invite" on a public channel. A trusted user is then expected to confirm the invitation request
-//! by reacting with 👍 emoji. Color variants *should* work, but are not guaranteed to.
+//! New user is expected to write ".invite" on a public channel; [`invite_request`]. A trusted user is then expected to
+//! confirm the invitation request by reacting with 👍 emoji; [`reaction_listener`]. Color variants *should* work, but are
+//! not guaranteed to.
 //!
-//! There is also a prototype of the self-service through sso flow implemented, registered under `/mx/inviter/invite url`, that will
-//! attempt to extract username from the OIDC claim and invite a `@username:allowed-homeserver.org` user.
+//! There is also a prototype of the self-service through sso flow implemented, [`web_inviter`], registered under
+//! `/mx/inviter/invite url`, that will attempt to extract username from the OIDC claim and invite
+//! a `@username:allowed-homeserver.org` user.
 //!
 //! # Future
 //!
-//! Support for processing room knocking events as requests. A better self-service flow once changes in relevant parts of the rest of hackerspace infrastructure are done.
+//! * Support for processing room knocking events as requests.
+//! * A better self-service flow once changes in relevant parts of the rest of hackerspace infrastructure are done.
 
 use crate::prelude::*;
 
@@ -48,12 +48,18 @@ fn default_keywords() -> Vec<String> {
     vec!["invite".s()]
 }
 
+/// Configuration structure for the module.
 #[derive(Clone, Deserialize)]
-struct ModuleConfig {
+pub struct ModuleConfig {
+    /// Rooms on which we permit requests.
     pub requests: Vec<String>,
+    /// Trusted users that are allowed to approve invitation requests.
     pub approvers: Vec<String>,
+    /// Known homeserver address for which we allow users to invite themselves using bot web interface.
     pub homeserver_selfservice_allow: String,
+    /// Rooms and spaces that the new user will be invited to.
     pub invite_to: Vec<String>,
+    /// keywords the bot will listen for invitation requests.
     #[serde(default = "default_keywords")]
     pub keywords: Vec<String>,
 }
@@ -76,7 +82,9 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
     Ok(vec![inviter])
 }
 
-async fn invite_request(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
+/// Listens for invite requests from new hackerspace members, and attempts to invite them to
+/// configured rooms and spaces, and starts the [`reaction_listener`] as needed.
+pub async fn invite_request(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
     info!("invitation request from: {}", event.sender);
     let prefixed_sender = "inviter:".to_owned() + event.sender.as_str();
     let client = event.room.client();
@@ -119,7 +127,9 @@ async fn invite_request(event: ConsumerEvent, config: ModuleConfig) -> anyhow::R
     Ok(())
 }
 
-async fn reaction_listener(
+/// One of the rare native [`matrix_sdk::event_handler`] event handlers. Listens for `👍` emoji reactions from approved trusted users
+/// on the invitation request message, and attempts to invite the user to configured channels.
+pub async fn reaction_listener(
     ev: OriginalSyncReactionEvent,
     room: Room,
     client: Client,
@@ -201,7 +211,8 @@ async fn inviter(client: Client, invitee: OwnedUserId, rooms: Vec<String>) -> an
     Ok(())
 }
 
-pub(crate) async fn web_inviter(
+/// Endpoint for processing invites from the web interface.
+pub async fn web_inviter(
     State(app_state): State<WebAppState>,
     OidcClaims(claims): OidcClaims<HswawAdditionalClaims>,
 ) -> Result<impl IntoResponse, (axum::http::StatusCode, &'static str)> {
