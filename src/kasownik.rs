@@ -2,17 +2,16 @@
 //!
 //! # Configuration
 //!
+//! [`ModuleConfig`]
+//!
 //! ```toml
 //! [module."notbot::kasownik"]
-//! # List of strings; required; rooms on which bot will nag active members about late membership fees.
 //! nag_channels = [
 //!     "#bottest:example.com",
 //!     "#members:example.org",
 //!     "#notbot-test-private-room:example.com"
 //! ]
-//! # Late fees leniency in months
 //! nag_late_fees = 0
-//! # List of strings; required; channels on which known members are allowed to check fees status of other members.
 //! due_others_allowed = [
 //!     "#bottest:example.com",
 //!     "#members:example.org",
@@ -22,14 +21,12 @@
 //!
 //! # Usage
 //!
-//! ```chat logs
-//! <foo> ~due bar
-//! <notbot> bar is 5 months ahead. Cool!
-//! <baz> ~due-me
-//! <notbot> baz needs to pay 8 membership fees.
-//! <xyz123> hi
-//! <notbot> @xyz123:example.org: pay your membership fees! you are 2 months behind!
-//! ```
+//! Keywords:
+//! * `due <member>` - [`due_processor`] - check membership fees for others
+//! * `due-me` - [`due_me_processor`] - check membership fees for yourself
+//!
+//! Catch-all:
+//! * [`nag_processor`] - events not consumed by other modules will trigger a check for fees status, and nag the user if they're late.
 
 use crate::prelude::*;
 
@@ -43,15 +40,21 @@ fn default_due_me_keywords() -> Vec<String> {
     vec!["due-me".s(), "dueme".s()]
 }
 
+/// Module configuration object.
 #[derive(Clone, Deserialize)]
-struct ModuleConfig {
-    nag_channels: Vec<String>,
-    nag_late_fees: i64,
-    due_others_allowed: Vec<String>,
+pub struct ModuleConfig {
+    /// Rooms on which bot will nag active members about late membership fees.
+    pub nag_channels: Vec<String>,
+    /// Late fees leniency in months.
+    pub nag_late_fees: i64,
+    /// Rooms on which users are allowed to check fees status of other members.
+    pub due_others_allowed: Vec<String>,
+    /// Keywords the [`due_processor`] will respond to
     #[serde(default = "default_due_keywords")]
-    keywords_due: Vec<String>,
+    pub keywords_due: Vec<String>,
+    /// Keywords the [`due_me_processor`] will respond to
     #[serde(default = "default_due_me_keywords")]
-    keywords_due_me: Vec<String>,
+    pub keywords_due_me: Vec<String>,
 }
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
@@ -83,7 +86,10 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
     Ok(vec![due, due_me])
 }
 
-async fn due_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
+/// Processes checks for other user membership fees status. If a message explicitly mentions someone,
+/// [`matrix_sdk::ruma::events::Mentions`], try using the first mentioned user. Otherwise, make a best-effort attempt
+/// at parsing provided plaintext argument.
+pub async fn due_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
     use MembershipStatus::*;
 
     if event.args.is_none() {
@@ -148,7 +154,8 @@ async fn due_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<
     Ok(())
 }
 
-async fn due_me_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
+/// Processes checks for membership status of the user sending the event.
+pub async fn due_me_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
     use MembershipStatus::*;
 
     let response = match membership_status(event.sender).await? {
@@ -192,7 +199,8 @@ pub(crate) fn passthrough(
     Ok(vec![nag])
 }
 
-async fn nag_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
+/// Nags members active in the chat about late membership fees, at most once every 24 hours.
+pub async fn nag_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
     use MembershipStatus::*;
     let sender_str: &str = event.sender.as_str();
 
