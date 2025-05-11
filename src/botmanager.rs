@@ -36,7 +36,8 @@ use tokio::sync::{
     mpsc::{Receiver, Sender},
 };
 
-struct BotManagerInner {
+/// State holding structure for [`BotManager`]
+pub struct BotManagerInner {
     config: Config,
     client: Client,
     session_file: PathBuf,
@@ -46,9 +47,13 @@ struct BotManagerInner {
     reload_ev_tx: Sender<Room>,
 }
 
+/// Possible errors when reloading configuration.
 #[derive(Debug)]
-enum ReloadError {
+pub enum ReloadError {
+    /// Configuration file failed to parse. Bot will continue running with the old configuration.
     ConfigParseError(anyhow::Error),
+    /// Core functionality failed to start. This means the bot would be unable to reload configuration again, and
+    /// remained in unusable state. Bot process will exit with an error, and can be then restarted by a service manager.
     CoreModulesFailure(anyhow::Error),
 }
 
@@ -65,6 +70,10 @@ impl fmt::Display for ReloadError {
 }
 
 impl BotManagerInner {
+    /// Handles reload requests
+    ///
+    /// Attempts to reload configuration file, stop the old event dispatcher, and start [`crate::module::init_modules`]
+    /// to handle the rest of the reload process.
     pub fn reload(&mut self) -> Result<(), ReloadError> {
         use ReloadError::*;
 
@@ -167,10 +176,10 @@ impl BotManager {
         })
     }
 
-    /// Main bot entrypoint. Starts the event loop provided by [`matrix_sdk::Client::sync_with_result_callback`]
+    /// Starts the event loop provided by [`matrix_sdk::Client::sync_with_result_callback`]
     ///
     /// Must be started along with the [`Self::reload`] task for reloads to work.
-    async fn run(&self) -> anyhow::Result<()> {
+    pub async fn run(&self) -> anyhow::Result<()> {
         let (sync_settings, session_file, client) = {
             debug!("run: attempting lock");
             let inner = self.inner.lock().await;
@@ -272,7 +281,9 @@ impl BotManager {
         Ok(())
     }
 
-    async fn message_logger(event: OriginalSyncRoomMessageEvent, room: Room) {
+    /// Logs to stdout text form of the text messages received. Will discard events with invalid
+    /// timestamp from the original homeserver, or messages older than 3 seconds.
+    pub async fn message_logger(event: OriginalSyncRoomMessageEvent, room: Room) {
         let Some(ev_ts) = event.origin_server_ts.to_system_time() else {
             error!("event timestamp couldn't get parsed to system time");
             return;
@@ -310,7 +321,7 @@ impl BotManager {
     /// Must be started along with the [`Self::run`] task for reloads to work. When
     /// reload is complete, short information about completion of the task is sent to
     /// the channel from which configuration reload was requested.
-    async fn reload(&self, mut rx: Receiver<Room>) -> anyhow::Result<()> {
+    pub async fn reload(&self, mut rx: Receiver<Room>) -> anyhow::Result<()> {
         loop {
             let room = match rx.recv().await {
                 Some(e) => e,
