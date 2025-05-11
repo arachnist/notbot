@@ -2,14 +2,14 @@
 //!
 //! # Configuration
 //!
+//! [`ModuleConfig`]
+//!
 //! ```toml
 //! [module."notbot::autojoiner"]
-//! # Required; list of strings; list of homeservers to which room ids belong to that the bot will be allowed to join
 //! homeservers = [
 //!     "is-a.cat",
 //!     "hackerspace.pl",
 //! ]
-//! # Optional; string; message the bot will send to the channel when instructed to leave
 //! leave_message = "goodbye 😿"
 //! ```
 //!
@@ -18,10 +18,10 @@
 //! The bot responds to chat commands only from bot admins.
 //!
 //! Keywords:
-//! * `join room-name` - attempts to join a room by name.
-//! * `leave (room-name)` - will leave either the named, or - if name's not present - current room.
+//! * `join room-name` - attempts to join a room by name. [`join_processor`], [`join_consumer`].
+//! * `leave (room-name)` - will leave either the named, or - if name's not present - current room. [`leave_processor`]
 //!
-//! The bot will also attempt to join rooms when invited, and the room has room_id on one of the allowed homeservers.
+//! The bot will also attempt to join rooms when invited, and the room has room_id on one of the allowed homeservers. [`autojoiner`]
 
 use crate::prelude::*;
 
@@ -34,15 +34,20 @@ static ROOM_INVITES: LazyLock<Counter> = LazyLock::new(|| {
     register_counter!(opts!("room_invite_events_total", "Number of room invites",)).unwrap()
 });
 
+/// Module configuration
 #[derive(Clone, Deserialize)]
-struct ModuleConfig {
-    homeservers: Vec<String>,
+pub struct ModuleConfig {
+    /// List of homeservers to which room ids belong to that the bot will be allowed to join
+    pub homeservers: Vec<String>,
+    /// Keywords for join requests.
     #[serde(default = "keywords_join")]
-    keywords_join: Vec<String>,
+    pub keywords_join: Vec<String>,
+    /// Keywords for leave requests.
     #[serde(default = "keywords_leave")]
-    keywords_leave: Vec<String>,
+    pub keywords_leave: Vec<String>,
     #[serde(default = "leave_message")]
-    leave_message: String,
+    /// Message the bot will send to the channel when instructed to leave
+    pub leave_message: String,
 }
 
 fn keywords_join() -> Vec<String> {
@@ -90,7 +95,8 @@ pub(crate) fn starter(mx: &Client, config: &Config) -> anyhow::Result<Vec<Module
     Ok(vec![join, leave])
 }
 
-async fn leave_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
+/// Leaves rooms when requested to do so. Will optionally take a room name argument, to leave a different room than current one.
+pub async fn leave_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
     let leave_room = if let Some(room_str) = event.args {
         maybe_get_room(&event.room.client(), &room_str).await?
     } else {
@@ -104,7 +110,8 @@ async fn leave_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::
     Ok(())
 }
 
-pub(crate) async fn join_consumer(
+/// Forwards join requests to [`join_processor`] and stops the invite event listener as needed.
+pub async fn join_consumer(
     mut rx: mpsc::Receiver<ConsumerEvent>,
     mx: Client,
     autojoiner_handle: EventHandlerHandle,
@@ -135,7 +142,8 @@ pub(crate) async fn join_consumer(
     }
 }
 
-async fn join_processor(mx: Client, event: ConsumerEvent) -> anyhow::Result<()> {
+/// Processes join requests.
+pub async fn join_processor(mx: Client, event: ConsumerEvent) -> anyhow::Result<()> {
     if let Some(room_str) = event.args {
         let room = maybe_get_room(&mx, &room_str).await?;
         info!("joining room: {room_str} {}", room.room_id());
@@ -145,7 +153,7 @@ async fn join_processor(mx: Client, event: ConsumerEvent) -> anyhow::Result<()> 
         while let Err(err) = room.join().await {
             // retry autojoin due to synapse sending invites, before the
             // invited user can join for more information see
-            // https://github.com/matrix-org/synapse/issues/4345
+            // https://github.com/element-hq/synapse/issues/4345
             error!(
                 "Failed to join room {} ({err:?}), retrying in {delay}s",
                 room.room_id()
@@ -161,22 +169,16 @@ async fn join_processor(mx: Client, event: ConsumerEvent) -> anyhow::Result<()> 
             }
         }
 
-        if joined {
-            event
-                .room
-                .send(RoomMessageEventContent::text_plain(format!(
-                    "joined: {room_str}"
-                )))
-                .await?;
-        } else {
-            event
-                .room
-                .send(RoomMessageEventContent::text_plain(format!(
-                    "couldn't join: {room_str}"
-                )))
-                .await?;
-        };
         trace!("Successfully joined room {}", room.room_id());
+        let response = if joined {
+            format!("joined {room_str}")
+        } else {
+            format!("couldn't join {room_str}")
+        };
+        event
+            .room
+            .send(RoomMessageEventContent::text_plain(response))
+            .await?;
     } else {
         bail!("missing argument: room");
     }
@@ -184,7 +186,8 @@ async fn join_processor(mx: Client, event: ConsumerEvent) -> anyhow::Result<()> 
     Ok(())
 }
 
-async fn autojoiner(
+/// Listens for invitation events, and joins the appropriate room if the room id is from one of the permitted homeservers.
+pub async fn autojoiner(
     room_member: StrippedRoomMemberEvent,
     client: Client,
     room: Room,
