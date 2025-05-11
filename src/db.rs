@@ -30,9 +30,10 @@
 //! Here's a short example
 //!
 //! ```rust
+//! use notbot::prelude::*;
 //! use notbot::db::DBPools;
 //!
-//! fn get_instance_id() -> anyhow::Result<i64> {
+//! async fn get_instance_id() -> anyhow::Result<i64> {
 //!     let client = DBPools::get_client("main").await?;
 //!     let statement = client.prepare_cached("SELECT nextval('_instance_id')").await?;
 //!     let row = client.query_one(&statement, &[]).await?;

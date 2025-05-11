@@ -5,11 +5,13 @@
 //!
 //! # Writing modules.
 //!
-//! If you're modifying the bot code directly, you can start with `use crate::prelude::*;` which re-exports types,
+//! This section is directly based on the [`notbot::wolfram`] bot module.
+//!
+//! If you're modifying the bot code directly, you can start with importing [`crate::prelude`] which re-exports types,
 //! functions, and macros commonly used throughout the project.
 //!
 //! ```
-//! use crate::prelude::*;
+//! use notbot::prelude::*;
 //!
 //! use serde_json::Value;
 //! use urlencoding::encode as uencode;
@@ -19,7 +21,7 @@
 //! reasonable default values, if applicable.
 //!
 //! ```
-//! use crate::prelude::*;
+//! use notbot::prelude::*;
 //!
 //! #[derive(Clone, Deserialize)]
 //! pub struct ModuleConfig {
@@ -48,7 +50,7 @@
 //! Next step is to define a `starter` function, whose signature is as follows:
 //!
 //! ```
-//! use crate::prelude::*;
+//! use notbot::prelude::*;
 //!
 //! pub fn starter(mx: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> { Ok(vec![]) }
 //! ```
@@ -62,9 +64,9 @@
 //! A good example of a function registering just a single module is [`crate::wolfram`]
 //!
 //! ```rust
-//! use crate::prelude::*;
+//! use notbot::prelude::*;
 //!
-//! use crate::wolfram::{ModuleConfig, WolframAlpha, processor};
+//! use notbot::wolfram::{ModuleConfig, processor};
 //!
 //! pub fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
 //!     info!("registering modules");
@@ -119,12 +121,12 @@
 //! needs to handle things specific to it:
 //!
 //! ```rust
-//! use crate::prelude::*;
+//! use notbot::prelude::*;
 //!
 //! use serde_json::Value;
 //! use urlencoding::encode as uencode;
 //!
-//! use notbot::wolfram::{ModuleConfig, WolframAlpha};
+//! use notbot::wolfram::{ModuleConfig, wolfram_alpha};
 //!
 //! fn default_keywords() -> Vec<String> {
 //!     vec!["c".s(), "wolfram".s()]
@@ -152,7 +154,7 @@
 //!         + config.app_id.as_str()
 //!         + "&output=json";
 //!
-//!     // [`crate::tools::fetch_and_decode_json`] used here as a helper function to query
+//!     // [`notbot::tools::fetch_and_decode_json`] used here as a helper function to query
 //!     // WolframAlpha json api, and decode its response.
 //!     let Ok(data) = fetch_and_decode_json::<wolfram_alpha::WolframAlpha>(url).await else {
 //!         bail!("couldn't fetch data from wolfram")
@@ -185,6 +187,10 @@
 //!     Ok(())
 //! }
 //! ```
+//!
+//! # Future plans
+//!
+//! Trait specifying starter function, configuration object, single-module reload, and maybe some healthcheck function?
 //!
 //! The module starter now needs to be added to the list of known module starters.
 //! This list is, for now, hardcoded, but the plan is to make a dynamic list that can

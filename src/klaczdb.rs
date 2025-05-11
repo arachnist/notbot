@@ -21,6 +21,8 @@
 //! manipulate the klacz database objects. The functions provided *should* maintain a state consistent with the ORM/persistence
 //! layer used by [klacz](https://code.hackerspace.pl/hswaw/klacz)
 //!
+//! The [`add_processor`] and [`remove_processor`] functions provided in this module use this mechanism.
+//!
 //! # How this module came to be
 //!
 //! The [klacz](https://code.hackerspace.pl/hswaw/klacz) irc bot is using a silly clisp ORM: [hu.dwim.perec](https://hub.darcs.net/hu.dwim/hu.dwim.perec)
