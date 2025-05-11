@@ -3,20 +3,19 @@
 //! Retrieves information using the simple API: <https://products.wolframalpha.com/simple-api/documentation>
 //!
 //! # Configuration
+//!
+//! [`ModuleConfig`]
+//!
 //! ```toml
 //! [module."notbot::wolfram"]
-//! # String; required; secret application identifier.
 //! app_id = "…"
-//! # List of strings; optional; keywords the bot will respond to; default: c, wolfram
-//! keywords = [ "…" ]
+//! keywords = [ "c", "wolfram" ]
 //! ```
 //!
 //! # Usage
 //!
-//! ```chat logs
-//! <ari> .c distance from stockholm to warsaw
-//! <notbot> Result: 811.3 km (kilometers)
-//! ```
+//! Keywords:
+//! * `c`, `wolfram` - [`processor`] - query WolframAlpha.
 
 use crate::prelude::*;
 
