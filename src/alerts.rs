@@ -4,13 +4,12 @@
 //!
 //! Entries under `grafanas` are a map of strings to grafana instance configurations.
 //!
+//! [`crate::alerts::ModuleConfig`]
+//!
 //! ```toml
 //! [module."notbot::alerts".grafanas.hswaw]
-//! # String; required; name of the grafana configuration; for technical reasons currently must be identical with the configuration entry name
 //! name = "hswaw"
-//! # String; required; secret token used for Bearer auth in grafana webhook configuration.
 //! token = "…"
-//! # List of strings; required; names of rooms to which incoming alert state changes will be sent to
 //! rooms = [
 //!     "#infra:example.org",
 //!     "#bottest:example.com",
@@ -26,20 +25,16 @@
 //! ]
 //!
 //! [module."notbot::alerts"]
-//! # List of strings; required; rooms on which admins will be able to request purging the list of known alerts
 //! rooms_purge = [
 //!     "#bottest:example.org",
 //!     "!xnhydwPoIQeoVuJCaU:example.com",
 //! ]
-//! # List of strings; optional; possible messages to respond with if no alerts are firing
 //! no_firing_alerts_responses = [
 //!     "all systems operational",
 //!     "all crews reporting",
 //!     "battlecruiser operational",
 //! ]
-//! # List of strings; optional; keywords to which bot will respond with list of known alerts per instance with firing alerts
 //! keywords_alerting = [ "alerting", "alerts" ]
-//! # List of strings; optional; keywords on which bot will purge known alerts.
 //! keywords_purge = [ "purge", "alerts_purge" ]
 //! ```
 //!
@@ -157,23 +152,33 @@ impl FiringAlerts {
     }
 }
 
+/// Configuration for a single grafana instance
 #[derive(Clone, Debug, Deserialize)]
-struct GrafanaConfig {
-    name: String,
-    token: String,
-    rooms: Vec<String>,
+pub struct GrafanaConfig {
+    /// instance name
+    pub name: String,
+    /// bearer token it will use when firing webhooks
+    pub token: String,
+    /// matrix rooms to which the alert should be forwarded to
+    pub rooms: Vec<String>,
 }
 
+/// Module configurations
 #[derive(Clone, Debug, Deserialize)]
-struct ModuleConfig {
-    grafanas: HashMap<String, GrafanaConfig>,
+pub struct ModuleConfig {
+    /// Map of grafana instances
+    pub grafanas: HashMap<String, GrafanaConfig>,
+    /// Keywords to which bot will respond with list of known firing alerts, with a message per instance with firing alerts
     #[serde(default = "keywords_alerting")]
-    keywords_alerting: Vec<String>,
+    pub keywords_alerting: Vec<String>,
+    /// keywords on which bot will purge known alerts.
     #[serde(default = "keywords_purge")]
-    keywords_purge: Vec<String>,
-    rooms_purge: Vec<String>,
+    pub keywords_purge: Vec<String>,
+    /// rooms on which admins will be able to request purging the list of known alerts
+    pub rooms_purge: Vec<String>,
     #[serde(default = "no_firing_alerts_responses")]
-    no_firing_alerts_responses: Vec<String>,
+    /// possible messages to respond with if no alerts are firing
+    pub no_firing_alerts_responses: Vec<String>,
 }
 
 fn keywords_alerting() -> Vec<String> {
@@ -188,8 +193,11 @@ fn no_firing_alerts_responses() -> Vec<String> {
     vec!["all systems operational".s()]
 }
 
+/// Handles incoming webhooks from grafana instances.
+///
+/// Matches bearer tokens to known instances, updates state of known alerts, and dispatches alerts to matrix rooms accordingly.
 #[axum::debug_handler]
-pub(crate) async fn receive_alerts(
+pub async fn receive_alerts(
     State(app_state): State<WebAppState>,
     AuthBearer(token): AuthBearer,
     Json(alerts): Json<Alerts>,
@@ -298,7 +306,8 @@ async fn purge_processor(_: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()
     FIRING_ALERTS.purge()
 }
 
-async fn alerting_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
+/// Handles requests to display current status of known alerts
+pub async fn alerting_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
     let mut grafanas: Vec<GrafanaConfig> = vec![];
     let mut sent: bool = false;
 
@@ -371,7 +380,8 @@ async fn alerting_processor(event: ConsumerEvent, config: ModuleConfig) -> anyho
     Ok(())
 }
 
-fn to_matrix_message(va: Vec<grafana::Alert>, instance: String) -> impl MessageLikeEventContent {
+/// Convert a vector of alerts into an html formatted matrix message.
+pub fn to_matrix_message(va: Vec<grafana::Alert>, instance: String) -> impl MessageLikeEventContent {
     let mut response_html = format!("instance: <b>{instance}</b><br />");
     let mut response = format!("instance: {instance}\n");
 
@@ -413,7 +423,7 @@ since: {since}<br />"#,
     RoomMessageEventContent::text_html(response, response_html)
 }
 
-pub(crate) mod grafana {
+pub mod grafana {
     //! Grafana webhook payload structure.
 
     use serde_derive::{Deserialize, Serialize};
@@ -421,10 +431,13 @@ pub(crate) mod grafana {
     use std::collections::HashMap;
     use std::fmt;
 
+    /// Possible states of an alert.
     #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Default)]
-    pub(crate) enum AlertStatus {
+    pub enum AlertStatus {
+        /// Grafana informed us that alert conditions aren't satisfied
         #[serde(rename = "resolved")]
         Resolved,
+        /// Grafana informed us that alert conditions are satisfied
         #[serde(rename = "firing")]
         #[default]
         Firing,
@@ -450,10 +463,11 @@ pub(crate) mod grafana {
         }
     }
 
+    /// Container around Alert objects
     #[allow(dead_code, missing_docs)]
     #[derive(Debug, Clone, Deserialize, Serialize)]
     #[serde(rename_all = "camelCase")]
-    pub(crate) struct Alerts {
+    pub struct Alerts {
         pub receiver: String,
         pub status: AlertStatus,
         pub org_id: i64,
@@ -471,9 +485,11 @@ pub(crate) mod grafana {
         pub message: String,
     }
 
+    /// Alert state definitions
+    #[allow(dead_code, missing_docs)]
     #[derive(Debug, Clone, Deserialize, Serialize, Default)]
     #[serde(rename_all = "camelCase")]
-    pub(crate) struct Alert {
+    pub struct Alert {
         pub status: AlertStatus,
         pub labels: HashMap<String, String>,
         pub annotations: HashMap<String, String>,

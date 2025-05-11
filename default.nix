@@ -14,9 +14,6 @@ rustPlatform.buildRustPackage {
   version = cargoToml.package.version;
   cargoLock = {
     lockFile = ./Cargo.lock;
-    outputHashes = {
-      "axum-oidc-0.6.0" = "";
-    };
   };
 
   src = lib.cleanSource ./.;
