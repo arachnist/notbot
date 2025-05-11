@@ -14,10 +14,10 @@ pub mod module;
 pub mod notmun;
 pub mod tools;
 pub mod webterface;
+pub mod notbottime;
 
 pub mod inviter;
 pub mod kasownik;
-mod notbottime;
 mod sage;
 pub mod spaceapi;
 pub mod wolfram;
