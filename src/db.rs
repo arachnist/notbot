@@ -8,6 +8,8 @@
 //!
 //! Configuration fields available in that module are passed verbatim to the database pool initialization functions.
 //!
+//! [`DBConfig`]
+//!
 //! ```toml
 //! [module."notbot::db".name]
 //! host = "host.example.org"
@@ -18,6 +20,11 @@
 //! ```
 //!
 //! # Usage
+//!
+//! Keywords
+//! * db - lists known database connection pools, and checks if they're functional by executing a simple query. [`dbstatus`]
+//!
+//! # Usage as a module developer
 //!
 //! After acquiring a connection through [`DBPools::get_client`], [`deadpool_postgres`] configuration should be more relevant.
 //! Here's a short example
