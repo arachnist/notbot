@@ -500,14 +500,16 @@ impl KlaczClass {
 
     /// Calculate the class id by taking the appropriately-formated name, calculating a crc32 of it,
     /// and taking the reminder of a division (modulo) of the hash by maximum defined class id.
+    /// The modulo operation ensures the result will fit in 16 bits.
     pub fn class_id(&self) -> i64 {
         (crc32(self.class_name().as_bytes()) % OID_MAXIMUM_CLASS_ID).into()
     }
 
     /// Mix in the provided instance id with calculated class id, to produce an oid value.
-    /// Provided oid gets shifted to the left by 16 bits, and class id is stored in there.
-    /// These values are significant, as the ORM used by klacz later verifies if the oid matches
-    /// the class it was supposed to come from.
+    /// Class id for the current class is calculated. The class id always fits in 16 bits.
+    /// Provided instance id gets shifted to the left by 16 bits. Class id is stored in freed-up
+    /// lower bits using a bitwise-or operation. This step is significant, as the ORM used by
+    /// klacz verifies if the oid matches the class it was supposed to come from.
     pub fn make_oid(&self, instance_id: i64) -> i64 {
         let class_id: i64 = self.class_id();
         let shifted: i64 = instance_id << 16;
