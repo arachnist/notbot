@@ -30,9 +30,7 @@ pub use matrix_sdk::ruma::events::room::{
 pub use matrix_sdk::ruma::events::{
     AnyStateEvent, AnySyncTimelineEvent, AnyTimelineEvent, Mentions,
 };
-pub use matrix_sdk::ruma::{
-    OwnedEventId, OwnedRoomAliasId, OwnedRoomId, OwnedUserId, UserId,
-};
+pub use matrix_sdk::ruma::{OwnedEventId, OwnedRoomAliasId, OwnedRoomId, OwnedUserId, UserId};
 pub use matrix_sdk::{Client, Room};
 
 pub use tokio::sync::mpsc;

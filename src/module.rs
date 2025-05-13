@@ -938,6 +938,7 @@ pub fn init_modules(
         crate::sage::starter,
         crate::alerts::starter,
         crate::autojoiner::starter,
+        crate::forgejo::starter,
     ] {
         match starter(mx, config) {
             Err(e) => error!("module initialization failed fatally: {e}"),
@@ -952,7 +953,11 @@ pub fn init_modules(
         };
     }
 
-    for starter in [crate::webterface::workers, crate::spaceapi::workers] {
+    for starter in [
+        crate::webterface::workers,
+        crate::spaceapi::workers,
+        crate::forgejo::workers,
+    ] {
         match starter(mx, config) {
             Err(e) => error!("module initialization failed fatally: {e}"),
             Ok(m) => workers.extend(m),
