@@ -314,6 +314,53 @@ pub struct ModuleInfo {
 }
 
 impl ModuleInfo {
+    /// Builds a new ModuleInfo object, taking care of creating channels, and spawning the consumer
+    pub fn new<C, Fut>(
+        name: &str,
+        help: &str,
+        acl: Vec<Acl>,
+        trigger: TriggerType,
+        error_prefix: Option<&str>,
+        config: C,
+        processor: impl Fn(ConsumerEvent, C) -> Fut + Send + 'static,
+    ) -> ModuleInfo
+    where
+        C: Clone + Send + Sync + 'static,
+        Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
+    {
+        let owned_error_prefix = error_prefix.map(str::to_owned);
+        let (tx, rx) = mpsc::channel(1);
+        Self::spawn_inner(name, owned_error_prefix.clone(), rx, config, processor);
+
+        ModuleInfo {
+            name: name.to_owned(),
+            help: help.to_owned(),
+            acl,
+            trigger,
+            channel: tx,
+            error_prefix: owned_error_prefix,
+        }
+    }
+
+    fn spawn_inner<C, Fut>(
+        name: &str,
+        error_prefix: Option<String>,
+        rx: mpsc::Receiver<ConsumerEvent>,
+        config: C,
+        processor: impl Fn(ConsumerEvent, C) -> Fut + Send + 'static,
+    ) where
+        C: Clone + Send + Sync + 'static,
+        Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
+    {
+        tokio::task::spawn(Self::consumer(
+            rx,
+            config.clone(),
+            error_prefix.clone(),
+            processor,
+            name.to_owned(),
+        ));
+    }
+
     /// Convenience function to spawn generic event channel consumer.
     ///
     /// Spawns a new tokio task dedicated to receiving events from the module mpsc
