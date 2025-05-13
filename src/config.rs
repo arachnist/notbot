@@ -162,7 +162,10 @@ impl Config {
 
         let config: C = match inner.module[n].clone().try_into() {
             Ok(c) => c,
-            Err(_) => return Err(ConfigError::ModuleConfigDeserialize),
+            Err(e) => {
+                error!("error: {e}");
+                return Err(ConfigError::ModuleConfigDeserialize);
+            }
         };
 
         Ok(config)
