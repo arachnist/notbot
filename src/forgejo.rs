@@ -46,63 +46,47 @@
 use crate::prelude::*;
 
 use std::fmt::Debug;
-use std::str::FromStr;
-
-// use convert_case::{Case, Casing};
-use serde::{de, Deserialize, Deserializer};
-use strum::{EnumString, IntoStaticStr};
 
 use tokio::time::{interval, Duration};
 
 use forgejo_api::structs::ActivityOpType;
 use forgejo_api::{Auth, Forgejo};
 
-/*
-/// Action types in the activity feed.
-/// List taken directly from Forgejo [api docs](https://code.hackerspace.pl/api/swagger#/organization/orgListActivityFeeds)
-#[derive(Clone, Debug, PartialEq, EnumString, IntoStaticStr, strum::Display)]
-#[strum(serialize_all = "snake_case")]
-#[allow(missing_docs)]
-pub enum ActivityOpType {
-    CreateRepo,
-    RenameRepo,
-    StarRepo,
-    WatchRepo,
-    CommitRepo,
-    CreateIssue,
-    CreatePullRequest,
-    TransferRepo,
-    PushTag,
-    CommentIssue,
-    MergePullRequest,
-    CloseIssue,
-    ReopenIssue,
-    ClosePullRequest,
-    ReopenPullRequest,
-    DeleteTag,
-    DeleteBranch,
-    MirrorSyncPush,
-    MirrorSyncCreate,
-    MirrorSyncDelete,
-    ApprovePullRequest,
-    RejectPullRequest,
-    CommentPull,
-    PublishRelease,
-    PullReviewDismissed,
-    PullRequestReadyForReview,
-    AutoMergePullRequest,
-}
-
-impl<'de> Deserialize<'de> for ActivityOpType {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        FromStr::from_str(&s).map_err(de::Error::custom)
+/// Turns the ActivityOpType into a human readable string, admittedly somewhat naively.
+pub fn verb_from_activity_type(act: ActivityOpType) -> String {
+    use ActivityOpType::*;
+    match act {
+        CreateRepo => "created repository",
+        RenameRepo => "renamed repository",
+        StarRepo => "starred",
+        WatchRepo => "started watching",
+        CommitRepo => "commited to",
+        CreateIssue => "created issue in",
+        CreatePullRequest => "created pull request in",
+        TransferRepo => "transferred",
+        PushTag => "pushed tag in",
+        CommentIssue => "commented on issue in",
+        MergePullRequest => "merged pull request in",
+        CloseIssue => "closed issue in",
+        ReopenIssue => "reopened issue in",
+        ClosePullRequest => "closed pull request in",
+        ReopenPullRequest => "reopened pull request in",
+        DeleteTag => "deleted tag in",
+        DeleteBranch => "deleted branch in",
+        MirrorSyncPush => "mirror operation has pushed sync to",
+        MirrorSyncCreate => "mirror has created",
+        MirrorSyncDelete => "mirror has deleted",
+        ApprovePullRequest => "has approved pull request in",
+        RejectPullRequest => "has rejected pull request in",
+        CommentPull => "has commented on pull request in",
+        PublishRelease => "has published release for",
+        PullReviewDismissed => "has dismissed pull review in",
+        PullRequestReadyForReview => "has marked pull request as ready for review in",
+        AutoMergePullRequest => "has automatically merged pull request in",
+        // _ => todo!(), rustc doesn't like the possibility that forgejo might implement more features ;)
     }
+    .s()
 }
-*/
 
 /// Configuration of a forgejo instance.
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -131,9 +115,11 @@ pub fn forgejo_events_default() -> Vec<ActivityOpType> {
         PullRequestReadyForReview,
         ApprovePullRequest,
         RejectPullRequest,
+        ReopenPullRequest,
         CreateIssue,
         CloseIssue,
         ReopenIssue,
+        CreateRepo,
     ]
 }
 
@@ -272,7 +258,7 @@ pub(crate) fn workers(mx: &Client, config: &Config) -> anyhow::Result<Vec<Worker
 }
 
 /// Worker spawning forgejo feeds processor in configured intervals.
-pub async fn forgejo_feeds(_mx: Client, module_config: ForgejoConfig) -> anyhow::Result<()> {
+pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::Result<()> {
     let mut interval = interval(Duration::from_secs(60 * module_config.feed_interval));
     // (instance name, org)
     let mut first_loop: HashMap<String, bool> = Default::default();
@@ -348,19 +334,126 @@ pub async fn forgejo_feeds(_mx: Client, module_config: ForgejoConfig) -> anyhow:
                 activities.insert((name.to_owned(), org.to_owned()), new_known_activities);
             }
 
+            /* it's easier for us to test things if we display first loop
             if first_loop.get(name).unwrap().to_owned() {
                 first_loop.insert(name.to_owned(), false);
                 continue;
             }
+            */
+
+            let mut html_parts: Vec<String> = vec![];
+            let mut plain_parts: Vec<String> = vec![];
 
             for act in potentially_pushed_activities {
-                if let Some(repo) = act.repo {
-                    // can .unwrap(): only inserted when .is_some_and()
-                    debug!(
-                        "repo {:?} new {:?}",
-                        repo.full_name.unwrap(),
-                        act.op_type.unwrap(),
+                use ActivityOpType::*;
+
+                let maybe_plain_user: String;
+                let maybe_html_user: String;
+
+                if act.act_user.clone().is_some_and(|u| u.login.is_some()) {
+                    maybe_plain_user = act.act_user.clone().unwrap().login.unwrap();
+                    maybe_html_user = if let Some(url) = act.act_user.unwrap().html_url {
+                        format!(r#"<a href="{}">{}</a>"#, url.as_str(), maybe_plain_user,)
+                    } else {
+                        maybe_plain_user.clone()
+                    };
+                } else {
+                    maybe_plain_user = "".s();
+                    maybe_html_user = "".s();
+                }
+
+                // can .unwrap(): we require this field to exist above
+                let action_verb = verb_from_activity_type(act.op_type.unwrap());
+
+                let maybe_plain_target: String;
+                let maybe_html_target: String;
+
+                if act
+                    .repo
+                    .clone()
+                    .is_some_and(|r| r.name.is_some() && r.html_url.is_some())
+                {
+                    maybe_plain_target = format!(
+                        "{repo_name}:   ",
+                        repo_name = act.repo.clone().unwrap().name.unwrap(),
                     );
+                    maybe_html_target = format!(
+                        r#"<a href="{url}">{name}</a>"#,
+                        url = act.repo.clone().unwrap().html_url.unwrap(),
+                        name = maybe_plain_target,
+                    );
+                } else {
+                    maybe_plain_target = "idk where, couldn't decode".s();
+                    maybe_html_target = "idk where, couldn't decode".s();
+                }
+
+                let maybe_action_content_plain;
+                let maybe_action_content_html;
+
+                match act.op_type.clone().unwrap() {
+                    CreatePullRequest | ReopenPullRequest if act.content.is_some() => {
+                        let content = act.content.unwrap();
+                        let mut parts = content.splitn(2, '|');
+                        let pr_nr = parts.next().unwrap();
+                        let pr_title = if let Some(parts) = parts.next() {
+                            unicode_ellipsis::truncate_str(parts, 60).into_owned()
+                        } else {
+                            "".s()
+                        };
+
+                        let pr_url = format!(
+                            "{base_url}/pulls/{pr_nr}",
+                            base_url = act.repo.unwrap().html_url.unwrap(),
+                        );
+
+                        maybe_action_content_plain = format!("#{pr_nr} {pr_title}",);
+                        maybe_action_content_html =
+                            format!(r#"<a href="{pr_url}">#{pr_nr} {pr_title}</a>"#,);
+                    }
+                    _ => {
+                        maybe_action_content_plain = format!(
+                            "sorry, can't handle {:?} properly yet",
+                            act.op_type.unwrap()
+                        );
+                        maybe_action_content_html = format!(
+                            "sorry, can't handle {:?} properly yet",
+                            act.op_type.unwrap()
+                        );
+                    }
+                };
+
+                let plain_action_message = format!(
+                    "{maybe_plain_user} {action_verb} {maybe_plain_target} {maybe_action_content_plain}"
+                );
+                let html_action_message = format!(
+                    "{maybe_html_user} {action_verb} {maybe_html_target} {maybe_action_content_html}"
+                );
+
+                plain_parts.push(plain_action_message);
+                html_parts.push(html_action_message);
+            }
+
+            if plain_parts.is_empty() {
+                continue;
+            };
+
+            let plain_response = plain_parts.join("\n");
+            let html_response = html_parts.join("<br/>");
+
+            for room_name in &config.feed_rooms {
+                let room = match maybe_get_room(&mx, &room_name).await {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
+
+                if let Err(e) = room
+                    .send(RoomMessageEventContent::text_html(
+                        plain_response.clone(),
+                        html_response.clone(),
+                    ))
+                    .await
+                {
+                    error!("failed to send message: {e}");
                 }
             }
         }
