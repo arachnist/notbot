@@ -220,7 +220,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::bail;
 use futures::Future;
 use prometheus::{opts, register_int_counter_vec, IntCounterVec};
-use serde::de;
 use tracing::{debug, error, info, trace, warn};
 
 use matrix_sdk::event_handler::{Ctx, EventHandlerHandle};
@@ -325,7 +324,7 @@ impl ModuleInfo {
         config: C,
         processor: impl Fn(ConsumerEvent, C) -> Fut + Send + 'static,
     ) where
-        C: de::DeserializeOwned + Clone + Send + Sync + 'static,
+        C: Clone + Send + Sync + 'static,
         Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
     {
         tokio::task::spawn(Self::consumer(
@@ -349,7 +348,7 @@ impl ModuleInfo {
         name: String,
     ) -> anyhow::Result<()>
     where
-        C: de::DeserializeOwned + Clone + Send + Sync,
+        C: Clone + Send + Sync,
         Fut: Future<Output = anyhow::Result<()>>,
     {
         loop {
