@@ -1155,6 +1155,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 
 [[package]]
+name = "forgejo-api"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2cb702a4015d636ef784634ece1565e791618a76e0ef8a582a7f9c4b86927d1"
+dependencies = [
+ "base64ct",
+ "bytes",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "soft_assert",
+ "thiserror 1.0.69",
+ "time",
+ "tokio",
+ "url",
+ "zeroize",
+]
+
+[[package]]
 name = "form_urlencoded"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2467,6 +2486,7 @@ dependencies = [
  "crc32fast",
  "deadpool-postgres",
  "expiringmap",
+ "forgejo-api",
  "futures",
  "http",
  "http-body-util",
@@ -3333,6 +3353,7 @@ dependencies = [
  "js-sys",
  "log",
  "mime",
+ "mime_guess",
  "native-tls",
  "once_cell",
  "percent-encoding",
@@ -3961,6 +3982,12 @@ dependencies = [
  "libc",
  "windows-sys 0.52.0",
 ]
+
+[[package]]
+name = "soft_assert"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5097ec7ea7218135541ad96348f1441d0c616537dd4ed9c47205920c35d7d97"
 
 [[package]]
 name = "spin"

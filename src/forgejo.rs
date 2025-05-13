@@ -54,12 +54,16 @@ use strum::{EnumString, IntoStaticStr};
 
 use tokio::time::{interval, Duration};
 
+use forgejo_api::structs::ActivityOpType;
+use forgejo_api::{Auth, Forgejo};
+
+/*
 /// Action types in the activity feed.
 /// List taken directly from Forgejo [api docs](https://code.hackerspace.pl/api/swagger#/organization/orgListActivityFeeds)
 #[derive(Clone, Debug, PartialEq, EnumString, IntoStaticStr, strum::Display)]
 #[strum(serialize_all = "snake_case")]
 #[allow(missing_docs)]
-pub enum ForgejoFeedOpType {
+pub enum ActivityOpType {
     CreateRepo,
     RenameRepo,
     StarRepo,
@@ -89,7 +93,7 @@ pub enum ForgejoFeedOpType {
     AutoMergePullRequest,
 }
 
-impl<'de> Deserialize<'de> for ForgejoFeedOpType {
+impl<'de> Deserialize<'de> for ActivityOpType {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -98,9 +102,10 @@ impl<'de> Deserialize<'de> for ForgejoFeedOpType {
         FromStr::from_str(&s).map_err(de::Error::custom)
     }
 }
+*/
 
 /// Configuration of a forgejo instance.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 pub struct ForgejoInstance {
     /// Base instance URL.
     pub instance_url: String,
@@ -114,12 +119,12 @@ pub struct ForgejoInstance {
     pub feed_rooms: Vec<String>,
     /// Event types to post about
     #[serde(default = "forgejo_events_default")]
-    pub events: Vec<ForgejoFeedOpType>,
+    pub events: Vec<ActivityOpType>,
 }
 
 /// Default event types to post notifications for
-pub fn forgejo_events_default() -> Vec<ForgejoFeedOpType> {
-    use ForgejoFeedOpType::*;
+pub fn forgejo_events_default() -> Vec<ActivityOpType> {
+    use ActivityOpType::*;
     vec![
         CreatePullRequest,
         MergePullRequest,
@@ -267,17 +272,97 @@ pub(crate) fn workers(mx: &Client, config: &Config) -> anyhow::Result<Vec<Worker
 }
 
 /// Worker spawning forgejo feeds processor in configured intervals.
-pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::Result<()> {
-    let mut interval = interval(Duration::from_secs(module_config.feed_interval));
+pub async fn forgejo_feeds(_mx: Client, module_config: ForgejoConfig) -> anyhow::Result<()> {
+    let mut interval = interval(Duration::from_secs(60 * module_config.feed_interval));
+    // (instance name, org)
+    let mut first_loop: HashMap<String, bool> = Default::default();
+    // (name, instance)
+    let mut instances: HashMap<String, Forgejo> = Default::default();
+    // (instance name, org)
+    let mut activities: HashMap<(String, String), Vec<forgejo_api::structs::Activity>> =
+        Default::default();
+
+    for (name, config) in module_config.instances.clone() {
+        let auth = Auth::Token(&config.token_secret);
+        let forgejo = match Forgejo::new(auth, config.instance_url.parse().unwrap()) {
+            Ok(f) => f,
+            Err(e) => {
+                error!("invalid forgejo configuration: {e}");
+                continue;
+            }
+        };
+        instances.insert(name.clone(), forgejo);
+        first_loop.insert(name.to_owned(), true);
+    }
 
     loop {
         interval.tick().await;
 
-        for (name, instance_config) in module_config.instances.iter() {
+        for (name, forgejo) in instances.iter() {
             debug!("processing feeds for instance: {name}");
-            if let Err(e) = forgejo_feeds_processor(&mx, &instance_config).await {
-                error!("error processing feeds for: {name}, {e}");
-            };
+
+            // can .unwrap(): instances hash is created based on module_config
+            let config = module_config.instances.get(name).unwrap();
+            let mut potentially_pushed_activities = vec![];
+
+            for org in &config.organizations {
+                let query = forgejo_api::structs::OrgListActivityFeedsQuery {
+                    date: None,
+                    page: None,
+                    limit: None,
+                };
+                let (_, returned_activities) =
+                    match forgejo.org_list_activity_feeds(&org, query).await {
+                        Ok(v) => v,
+                        Err(e) => {
+                            error!("error fetching org {org} activity feed: {e}");
+                            continue;
+                        }
+                    };
+
+                let known_act_ids: Vec<i64>;
+                let mut new_known_activities = vec![];
+
+                if let Some(known_act) = activities.get(&(name.to_owned(), org.to_owned())) {
+                    // can .unwrap(): activites get added to known list only if id.is_some()
+                    known_act_ids = known_act.iter().map(|a| a.id.unwrap()).collect();
+                } else {
+                    activities.insert((name.to_owned(), org.to_owned()), vec![]);
+                    known_act_ids = vec![];
+                };
+
+                for activity in returned_activities {
+                    if let Some(a_id) = activity.id {
+                        new_known_activities.push(activity.clone());
+                        if !known_act_ids.contains(&a_id) {
+                            if activity
+                                .op_type
+                                .is_some_and(|op| config.events.contains(&op))
+                            {
+                                potentially_pushed_activities.push(activity);
+                            }
+                        }
+                    }
+                }
+
+                activities.insert((name.to_owned(), org.to_owned()), new_known_activities);
+            }
+
+            if first_loop.get(name).unwrap().to_owned() {
+                first_loop.insert(name.to_owned(), false);
+                continue;
+            }
+
+            for act in potentially_pushed_activities {
+                if let Some(repo) = act.repo {
+                    // can .unwrap(): only inserted when .is_some_and()
+                    debug!(
+                        "repo {:?} new {:?}",
+                        repo.full_name.unwrap(),
+                        act.op_type.unwrap(),
+                    );
+                }
+            }
         }
     }
 }
@@ -287,5 +372,9 @@ pub async fn forgejo_feeds_processor(
     _mx: &Client,
     _instance: &ForgejoInstance,
 ) -> anyhow::Result<()> {
+    /* let url = format!(
+        "{instance_url}/api/v1/orgs/{organization}/activities/feeds",
+    */
+
     Ok(())
 }
