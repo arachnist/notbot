@@ -331,15 +331,17 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
                     }
                 }
 
+                trace!("new known len: {}", new_known_activities.len());
+                trace!("old known len: {}", known_act_ids.len());
+
                 activities.insert((name.to_owned(), org.to_owned()), new_known_activities);
             }
 
-            /* it's easier for us to test things if we display first loop
             if first_loop.get(name).unwrap().to_owned() {
                 first_loop.insert(name.to_owned(), false);
+
                 continue;
             }
-            */
 
             let mut html_parts: Vec<String> = vec![];
             let mut plain_parts: Vec<String> = vec![];
@@ -458,16 +460,4 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
             }
         }
     }
-}
-
-/// Processes Forgejo feeds, and sends messages to rooms when applicable.
-pub async fn forgejo_feeds_processor(
-    _mx: &Client,
-    _instance: &ForgejoInstance,
-) -> anyhow::Result<()> {
-    /* let url = format!(
-        "{instance_url}/api/v1/orgs/{organization}/activities/feeds",
-    */
-
-    Ok(())
 }

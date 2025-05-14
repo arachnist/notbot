@@ -1003,6 +1003,7 @@ pub fn init_modules(
         crate::webterface::workers,
         crate::spaceapi::workers,
         crate::forgejo::workers,
+        crate::gerrit::workers,
     ] {
         match starter(mx, config) {
             Err(e) => error!("module initialization failed fatally: {e}"),

@@ -9,6 +9,7 @@ pub mod botmanager;
 pub mod config;
 pub mod db;
 pub mod forgejo;
+pub mod gerrit;
 pub mod inviter;
 pub mod kasownik;
 pub mod klaczdb;
