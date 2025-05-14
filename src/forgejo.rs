@@ -262,7 +262,7 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
                     limit: None,
                 };
                 let (_, returned_activities) =
-                    match forgejo.org_list_activity_feeds(&org, query).await {
+                    match forgejo.org_list_activity_feeds(org, query).await {
                         Ok(v) => v,
                         Err(e) => {
                             error!("error fetching org {org} activity feed: {e}");
@@ -284,13 +284,12 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
                 for activity in returned_activities {
                     if let Some(a_id) = activity.id {
                         new_known_activities.push(activity.clone());
-                        if !known_act_ids.contains(&a_id) {
-                            if activity
+                        if !known_act_ids.contains(&a_id)
+                            && activity
                                 .op_type
                                 .is_some_and(|op| config.events.contains(&op))
-                            {
-                                potentially_pushed_activities.push(activity);
-                            }
+                        {
+                            potentially_pushed_activities.push(activity);
                         }
                     }
                 }
@@ -340,7 +339,7 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
             let html_response = html_parts.join("<br/>");
 
             for room_name in &config.feed_rooms {
-                let room = match maybe_get_room(&mx, &room_name).await {
+                let room = match maybe_get_room(&mx, room_name).await {
                     Ok(r) => r,
                     Err(_) => continue,
                 };
@@ -532,7 +531,7 @@ pub mod activity_fmt {
 
     /// Shows user configured name or shortened username.
     pub fn act_user_display_name(user: User) -> Option<String> {
-        if user.clone().full_name.is_some_and(|n| n.len() > 0) {
+        if user.clone().full_name.is_some_and(|n| !n.is_empty()) {
             Some(user.full_name?.trim().to_owned())
         } else {
             act_user_short(user)

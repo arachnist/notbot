@@ -27,8 +27,7 @@
 
 use crate::prelude::*;
 
-use gerrit_api::{gerrit_decode_json, ChangeInfo};
-use reqwest::ClientBuilder;
+use gerrit_api::{gerrit_fetch, ChangeInfo};
 use tokio::time::{interval, Duration};
 
 /// Configuration of a specific queried Gerrit instance
@@ -47,7 +46,7 @@ pub struct GerritInstance {
 }
 
 fn query() -> Vec<(String, String)> {
-    vec![("status", "open"), ("project", "hscloud"), ("-is", "wip")]
+    [("status", "open"), ("project", "hscloud"), ("-is", "wip")]
         .iter()
         .map(|(k, v)| (k.s(), v.s()))
         .collect()
@@ -92,11 +91,8 @@ pub async fn gerrit_feeds(mx: Client, module_config: GerritConfig) -> anyhow::Re
     let mut first_loop: HashMap<String, bool> = Default::default();
     let mut change_ids: HashMap<String, Vec<String>> = Default::default();
     let mut known_users: HashMap<(String, u64), String> = Default::default();
-    let client = ClientBuilder::new()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()?;
 
-    for (name, _) in &module_config.instances {
+    for name in module_config.instances.keys() {
         first_loop.insert(name.to_owned(), true);
         change_ids.insert(name.to_owned(), vec![]);
     }
@@ -116,13 +112,7 @@ pub async fn gerrit_feeds(mx: Client, module_config: GerritConfig) -> anyhow::Re
                     .join("+")
             );
 
-            let data = match async || -> anyhow::Result<Vec<ChangeInfo>> {
-                let text = client.get(changes_url).send().await?.text().await?;
-                let data: Vec<ChangeInfo> = gerrit_decode_json(text)?;
-                Ok(data)
-            }()
-            .await
-            {
+            let data: Vec<ChangeInfo> = match gerrit_fetch(changes_url).await {
                 Ok(v) => v,
                 Err(e) => {
                     error!("fetching/decoding changes failed: {e}");
@@ -149,13 +139,7 @@ pub async fn gerrit_feeds(mx: Client, module_config: GerritConfig) -> anyhow::Re
                     );
 
                     trace!("user url: {user_url}");
-                    let username = match async || -> anyhow::Result<String> {
-                        let text = client.get(user_url).send().await?.text().await?;
-                        let data: String = gerrit_decode_json(text)?;
-                        Ok(data)
-                    }()
-                    .await
-                    {
+                    let username: String = match gerrit_fetch(user_url).await {
                         Ok(v) => v,
                         Err(e) => {
                             error!("fetching/decoding username failed: {e}");
@@ -212,7 +196,7 @@ pub async fn gerrit_feeds(mx: Client, module_config: GerritConfig) -> anyhow::Re
             let html_response = html_parts.join("<br/>");
 
             for room_name in &instance.feed_rooms {
-                let room = match maybe_get_room(&mx, &room_name).await {
+                let room = match maybe_get_room(&mx, room_name).await {
                     Ok(r) => r,
                     Err(_) => continue,
                 };
@@ -234,6 +218,7 @@ pub async fn gerrit_feeds(mx: Client, module_config: GerritConfig) -> anyhow::Re
 pub mod gerrit_api {
     //! Helper functions for interacting with Gerrit json APIs
     use anyhow::bail;
+    use reqwest::ClientBuilder;
     use serde::de;
     use serde_derive::Deserialize;
     use serde_json::Value;
@@ -245,6 +230,16 @@ pub mod gerrit_api {
             None => bail!("this does not look like a gerrit response"),
             Some(data) => Ok(serde_json::from_str(data)?),
         }
+    }
+
+    /// Fetches contents of the provided url, and
+    pub async fn gerrit_fetch<D: de::DeserializeOwned>(url: String) -> anyhow::Result<D> {
+        let client = ClientBuilder::new()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?;
+
+        let text = client.get(url).send().await?.text().await?;
+        gerrit_decode_json(text)
     }
 
     /// Structure describing information about a change returned from Gerrit
