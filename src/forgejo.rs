@@ -62,7 +62,7 @@ pub struct ForgejoInstance {
     /// Generated token secret.
     pub token_secret: String,
     /// Organization to observe changes in.
-    pub organizations: Vec<String>,
+    pub organization: String,
     /// Room to post updates to.
     pub feed_rooms: Vec<String>,
     /// Event types to post about
@@ -97,7 +97,7 @@ pub struct ForgejoConfig {
     pub feed_interval: u64,
     /// How many issues/PRs should be returned on active queries
     #[serde(default = "objects_count")]
-    pub objects_count: u64,
+    pub objects_count: u16,
     /// Map of Forgejo instances to query and observe
     pub instances: HashMap<String, ForgejoInstance>,
     /// Keywords for displaying list of latest open pull requests.
@@ -120,7 +120,7 @@ pub fn feed_interval() -> u64 {
 }
 
 /// Default value for returned objects count: 3
-pub fn objects_count() -> u64 {
+pub fn objects_count() -> u16 {
     3
 }
 
@@ -188,23 +188,130 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
     ])
 }
 
+#[derive(thiserror::Error, Debug)]
+enum EarlyFailCheck {
+    #[error("no instances configured")]
+    NoInstancesConfigured,
+    #[error("argument provided was not found")]
+    ProvidedNotFound,
+    #[error("no argument provided and >1 instance configured")]
+    NotProvidedMany,
+}
+
+async fn early_fail(
+    event: ConsumerEvent,
+    config: &ForgejoConfig,
+) -> anyhow::Result<(String, Forgejo)> {
+    use EarlyFailCheck::*;
+
+    let instance = if config.instances.keys().len() == 0 {
+        event
+            .room
+            .send(RoomMessageEventContent::text_plain(
+                "No instances configured",
+            ))
+            .await?;
+        return Err(NoInstancesConfigured.into());
+    } else if event.args.is_none() {
+        if config.instances.keys().len() == 1 {
+            config
+                .instances
+                .iter()
+                .map(|(_, v)| v)
+                .last()
+                .unwrap()
+                .to_owned()
+        } else {
+            event
+                .room
+                .send(RoomMessageEventContent::text_plain(
+                    "No arguments provided and more than one instance configured",
+                ))
+                .await?;
+            return Err(NotProvidedMany.into());
+        }
+    } else {
+        if config
+            .instances
+            .contains_key(&event.args.clone().ok_or(anyhow!("wtf?"))?)
+        {
+            config
+                .instances
+                .get(&event.args.unwrap())
+                .unwrap()
+                .to_owned()
+        } else {
+            event
+                .room
+                .send(RoomMessageEventContent::text_plain(
+                    "Argument provided but not found",
+                ))
+                .await?;
+            return Err(ProvidedNotFound.into());
+        }
+    };
+
+    let auth = Auth::Token(&instance.token_secret);
+    let forgejo = Forgejo::new(auth, instance.instance_url.parse().unwrap())?;
+
+    Ok((instance.organization, forgejo))
+}
+
 /// Display list of latest open pull requests.
-pub async fn pr_new(_event: ConsumerEvent, _config: ForgejoConfig) -> anyhow::Result<()> {
+pub async fn pr_new(event: ConsumerEvent, config: ForgejoConfig) -> anyhow::Result<()> {
+    use forgejo_api::structs::*;
+    let (organization, forgejo) = early_fail(event.clone(), &config).await?;
+    let repo_query = OrgListReposQuery {
+        page: Some(1),
+        limit: Some(0),
+    };
+
+    let pr_query = RepoListPullRequestsQuery {
+        state: Some(RepoListPullRequestsQueryState::Open),
+        sort: None,
+        milestone: None,
+        labels: None,
+        poster: None,
+        page: None,
+        limit: None,
+    };
+
+    let mut pull_requests: Vec<PullRequest> = vec![];
+
+    let (_, repos) = forgejo.org_list_repos(&organization, repo_query).await?;
+
+    for repo in repos {
+        if repo.has_pull_requests.is_some_and(|x| x) {
+            let (_, pulls) = forgejo
+                .repo_list_pull_requests(&organization, &repo.name.unwrap(), pr_query.clone())
+                .await?;
+            pull_requests.extend(pulls);
+        }
+    }
+
+    let mut response_parts_html: Vec<String> = vec![];
+    let mut response_parts_plain: Vec<String> = vec![];
+
+    pull_requests.sort_by_key(|pr| pr.updated_at.unwrap());
+
+    for pr in pull_requests.iter().rev().take(config.objects_count.into()) {
+        trace!("pr: {:#?}", pr.title);
+    }
     Ok(())
 }
 
 /// Display list of oldest open pull requests.
-pub async fn pr_old(_event: ConsumerEvent, _config: ForgejoConfig) -> anyhow::Result<()> {
+pub async fn pr_old(event: ConsumerEvent, config: ForgejoConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
 /// Display list of latest open issues.
-pub async fn issue_new(_event: ConsumerEvent, _config: ForgejoConfig) -> anyhow::Result<()> {
+pub async fn issue_new(event: ConsumerEvent, config: ForgejoConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
 /// Display list of oldest open issues.
-pub async fn issue_old(_event: ConsumerEvent, _config: ForgejoConfig) -> anyhow::Result<()> {
+pub async fn issue_old(event: ConsumerEvent, config: ForgejoConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
@@ -255,47 +362,46 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
             let config = module_config.instances.get(name).unwrap();
             let mut potentially_pushed_activities = vec![];
 
-            for org in &config.organizations {
-                let query = forgejo_api::structs::OrgListActivityFeedsQuery {
-                    date: None,
-                    page: None,
-                    limit: None,
-                };
-                let (_, returned_activities) =
-                    match forgejo.org_list_activity_feeds(org, query).await {
-                        Ok(v) => v,
-                        Err(e) => {
-                            error!("error fetching org {org} activity feed: {e}");
-                            continue;
-                        }
-                    };
+            let org = &config.organization;
 
-                let known_act_ids: Vec<i64>;
-                let mut new_known_activities = vec![];
+            let query = forgejo_api::structs::OrgListActivityFeedsQuery {
+                date: None,
+                page: None,
+                limit: None,
+            };
+            let (_, returned_activities) = match forgejo.org_list_activity_feeds(org, query).await {
+                Ok(v) => v,
+                Err(e) => {
+                    error!("error fetching org {org} activity feed: {e}");
+                    continue;
+                }
+            };
 
-                if let Some(known_act) = activities.get(&(name.to_owned(), org.to_owned())) {
-                    // can .unwrap(): activites get added to known list only if id.is_some()
-                    known_act_ids = known_act.iter().map(|a| a.id.unwrap()).collect();
-                } else {
-                    activities.insert((name.to_owned(), org.to_owned()), vec![]);
-                    known_act_ids = vec![];
-                };
+            let known_act_ids: Vec<i64>;
+            let mut new_known_activities = vec![];
 
-                for activity in returned_activities {
-                    if let Some(a_id) = activity.id {
-                        new_known_activities.push(activity.clone());
-                        if !known_act_ids.contains(&a_id)
-                            && activity
-                                .op_type
-                                .is_some_and(|op| config.events.contains(&op))
-                        {
-                            potentially_pushed_activities.push(activity);
-                        }
+            if let Some(known_act) = activities.get(&(name.to_owned(), org.to_owned())) {
+                // can .unwrap(): activites get added to known list only if id.is_some()
+                known_act_ids = known_act.iter().map(|a| a.id.unwrap()).collect();
+            } else {
+                activities.insert((name.to_owned(), org.to_owned()), vec![]);
+                known_act_ids = vec![];
+            };
+
+            for activity in returned_activities {
+                if let Some(a_id) = activity.id {
+                    new_known_activities.push(activity.clone());
+                    if !known_act_ids.contains(&a_id)
+                        && activity
+                            .op_type
+                            .is_some_and(|op| config.events.contains(&op))
+                    {
+                        potentially_pushed_activities.push(activity);
                     }
                 }
-
-                activities.insert((name.to_owned(), org.to_owned()), new_known_activities);
             }
+
+            activities.insert((name.to_owned(), org.to_owned()), new_known_activities);
 
             if first_loop.get(name).unwrap().to_owned() {
                 first_loop.insert(name.to_owned(), false);
