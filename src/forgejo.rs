@@ -49,44 +49,8 @@ use std::fmt::Debug;
 
 use tokio::time::{interval, Duration};
 
-use forgejo_api::structs::ActivityOpType;
+use forgejo_api::structs::{Activity, ActivityOpType};
 use forgejo_api::{Auth, Forgejo};
-
-/// Turns the ActivityOpType into a human readable string, admittedly somewhat naively.
-pub fn verb_from_activity_type(act: ActivityOpType) -> String {
-    use ActivityOpType::*;
-    match act {
-        CreateRepo => "created repository",
-        RenameRepo => "renamed repository",
-        StarRepo => "starred",
-        WatchRepo => "started watching",
-        CommitRepo => "commited to",
-        CreateIssue => "created issue in",
-        CreatePullRequest => "created pull request in",
-        TransferRepo => "transferred",
-        PushTag => "pushed tag in",
-        CommentIssue => "commented on issue in",
-        MergePullRequest => "merged pull request in",
-        CloseIssue => "closed issue in",
-        ReopenIssue => "reopened issue in",
-        ClosePullRequest => "closed pull request in",
-        ReopenPullRequest => "reopened pull request in",
-        DeleteTag => "deleted tag in",
-        DeleteBranch => "deleted branch in",
-        MirrorSyncPush => "mirror operation has pushed sync to",
-        MirrorSyncCreate => "mirror has created",
-        MirrorSyncDelete => "mirror has deleted",
-        ApprovePullRequest => "has approved pull request in",
-        RejectPullRequest => "has rejected pull request in",
-        CommentPull => "has commented on pull request in",
-        PublishRelease => "has published release for",
-        PullReviewDismissed => "has dismissed pull review in",
-        PullRequestReadyForReview => "has marked pull request as ready for review in",
-        AutoMergePullRequest => "has automatically merged pull request in",
-        // _ => todo!(), rustc doesn't like the possibility that forgejo might implement more features ;)
-    }
-    .s()
-}
 
 /// Configuration of a forgejo instance.
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -331,9 +295,6 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
                     }
                 }
 
-                trace!("new known len: {}", new_known_activities.len());
-                trace!("old known len: {}", known_act_ids.len());
-
                 activities.insert((name.to_owned(), org.to_owned()), new_known_activities);
             }
 
@@ -348,27 +309,20 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
 
             for act in potentially_pushed_activities {
                 use ActivityOpType::*;
+                let html_action_message = activities::activity_matrix_html(act.clone()).unwrap();
 
                 let maybe_plain_user: String;
-                let maybe_html_user: String;
 
                 if act.act_user.clone().is_some_and(|u| u.login.is_some()) {
                     maybe_plain_user = act.act_user.clone().unwrap().login.unwrap();
-                    maybe_html_user = if let Some(url) = act.act_user.unwrap().html_url {
-                        format!(r#"<a href="{}">{}</a>"#, url.as_str(), maybe_plain_user,)
-                    } else {
-                        maybe_plain_user.clone()
-                    };
                 } else {
                     maybe_plain_user = "".s();
-                    maybe_html_user = "".s();
                 }
 
                 // can .unwrap(): we require this field to exist above
-                let action_verb = verb_from_activity_type(act.op_type.unwrap());
+                let action_verb = activities::activity_descr(act.op_type.unwrap());
 
                 let maybe_plain_target: String;
-                let maybe_html_target: String;
 
                 if act
                     .repo
@@ -379,18 +333,11 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
                         "{repo_name}:   ",
                         repo_name = act.repo.clone().unwrap().name.unwrap(),
                     );
-                    maybe_html_target = format!(
-                        r#"<a href="{url}">{name}</a>"#,
-                        url = act.repo.clone().unwrap().html_url.unwrap(),
-                        name = maybe_plain_target,
-                    );
                 } else {
                     maybe_plain_target = "idk where, couldn't decode".s();
-                    maybe_html_target = "idk where, couldn't decode".s();
                 }
 
                 let maybe_action_content_plain;
-                let maybe_action_content_html;
 
                 match act.op_type.clone().unwrap() {
                     CreatePullRequest | ReopenPullRequest if act.content.is_some() => {
@@ -408,16 +355,10 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
                             base_url = act.repo.unwrap().html_url.unwrap(),
                         );
 
-                        maybe_action_content_plain = format!("#{pr_nr} {pr_title}",);
-                        maybe_action_content_html =
-                            format!(r#"<a href="{pr_url}">#{pr_nr} {pr_title}</a>"#,);
+                        maybe_action_content_plain = format!("{pr_url} {pr_title}",);
                     }
                     _ => {
                         maybe_action_content_plain = format!(
-                            "sorry, can't handle {:?} properly yet",
-                            act.op_type.unwrap()
-                        );
-                        maybe_action_content_html = format!(
                             "sorry, can't handle {:?} properly yet",
                             act.op_type.unwrap()
                         );
@@ -426,9 +367,6 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
 
                 let plain_action_message = format!(
                     "{maybe_plain_user} {action_verb} {maybe_plain_target} {maybe_action_content_plain}"
-                );
-                let html_action_message = format!(
-                    "{maybe_html_user} {action_verb} {maybe_html_target} {maybe_action_content_html}"
                 );
 
                 plain_parts.push(plain_action_message);
@@ -458,6 +396,132 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
                     error!("failed to send message: {e}");
                 }
             }
+        }
+    }
+}
+
+pub mod activities {
+    use crate::tools::ToStringExt;
+    use forgejo_api::structs::{Activity, ActivityOpType, User};
+    use reqwest::Url;
+    use unicode_ellipsis::truncate_str;
+
+    /// Turns the ActivityOpType into a human readable string, admittedly somewhat naively.
+    pub fn activity_descr(act: ActivityOpType) -> String {
+        use ActivityOpType::*;
+        match act {
+            // act on repo
+            CreateRepo => "created repository",
+            RenameRepo => "renamed repository",
+            StarRepo => "starred",
+            WatchRepo => "started watching",
+            CommitRepo => "commited to",
+            TransferRepo => "transferred",
+            PushTag => "pushed tag in",
+            DeleteTag => "deleted tag in",
+            DeleteBranch => "deleted branch in",
+            PublishRelease => "has published release for",
+
+            // act on issue
+            CreateIssue => "created issue in",
+            CommentIssue => "commented on issue",
+            CloseIssue => "closed issue in",
+            ReopenIssue => "reopened issue in",
+
+            // act on pull request
+            CreatePullRequest => "created pull request in",
+            MergePullRequest => "merged pull request in",
+            ClosePullRequest => "closed pull request in",
+            ReopenPullRequest => "reopened pull request in",
+            ApprovePullRequest => "has approved pull request in",
+            RejectPullRequest => "has rejected pull request in",
+            CommentPull => "has commented on pull request in",
+            PullReviewDismissed => "has dismissed pull review in",
+            PullRequestReadyForReview => "has marked pull request as ready for review in",
+            AutoMergePullRequest => "has automatically merged pull request in",
+
+            MirrorSyncPush => "mirror operation has pushed sync to",
+            MirrorSyncCreate => "mirror has created",
+            MirrorSyncDelete => "mirror has deleted",
+            // _ => todo!(), rustc doesn't like the possibility that forgejo might implement more features ;)
+        }
+        .s()
+    }
+
+    /// Renders a single Activity to matrix-acceptable HTML
+    pub fn activity_matrix_html(act: Activity) -> Option<String> {
+        use ActivityOpType::*;
+        let mut response_parts: Vec<String> = vec![];
+
+        let act_user = act.act_user?;
+        if act_user.id? > 0 {
+            response_parts.push(format!(
+                r#"<a href="{}">{}</a>"#,
+                act_user.clone().html_url?,
+                act_user_display_name(act_user)?,
+            ));
+        } else {
+            response_parts.push(act_user.login?);
+        };
+
+        response_parts.push("has".s());
+        let act_op = act.op_type?;
+        response_parts.push(activity_descr(act_op));
+
+        let act_repo = act.repo?;
+        let act_repo_url = act_repo.html_url?;
+        response_parts.push(format!(
+            r#"<a href="{act_repo_url}">{name}</a>   "#,
+            name = act_repo.name?,
+        ));
+
+        match act_op {
+            CreatePullRequest | MergePullRequest | ClosePullRequest | ReopenPullRequest
+            | ApprovePullRequest | RejectPullRequest | CommentPull | PullReviewDismissed
+            | AutoMergePullRequest => {
+                let content = act.content?;
+                response_parts.push(act_content_part(act_repo_url, "pulls", content)?)
+            }
+            CreateIssue | CommentIssue | CloseIssue | ReopenIssue => {
+                let content = act.content?;
+                response_parts.push(act_content_part(act_repo_url, "issues", content)?)
+            }
+            _ => (),
+        };
+
+        Some(response_parts.join(" "))
+    }
+
+    /// Turns act.content into formatted response part. Applicable for PRs and Issues only
+    pub fn act_content_part(repo_url: Url, item: &str, content: String) -> Option<String> {
+        let mut parts = content.splitn(3, '|');
+        let item_nr = parts.next()?;
+        let item_title = if let Some(title) = parts.next() {
+            format!(" {}", truncate_str(title, 40))
+        } else {
+            "".s()
+        };
+        let item_emoji = if let Some(emoji) = parts.next() {
+            format!(" {}", emoji)
+        } else {
+            "".s()
+        };
+
+        let item_url = format!("{repo_url}/{item}/{item_nr}");
+        Some(format!(
+            r#"<a href="{item_url}">#{item_nr}{item_title}{item_emoji}</a>"#,
+        ))
+    }
+
+    pub fn act_user_short(user: User) -> Option<String> {
+        Some(truncate_str(user.login?.as_str(), 20).into_owned())
+    }
+
+    pub fn act_user_display_name(user: User) -> Option<String> {
+        if user.clone().full_name.is_some_and(|n| n.len() > 0) {
+            Some(user.full_name?.trim().to_owned())
+        } else {
+            act_user_short(user)
         }
     }
 }
