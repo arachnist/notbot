@@ -308,73 +308,21 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
             let mut plain_parts: Vec<String> = vec![];
 
             for act in potentially_pushed_activities {
-                use ActivityOpType::*;
-                let html_act = act.clone();
+                let op_type = act.clone().op_type;
 
-                let maybe_plain_user: String;
-
-                if act.act_user.clone().is_some_and(|u| u.login.is_some()) {
-                    maybe_plain_user = act.act_user.clone().unwrap().login.unwrap();
-                } else {
-                    maybe_plain_user = "".s();
-                }
-
-                // can .unwrap(): we require this field to exist above
-                let action_verb = activities::activity_descr(act.op_type.unwrap());
-
-                let maybe_plain_target: String;
-
-                if act
-                    .repo
-                    .clone()
-                    .is_some_and(|r| r.name.is_some() && r.html_url.is_some())
-                {
-                    maybe_plain_target = format!(
-                        "{repo_name}:   ",
-                        repo_name = act.repo.clone().unwrap().name.unwrap(),
-                    );
-                } else {
-                    maybe_plain_target = "idk where, couldn't decode".s();
-                }
-
-                let maybe_action_content_plain;
-
-                match act.op_type.clone().unwrap() {
-                    CreatePullRequest | ReopenPullRequest if act.content.is_some() => {
-                        let content = act.content.unwrap();
-                        let mut parts = content.splitn(2, '|');
-                        let pr_nr = parts.next().unwrap();
-                        let pr_title = if let Some(parts) = parts.next() {
-                            unicode_ellipsis::truncate_str(parts, 60).into_owned()
-                        } else {
-                            "".s()
-                        };
-
-                        let pr_url = format!(
-                            "{base_url}/pulls/{pr_nr}",
-                            base_url = act.repo.unwrap().html_url.unwrap(),
-                        );
-
-                        maybe_action_content_plain = format!("{pr_url} {pr_title}",);
-                    }
-                    _ => {
-                        maybe_action_content_plain = format!(
-                            "sorry, can't handle {:?} properly yet",
-                            act.op_type.unwrap()
-                        );
+                let plain_action_message = match activities::activity_message_plain(act.clone()) {
+                    Some(message) => message,
+                    None => {
+                        format!("uh oh, {:?} for plain is broken", op_type)
                     }
                 };
 
-                let plain_action_message = format!(
-                    "{maybe_plain_user} {action_verb} {maybe_plain_target} {maybe_action_content_plain}"
-                );
-
-                let html_action_message = match activities::activity_matrix_html(html_act) {
+                let html_action_message = match activities::activity_message_html(act) {
                     Some(message) => message,
                     None => {
                         format!(
-                            "uh oh, apparently i don't handle {:?} for html properly; {}",
-                            act.op_type,
+                            "uh oh, apparently i don't handle {:?} for html; plain: {}",
+                            op_type,
                             plain_action_message.clone()
                         )
                     }
@@ -412,7 +360,7 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
 }
 
 pub mod activities {
-    //! Handling of forgejo feed activities, separated into its own module.
+    //! Formating forgejo feed activities, separated into its own module.
     use crate::tools::ToStringExt;
     use forgejo_api::structs::{Activity, ActivityOpType, User};
     use reqwest::Url;
@@ -461,7 +409,7 @@ pub mod activities {
     }
 
     /// Renders a single Activity to matrix-acceptable HTML
-    pub fn activity_matrix_html(act: Activity) -> Option<String> {
+    pub fn activity_message_html(act: Activity) -> Option<String> {
         use ActivityOpType::*;
         let mut response_parts: Vec<String> = vec![];
 
@@ -492,11 +440,11 @@ pub mod activities {
             | ApprovePullRequest | RejectPullRequest | CommentPull | PullReviewDismissed
             | AutoMergePullRequest => {
                 let content = act.content?;
-                response_parts.push(act_content_part(act_repo_url, "pulls", content)?)
+                response_parts.push(act_content_part_html(act_repo_url, "pulls", content)?)
             }
             CreateIssue | CommentIssue | CloseIssue | ReopenIssue => {
                 let content = act.content?;
-                response_parts.push(act_content_part(act_repo_url, "issues", content)?)
+                response_parts.push(act_content_part_html(act_repo_url, "issues", content)?)
             }
             _ => (),
         };
@@ -505,7 +453,7 @@ pub mod activities {
     }
 
     /// Turns act.content into formatted response part. Applicable for PRs and Issues only
-    pub fn act_content_part(repo_url: Url, item: &str, content: String) -> Option<String> {
+    pub fn act_content_part_html(repo_url: Url, item: &str, content: String) -> Option<String> {
         let mut parts = content.splitn(3, '|');
         let item_nr = parts.next()?;
         let item_title = if let Some(title) = parts.next() {
@@ -523,6 +471,58 @@ pub mod activities {
         Some(format!(
             r#"<a href="{item_url}">#{item_nr}{item_title}{item_emoji}</a>"#,
         ))
+    }
+
+    /// Renders a single Activity to hopefully appservice-irc-acceptable plain text
+    pub fn activity_message_plain(act: Activity) -> Option<String> {
+        use ActivityOpType::*;
+        let mut response_parts: Vec<String> = vec![];
+
+        let act_user = act.act_user?;
+        response_parts.push(act_user_display_name(act_user)?);
+
+        response_parts.push("has".s());
+        let act_op = act.op_type?;
+        response_parts.push(activity_descr(act_op));
+
+        let act_repo = act.repo?;
+        let act_repo_url = act_repo.html_url?;
+        response_parts.push(format!("{}:", act_repo.name?));
+
+        match act_op {
+            CreatePullRequest | MergePullRequest | ClosePullRequest | ReopenPullRequest
+            | ApprovePullRequest | RejectPullRequest | CommentPull | PullReviewDismissed
+            | AutoMergePullRequest => {
+                let content = act.content?;
+                response_parts.push(act_content_part_plain(act_repo_url, "pulls", content)?)
+            }
+            CreateIssue | CommentIssue | CloseIssue | ReopenIssue => {
+                let content = act.content?;
+                response_parts.push(act_content_part_plain(act_repo_url, "issues", content)?)
+            }
+            _ => (),
+        };
+
+        Some(response_parts.join(" "))
+    }
+
+    /// Turns act.content into plain response part. Applicable for PRs and Issues only
+    pub fn act_content_part_plain(repo_url: Url, item: &str, content: String) -> Option<String> {
+        let mut parts = content.splitn(3, '|');
+        let item_nr = parts.next()?;
+        let item_title = if let Some(title) = parts.next() {
+            format!(" {}", truncate_str(title, 40))
+        } else {
+            "".s()
+        };
+        let item_emoji = if let Some(emoji) = parts.next() {
+            format!(" {}", emoji)
+        } else {
+            "".s()
+        };
+
+        let item_url = format!("{repo_url}/{item}/{item_nr}");
+        Some(format!(r#"{item_url}{item_title}{item_emoji}"#,))
     }
 
     /// Shortens username if necessary, for display purposes.
