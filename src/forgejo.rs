@@ -1,4 +1,4 @@
-//! Query Frogejo API for latest, and oldest open issues pull request, and post notifications about new events.
+//! Queries Frogejo for latest, and oldest open issues pull request, and post notifications about new events.
 //!
 //! # Configuration
 //!
@@ -310,14 +310,14 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
             for act in potentially_pushed_activities {
                 let op_type = act.clone().op_type;
 
-                let plain_action_message = match activities::activity_message_plain(act.clone()) {
+                let plain_action_message = match activity_fmt::message_plain(act.clone()) {
                     Some(message) => message,
                     None => {
                         format!("uh oh, {:?} for plain is broken", op_type)
                     }
                 };
 
-                let html_action_message = match activities::activity_message_html(act) {
+                let html_action_message = match activity_fmt::message_html(act) {
                     Some(message) => message,
                     None => {
                         format!(
@@ -359,7 +359,7 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
     }
 }
 
-pub mod activities {
+pub mod activity_fmt {
     //! Formating forgejo feed activities, separated into its own module.
     use crate::tools::ToStringExt;
     use forgejo_api::structs::{Activity, ActivityOpType, User};
@@ -409,7 +409,7 @@ pub mod activities {
     }
 
     /// Renders a single Activity to matrix-acceptable HTML
-    pub fn activity_message_html(act: Activity) -> Option<String> {
+    pub fn message_html(act: Activity) -> Option<String> {
         use ActivityOpType::*;
         let mut response_parts: Vec<String> = vec![];
 
@@ -474,7 +474,7 @@ pub mod activities {
     }
 
     /// Renders a single Activity to hopefully appservice-irc-acceptable plain text
-    pub fn activity_message_plain(act: Activity) -> Option<String> {
+    pub fn message_plain(act: Activity) -> Option<String> {
         use ActivityOpType::*;
         let mut response_parts: Vec<String> = vec![];
 
