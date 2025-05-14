@@ -49,7 +49,7 @@ use std::fmt::Debug;
 
 use tokio::time::{interval, Duration};
 
-use forgejo_api::structs::{Activity, ActivityOpType};
+use forgejo_api::structs::ActivityOpType;
 use forgejo_api::{Auth, Forgejo};
 
 /// Configuration of a forgejo instance.
@@ -309,7 +309,7 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
 
             for act in potentially_pushed_activities {
                 use ActivityOpType::*;
-                let html_action_message = activities::activity_matrix_html(act.clone()).unwrap();
+                let html_act = act.clone();
 
                 let maybe_plain_user: String;
 
@@ -369,6 +369,17 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
                     "{maybe_plain_user} {action_verb} {maybe_plain_target} {maybe_action_content_plain}"
                 );
 
+                let html_action_message = match activities::activity_matrix_html(html_act) {
+                    Some(message) => message,
+                    None => {
+                        format!(
+                            "uh oh, apparently i don't handle {:?} for html properly; {}",
+                            act.op_type,
+                            plain_action_message.clone()
+                        )
+                    }
+                };
+
                 plain_parts.push(plain_action_message);
                 html_parts.push(html_action_message);
             }
@@ -401,6 +412,7 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
 }
 
 pub mod activities {
+    //! Handling of forgejo feed activities, separated into its own module.
     use crate::tools::ToStringExt;
     use forgejo_api::structs::{Activity, ActivityOpType, User};
     use reqwest::Url;
@@ -513,10 +525,12 @@ pub mod activities {
         ))
     }
 
+    /// Shortens username if necessary, for display purposes.
     pub fn act_user_short(user: User) -> Option<String> {
         Some(truncate_str(user.login?.as_str(), 20).into_owned())
     }
 
+    /// Shows user configured name or shortened username.
     pub fn act_user_display_name(user: User) -> Option<String> {
         if user.clone().full_name.is_some_and(|n| n.len() > 0) {
             Some(user.full_name?.trim().to_owned())
