@@ -97,7 +97,7 @@ pub async fn gerrit_feeds(mx: Client, module_config: GerritConfig) -> anyhow::Re
         .build()?;
 
     for (name, _) in &module_config.instances {
-        first_loop.insert(name.to_owned(), false);
+        first_loop.insert(name.to_owned(), true);
         change_ids.insert(name.to_owned(), vec![]);
     }
 
@@ -133,7 +133,7 @@ pub async fn gerrit_feeds(mx: Client, module_config: GerritConfig) -> anyhow::Re
             if first_loop.get(name).unwrap().to_owned() {
                 let current_ids: Vec<String> = data.iter().map(|d| d.id.clone()).collect();
                 change_ids.insert(name.clone(), current_ids);
-                first_loop.insert(name.to_owned(), true);
+                first_loop.insert(name.to_owned(), false);
                 continue;
             }
 

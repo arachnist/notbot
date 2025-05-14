@@ -249,7 +249,7 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
         interval.tick().await;
 
         for (name, forgejo) in instances.iter() {
-            debug!("processing feeds for instance: {name}");
+            trace!("processing feeds for instance: {name}");
 
             // can .unwrap(): instances hash is created based on module_config
             let config = module_config.instances.get(name).unwrap();
