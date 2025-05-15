@@ -54,6 +54,7 @@ struct ConfigInner {
     #[allow(dead_code)]
     module: Table,
     prefixes: Vec<String>,
+    prefixes_restricted: Option<HashMap<String, Vec<String>>>,
     acl_deny: Vec<String>,
     ignored: Vec<String>,
     admins: Vec<String>,
@@ -128,6 +129,12 @@ impl Config {
     pub fn prefixes(&self) -> Vec<String> {
         let inner = &self.inner.lock().unwrap();
         inner.prefixes.clone()
+    }
+
+    /// Prefixes bot responds to for certain modules (keyword-only)
+    pub fn prefixes_restricted(&self) -> Option<HashMap<String, Vec<String>>> {
+        let inner = &self.inner.lock().unwrap();
+        inner.prefixes_restricted.clone()
     }
 
     /// Messages to choose from when denying a request.

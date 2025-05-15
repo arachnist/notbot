@@ -632,6 +632,12 @@ pub async fn dispatcher(
     let mut args = text.trim_start().splitn(2, [' ', ' ', '\t']);
     let first = args.next();
 
+    let mut prefixes_all: Vec<String> = config.prefixes();
+    if let Some(hash) = config.prefixes_restricted() {
+        prefixes_all.extend(hash.keys().map(|e| e.to_owned()))
+    };
+    let mut prefix_selected: Option<String> = None;
+
     trace!("cursed prefix matching");
     let (keyword, remainder): (String, Option<String>) = {
         match first {
@@ -639,7 +645,7 @@ pub async fn dispatcher(
             Some(word) => {
                 trace!("first word exists: {word}");
                 let (mut kw_candidate, mut remainder_candidate) = (String::new(), None);
-                for prefix in config.prefixes() {
+                for prefix in prefixes_all {
                     trace!("trying prefix: {prefix}");
                     match prefix.len() {
                         1 => match word.strip_prefix(prefix.as_str()) {
@@ -648,6 +654,7 @@ pub async fn dispatcher(
                                 kw_candidate = w.to_string();
                                 remainder_candidate = args.next().map(|s| s.to_string());
                                 trace!("selected prefix: {prefix}");
+                                prefix_selected = Some(prefix);
                                 break;
                             }
                         },
@@ -664,6 +671,7 @@ pub async fn dispatcher(
                                     };
                                 };
                                 trace!("selected prefix: {prefix}");
+                                prefix_selected = Some(prefix);
                                 break;
                             };
                         }
@@ -755,6 +763,26 @@ pub async fn dispatcher(
             }
             Reject => continue,
         };
+    }
+
+    // restricted prefixes implementation
+    if consumption == Consumption::Exclusive {
+        // event actually matched a prefix
+        if let Some(prefix) = prefix_selected {
+            // restricted prefixes map is defined
+            if let Some(map) = config.prefixes_restricted() {
+                // the matched prefix is on the list
+                if let Some(list) = map.get(&prefix) {
+                    // the list should contain exactly one module anyway
+                    for (_, module) in &run_modules {
+                        // if any module we're trying to run is not on the list, bail.
+                        if !list.contains(&module.name) {
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        }
     }
 
     trace!("dispatching event to modules");
