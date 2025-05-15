@@ -86,6 +86,7 @@ pub fn forgejo_events_default() -> Vec<ActivityOpType> {
         ApprovePullRequest,
         RejectPullRequest,
         ReopenPullRequest,
+        ClosePullRequest,
         CreateIssue,
         CloseIssue,
         ReopenIssue,
