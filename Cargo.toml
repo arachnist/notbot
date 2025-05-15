@@ -1,6 +1,6 @@
 [package]
 name = "notbot"
-version = "0.6.11"
+version = "0.6.12"
 authors = ["Ari Gato <ari@is-a.cat>"]
 edition = "2021"
 autobins = true

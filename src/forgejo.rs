@@ -35,10 +35,13 @@
 //! # Usage
 //!
 //! Keywords:
-//! * `pr-new`, `prnew`, `pr`, `p` - [`pr_new`] - show latest open pull requests
-//! * `pr-old`, `prold` - [`pr_old`] - show oldest open pull requests
-//! * `issue-new`, `issuenew`, `issue`, `i` - [`issue_new`] - show latest issues
-//! * `issue-old`, `issueold` - [`issue_old`] - show oldest open issues
+//! * `pr-new`, `prnew`, `pr`, `p` - [`forgejo_query`] - show latest open pull requests
+//! * `pr-old`, `prold` - [`forgejo_query`] - show oldest open pull requests
+//! * `issue-new`, `issuenew`, `issue`, `i` - [`forgejo_query`] - show latest issues
+//! * `issue-old`, `issueold` - [`forgejo_query`] - show oldest open issues
+//!
+//! Like with many other so-called binaries in life, turns out that the PR/issue one is
+//! false as well.
 //!
 //! Passive feed updates: [`forgejo_feeds`]
 //! Provides updates about configured events to configured rooms.
@@ -126,7 +129,7 @@ pub fn objects_count() -> u16 {
 
 /// Default keywords for displaying list of latest open pull requests: pr-new, prnew, pr, p
 pub fn keywords_pr_new() -> Vec<String> {
-    vec!["pr-new".s(), "prnew".s(), "pr".s(), "p".s()]
+    vec!["pr-new".s(), "prnew".s(), "prs".s(), "pr".s()]
 }
 
 /// Default keywords for displaying list of oldest open pull requests: pr-old, prold
@@ -136,51 +139,40 @@ pub fn keywords_pr_old() -> Vec<String> {
 
 /// Default keywords for displaying list of latest open issues: issue-new, issuenew, issue, i
 pub fn keywords_issue_new() -> Vec<String> {
-    vec!["issue-new".s(), "issuenew".s(), "issue".s(), "i".s()]
+    vec![
+        "issue-new".s(),
+        "issues-new".s(),
+        "issuenew".s(),
+        "issue".s(),
+        "issues".s(),
+    ]
 }
 
 /// Default keywords for displaying list of oldest open issues: issue-old, issueold
 pub fn keywords_issue_old() -> Vec<String> {
-    vec!["issue-old".s(), "issueold".s()]
+    vec!["issue-old".s(), "issues-old".s(), "issueold".s()]
 }
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
     info!("registering modules");
     let forgejo_config: ForgejoConfig = config.typed_module_config(module_path!())?;
 
-    let mut keywords_pr = vec![];
-    keywords_pr.extend(forgejo_config.keywords_pr_new.clone());
-    keywords_pr.extend(forgejo_config.keywords_pr_old.clone());
+    let mut keywords = vec![];
+    keywords.extend(forgejo_config.keywords_pr_new.clone());
+    keywords.extend(forgejo_config.keywords_pr_old.clone());
 
-    Ok(vec![
-        ModuleInfo::new(
-            "pr",
-            "display list of open pull requests, oldest or newest",
-            vec![],
-            TriggerType::Keyword(keywords_pr),
-            Some("forgejo communications error"),
-            forgejo_config.clone(),
-            pr,
-        ),
-        ModuleInfo::new(
-            "issue_new",
-            "display list of latest open issues",
-            vec![],
-            TriggerType::Keyword(forgejo_config.keywords_issue_new.clone()),
-            Some("forgejo communications error"),
-            forgejo_config.clone(),
-            issue_new,
-        ),
-        ModuleInfo::new(
-            "issue_old",
-            "display list of oldest open issues",
-            vec![],
-            TriggerType::Keyword(forgejo_config.keywords_issue_old.clone()),
-            Some("forgejo communications error"),
-            forgejo_config,
-            issue_old,
-        ),
-    ])
+    keywords.extend(forgejo_config.keywords_issue_new.clone());
+    keywords.extend(forgejo_config.keywords_issue_old.clone());
+
+    Ok(vec![ModuleInfo::new(
+        "forgejo-query",
+        "display list of open issues or pull requests, oldest or newest",
+        vec![],
+        TriggerType::Keyword(keywords),
+        Some("forgejo communications error"),
+        forgejo_config.clone(),
+        forgejo_query,
+    )])
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -244,8 +236,8 @@ async fn early_fail(
     Ok((instance.organization, forgejo))
 }
 
-/// Display list of open pull requests.
-pub async fn pr(event: ConsumerEvent, config: ForgejoConfig) -> anyhow::Result<()> {
+/// Display list of open issues or pull requests
+pub async fn forgejo_query(event: ConsumerEvent, config: ForgejoConfig) -> anyhow::Result<()> {
     use forgejo_api::structs::*;
     let (organization, forgejo) = early_fail(event.clone(), &config).await?;
     let repo_query = OrgListReposQuery {
@@ -253,39 +245,53 @@ pub async fn pr(event: ConsumerEvent, config: ForgejoConfig) -> anyhow::Result<(
         limit: Some(0),
     };
 
-    let pr_query = RepoListPullRequestsQuery {
-        state: Some(RepoListPullRequestsQueryState::Open),
-        sort: None,
-        milestone: None,
+    let query_type = if config.keywords_issue_new.contains(&event.keyword)
+        || config.keywords_issue_old.contains(&event.keyword)
+    {
+        IssueListIssuesQueryType::Issues
+    } else {
+        IssueListIssuesQueryType::Pulls
+    };
+
+    let issue_query = IssueListIssuesQuery {
+        state: Some(IssueListIssuesQueryState::Open),
         labels: None,
-        poster: None,
+        q: None,
+        r#type: Some(query_type),
+        milestones: None,
+        since: None,
+        before: None,
+        created_by: None,
+        assigned_by: None,
+        mentioned_by: None,
         page: None,
         limit: None,
     };
 
-    let mut pull_requests: Vec<PullRequest> = vec![];
+    let mut items: Vec<Issue> = vec![];
 
     let (_, repos) = forgejo.org_list_repos(&organization, repo_query).await?;
 
     for repo in repos {
-        if repo.has_pull_requests.is_some_and(|x| x) {
-            let (_, pulls) = forgejo
-                .repo_list_pull_requests(&organization, &repo.name.unwrap(), pr_query.clone())
+        if repo.has_issues.is_some_and(|i| i) {
+            let (_, repo_issues) = forgejo
+                .issue_list_issues(&organization, &repo.name.unwrap(), issue_query.clone())
                 .await?;
-            pull_requests.extend(pulls);
+            items.extend(repo_issues);
         }
     }
 
-    pull_requests.sort_by_key(|pr| pr.updated_at.unwrap());
-
-    let shortlist: Vec<PullRequest> = if config.keywords_pr_old.contains(&event.keyword) {
-        pull_requests
+    items.sort_by_key(|i| i.updated_at.unwrap());
+    let shortlist: Vec<Issue> = if config.keywords_issue_old.contains(&event.keyword)
+        || config.keywords_pr_old.contains(&event.keyword)
+    {
+        items
             .iter()
             .take(config.objects_count.into())
             .map(|x| x.to_owned())
             .collect()
     } else {
-        pull_requests
+        items
             .iter()
             .rev()
             .take(config.objects_count.into())
@@ -293,33 +299,33 @@ pub async fn pr(event: ConsumerEvent, config: ForgejoConfig) -> anyhow::Result<(
             .collect()
     };
 
-    if let Err(e) = event.room.send(render_pr_message(shortlist)?).await {
+    if let Err(e) = event.room.send(render_item_message(shortlist)?).await {
         error!("failed to send message: {e}");
     }
 
     Ok(())
 }
 
-/// Renders a list of pull request into a single matrix message.
-pub fn render_pr_message(
-    pulls: Vec<forgejo_api::structs::PullRequest>,
+/// Renders a list of issues or PRs into a single matrix message.
+pub fn render_item_message(
+    items: Vec<forgejo_api::structs::Issue>,
 ) -> anyhow::Result<RoomMessageEventContent> {
     let mut parts_plain: Vec<String> = vec![];
     let mut parts_html: Vec<String> = vec![];
 
-    for pr in pulls {
-        let url = match pr.clone().html_url {
+    for item in items {
+        let url = match item.clone().html_url {
             Some(u) => u.to_string(),
             None => "unknown".s(),
         };
 
-        let rendered_html = match render_pr_html(pr.clone()) {
+        let rendered_html = match render_item_html(item.clone()) {
             Some(r) => r,
-            None => format!("(html) failed parsing pr: {url}",),
+            None => format!("(html) failed parsing item: {url}",),
         };
-        let rendered_plain = match render_pr_plain(pr.clone()) {
+        let rendered_plain = match render_item_plain(item.clone()) {
             Some(r) => r,
-            None => format!("(plain) failed parsing pr: {url}",),
+            None => format!("(plain) failed parsing item: {url}",),
         };
 
         parts_plain.push(rendered_plain);
@@ -335,67 +341,57 @@ pub fn render_pr_message(
     ))
 }
 
-/// Renders a single PR into a single line formatted message
-pub fn render_pr_html(pr: forgejo_api::structs::PullRequest) -> Option<String> {
+/// Renders a single item into a single line formatted message
+pub fn render_item_html(item: forgejo_api::structs::Issue) -> Option<String> {
     use unicode_ellipsis::truncate_str;
     let mut response_parts: Vec<String> = vec![];
 
     response_parts.push("on".s());
-    response_parts.push(pr.created_at?.date().to_string());
+    response_parts.push(item.created_at?.date().to_string());
 
-    let user = pr.user?;
+    let user = item.user?;
     response_parts.push(format!(
         r#"<a href="{url}">{name}</a>"#,
         url = user.html_url?,
         name = user.login?,
     ));
 
-    response_parts.push("opened pr:".s());
+    response_parts.push("opened:".s());
     response_parts.push(format!(
-        r#"<a href="{pr_url}">{pr_title}</a>"#,
-        pr_url = pr.html_url?,
-        pr_title = truncate_str(pr.title?.as_str(), 80),
+        r#"<a href="{item_url}">{item_title}</a>"#,
+        item_url = item.html_url?,
+        item_title = truncate_str(item.title?.as_str(), 80),
     ));
 
-    let update = pr.updated_at?;
+    let update = item.updated_at?;
     response_parts.push("last updated at".s());
     response_parts.push(update.date().to_string());
 
     Some(response_parts.join(" "))
 }
 
-/// renders a single PR into a single line plain-text message
-pub fn render_pr_plain(pr: forgejo_api::structs::PullRequest) -> Option<String> {
+/// Renders a single item into a single line plain-text message
+pub fn render_item_plain(item: forgejo_api::structs::Issue) -> Option<String> {
     use unicode_ellipsis::truncate_str;
     let mut response_parts: Vec<String> = vec![];
 
     response_parts.push("on".s());
-    response_parts.push(pr.created_at?.date().to_string());
+    response_parts.push(item.created_at?.date().to_string());
 
-    let user = pr.user?;
+    let user = item.user?;
     response_parts.push((user.login?).to_string());
 
-    response_parts.push("opened pr:".s());
+    response_parts.push("opened:".s());
     response_parts.push(format!(
-        r#"{pr_title}"#,
-        pr_title = truncate_str(pr.title?.as_str(), 80),
+        r#"{item_title}"#,
+        item_title = truncate_str(item.title?.as_str(), 80),
     ));
 
-    let update = pr.updated_at?;
+    let update = item.updated_at?;
     response_parts.push("last updated at".s());
     response_parts.push(update.date().to_string());
 
     Some(response_parts.join(" "))
-}
-
-/// Display list of latest open issues.
-pub async fn issue_new(_event: ConsumerEvent, _config: ForgejoConfig) -> anyhow::Result<()> {
-    Ok(())
-}
-
-/// Display list of oldest open issues.
-pub async fn issue_old(_event: ConsumerEvent, _config: ForgejoConfig) -> anyhow::Result<()> {
-    Ok(())
 }
 
 pub(crate) fn workers(mx: &Client, config: &Config) -> anyhow::Result<Vec<WorkerInfo>> {
