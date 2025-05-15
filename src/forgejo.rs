@@ -173,7 +173,7 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         "display list of open issues or pull requests, oldest or newest",
         vec![],
         TriggerType::Keyword(keywords),
-        Some("forgejo communications error"),
+        None,
         forgejo_config.clone(),
         forgejo_query,
     )])
@@ -228,7 +228,7 @@ async fn early_fail(
         event
             .room
             .send(RoomMessageEventContent::text_plain(
-                "Argument provided but not found",
+                "Argument provided but instance not found",
             ))
             .await?;
         return Err(ProvidedNotFound.into());

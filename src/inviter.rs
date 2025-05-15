@@ -225,7 +225,7 @@ pub async fn web_inviter(
             homeserver = module_config.homeserver_selfservice_allow
         ))?;
 
-        inviter(app_state.mx, user_id, module_config.invite_to).await?;
+        tokio::spawn(inviter(app_state.mx, user_id, module_config.invite_to));
         Ok(())
     }
     .await

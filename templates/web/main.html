@@ -3,9 +3,33 @@
   <head>
     <meta charset="utf-8">
     <title>Notbot</title>
+    <link rel="stylesheet" href="/static/landing.css"/>
   </head>
-
   <body>
-    <p>Hello {{ claims.subject().as_str() }}, thanks for dropping by</p>
+    <div id="root">
+      <div id="welcome">
+        <div class="inner">
+          <h1>this is Notbot, the bot</h1>
+          <p>Hello {{ claims.subject().as_str() }}, thanks for dropping by</p>
+        </div>
+      </div>
+      <div id="services">
+        <div class="inner">
+          Authenthicated services:
+          <ul>
+            <li>Inviter to member rooms/spaces for your Matrix account: <a href="/mx/inviter/invite">Invite</a></li>
+          </ul>
+          Public services:
+          <ul>
+            <li>Prometheus metrics: <a href="/metrics">Metrics</a></li>
+          </ul>
+        </div>
+      </div>
+      <div id="footer">
+        This is an instance of <a href="https://code.hackerspace.pl/ar/notbot">notbot</a>, a Matrix chatbot performing
+        various tasks and services. You can find the official documentation <a href="https://docs.rs/notbot">here</a>.</br>
+        If you have any questions, comments, or suggestions, feel free to contact the author, either on matrix at <a href="https://matrix.to/#/@ar:is-a.cat">@ar:is-a.cat</a>, fedi at <a href="https://is-a.cat/@ar">@ar@is-a.cat</a>, or email ar@is-a.cat.
+      </div>
+    </div>
   </body>
 </html>
