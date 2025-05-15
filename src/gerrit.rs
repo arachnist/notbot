@@ -234,6 +234,21 @@ pub mod gerrit_api {
         gerrit_decode_json(text)
     }
 
+    impl ChangeInfo {
+        /// Calculate "size class" of a change
+        ///
+        /// Original implementation: <https://github.com/GerritCodeReview/gerrit/blob/287467f353b37ff68588adef0d1315a49845b09b/polygerrit-ui/app/elements/change-list/gr-change-list-item/gr-change-list-item.ts#L48-L53>
+        pub fn change_size(&self) -> &str {
+            match self.insertions + self.deletions {
+                ..10 => "[XS]",
+                10..50 => "[S]",
+                50..250 => "[M]",
+                250..1000 => "[L]",
+                1000.. => "[XL]",
+            }
+        }
+    }
+
     /// Structure describing information about a change returned from Gerrit
     ///
     /// Written based on [upstream documentation](https://gerrit-review.googlesource.com/Documentation/rest-api-changes.html#change-info)

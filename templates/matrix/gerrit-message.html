@@ -1,12 +1,12 @@
 {%- block formatted -%}
 {%- for item in items -%}
 {%- set owner = known_users.get(&(instance_name.clone(), item.owner.account_id)).unwrap() -%}
-{{owner}} has posted a new change to {{item.project}}: <a href="{{ instance_url }}/c/{{ item.project }}/+/{{ item.number }}">{{ item.subject }}</a></br>
+{{owner}} has posted a new change to {{item.project}}: <b>{{ item.change_size() }}</b> <a href="{{ instance_url }}/c/{{ item.project }}/+/{{ item.number }}">{{ item.subject }}</a></br>
 {%- endfor -%}
 {%- endblock -%}
 {%- block plain -%}
 {%- for item in items -%}
 {%- set owner = known_users.get(&(instance_name.clone(), item.owner.account_id)).unwrap() -%}
-{{owner}} has posted a new change to {{item.project}}: {{ item.subject }} {{ instance_url }}/c/{{ item.project }}/+/{{ item.number }}
+{{owner}} has posted a new change to {{item.project}}: {{ item.change_size() }} {{ item.subject }} {{ instance_url }}/c/{{ item.project }}/+/{{ item.number }}
 {% endfor -%}
 {%- endblock -%}
