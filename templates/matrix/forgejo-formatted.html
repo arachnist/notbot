@@ -1,0 +1,10 @@
+{%- block formatted -%}
+{%- for item in items -%}
+on {{ item.create_date.date() }} <a href="{{ item.user_url }}">{{ item.user_name }}</a> opened: <a href="{{ item.item_url }}">{{ item.item_title }}</a>, last updated at {{ item.update_date.date() }}</br>
+{%- endfor -%}
+{%- endblock -%}
+{%- block plain -%}
+{%- for item in items %}
+on {{ item.create_date.date() }} {{ item.user_name }} opened: {{ item.item_url }} {{ item.item_title }}, last updated at {{ item.update_date.date() }}
+{%- endfor -%}
+{%- endblock -%}

@@ -50,10 +50,13 @@ use crate::prelude::*;
 
 use std::fmt::Debug;
 
+use time::OffsetDateTime;
 use tokio::time::{interval, Duration};
 
 use forgejo_api::structs::ActivityOpType;
 use forgejo_api::{Auth, Forgejo};
+
+use askama::Template;
 
 /// Configuration of a forgejo instance.
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -299,99 +302,78 @@ pub async fn forgejo_query(event: ConsumerEvent, config: ForgejoConfig) -> anyho
             .collect()
     };
 
-    if let Err(e) = event.room.send(render_item_message(shortlist)?).await {
-        error!("failed to send message: {e}");
-    }
+    let render_items: RenderItems = shortlist.try_into()?;
+    let message = RoomMessageEventContent::text_html(
+        render_items.as_plain().render()?,
+        render_items.as_formatted().render()?,
+    );
+
+    event.room.send(message).await?;
 
     Ok(())
 }
 
-/// Renders a list of issues or PRs into a single matrix message.
-pub fn render_item_message(
-    items: Vec<forgejo_api::structs::Issue>,
-) -> anyhow::Result<RoomMessageEventContent> {
-    let mut parts_plain: Vec<String> = vec![];
-    let mut parts_html: Vec<String> = vec![];
+#[derive(Template)]
+#[template(
+    path = "matrix/forgejo-formatted.html",
+    blocks = ["formatted", "plain"],
+)]
+struct RenderItems {
+    items: Vec<RenderedItem>,
+}
 
-    for item in items {
-        let url = match item.clone().html_url {
-            Some(u) => u.to_string(),
-            None => "unknown".s(),
-        };
+struct RenderedItem {
+    item_title: String,
+    item_url: String,
+    user_name: String,
+    user_url: String,
+    create_date: OffsetDateTime,
+    update_date: OffsetDateTime,
+}
 
-        let rendered_html = match render_item_html(item.clone()) {
-            Some(r) => r,
-            None => format!("(html) failed parsing item: {url}",),
-        };
-        let rendered_plain = match render_item_plain(item.clone()) {
-            Some(r) => r,
-            None => format!("(plain) failed parsing item: {url}",),
-        };
+impl TryFrom<forgejo_api::structs::Issue> for RenderedItem {
+    type Error = anyhow::Error;
 
-        parts_plain.push(rendered_plain);
-        parts_html.push(rendered_html);
+    fn try_from(item: forgejo_api::structs::Issue) -> anyhow::Result<Self> {
+        let user = item.user.ok_or(anyhow!("user not found"))?;
+
+        Ok(RenderedItem {
+            item_title: unicode_ellipsis::truncate_str(
+                &item.title.ok_or(anyhow!("item title not present"))?,
+                80,
+            )
+            .to_string(),
+            item_url: item
+                .html_url
+                .ok_or(anyhow!("item url not present"))?
+                .to_string(),
+            user_name: user.login.ok_or(anyhow!("user login not present"))?,
+            user_url: user
+                .html_url
+                .ok_or(anyhow!("user url not present"))?
+                .to_string(),
+            create_date: item
+                .created_at
+                .ok_or(anyhow!("item creation date not present"))?,
+            update_date: item
+                .updated_at
+                .ok_or(anyhow!("item update date not present"))?,
+        })
     }
-
-    let plain_response = parts_plain.join("\n");
-    let html_response = parts_html.join("<br/>");
-
-    Ok(RoomMessageEventContent::text_html(
-        plain_response.clone(),
-        html_response.clone(),
-    ))
 }
 
-/// Renders a single item into a single line formatted message
-pub fn render_item_html(item: forgejo_api::structs::Issue) -> Option<String> {
-    use unicode_ellipsis::truncate_str;
-    let mut response_parts: Vec<String> = vec![];
+impl TryFrom<Vec<forgejo_api::structs::Issue>> for RenderItems {
+    type Error = anyhow::Error;
 
-    response_parts.push("on".s());
-    response_parts.push(item.created_at?.date().to_string());
+    fn try_from(issues: Vec<forgejo_api::structs::Issue>) -> anyhow::Result<Self> {
+        let mut items: Vec<RenderedItem> = vec![];
 
-    let user = item.user?;
-    response_parts.push(format!(
-        r#"<a href="{url}">{name}</a>"#,
-        url = user.html_url?,
-        name = user.login?,
-    ));
+        for issue in issues {
+            items.push(issue.try_into()?);
+        }
 
-    response_parts.push("opened:".s());
-    response_parts.push(format!(
-        r#"<a href="{item_url}">{item_title}</a>"#,
-        item_url = item.html_url?,
-        item_title = truncate_str(item.title?.as_str(), 80),
-    ));
-
-    let update = item.updated_at?;
-    response_parts.push("last updated at".s());
-    response_parts.push(update.date().to_string());
-
-    Some(response_parts.join(" "))
-}
-
-/// Renders a single item into a single line plain-text message
-pub fn render_item_plain(item: forgejo_api::structs::Issue) -> Option<String> {
-    use unicode_ellipsis::truncate_str;
-    let mut response_parts: Vec<String> = vec![];
-
-    response_parts.push("on".s());
-    response_parts.push(item.created_at?.date().to_string());
-
-    let user = item.user?;
-    response_parts.push((user.login?).to_string());
-
-    response_parts.push("opened:".s());
-    response_parts.push(format!(
-        r#"{item_title}"#,
-        item_title = truncate_str(item.title?.as_str(), 80),
-    ));
-
-    let update = item.updated_at?;
-    response_parts.push("last updated at".s());
-    response_parts.push(update.date().to_string());
-
-    Some(response_parts.join(" "))
+        Ok(RenderItems { items })
+    }
 }
 
 pub(crate) fn workers(mx: &Client, config: &Config) -> anyhow::Result<Vec<WorkerInfo>> {
