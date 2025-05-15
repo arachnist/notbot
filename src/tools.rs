@@ -73,8 +73,8 @@ pub async fn membership_status(user: OwnedUserId) -> anyhow::Result<MembershipSt
 
     let mut memberships = MEMBERSHIPS.lock().await;
 
-    let maybe_member = user.localpart();
-    if let Some(membership) = memberships.get(maybe_member) {
+    let maybe_member = user.localpart().to_lowercase();
+    if let Some(membership) = memberships.get(&maybe_member) {
         return Ok(membership.to_owned());
     }
 

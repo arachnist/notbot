@@ -106,7 +106,9 @@ pub async fn due_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Res
         if let Some(mut mentions_set) = event.ev.content.mentions {
             trace!("mentions: {mentions_set:#?}");
             if let Some(userid) = mentions_set.user_ids.pop_first() {
-                candidate = Some(userid)
+                let localpart = userid.localpart().to_lowercase();
+                let maybe_mxid = format!("@{localpart}:hackerspace.pl");
+                candidate = UserId::parse(maybe_mxid).ok();
             }
         }
 
