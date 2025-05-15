@@ -162,6 +162,10 @@ pub async fn gerrit_feeds(mx: Client, module_config: GerritConfig) -> anyhow::Re
                 };
             }
 
+            if post_changes.is_empty() {
+                continue;
+            };
+
             let render_items = RenderItems {
                 instance_url: instance.instance_url.clone(),
                 instance_name: name.to_owned(),
