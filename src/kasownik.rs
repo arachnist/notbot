@@ -160,7 +160,12 @@ pub async fn due_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Res
 pub async fn due_me_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
     use MembershipStatus::*;
 
-    let response = match membership_status(event.sender).await? {
+    let localpart = event.sender.localpart().to_lowercase();
+    let localpart_naive = localpart.trim_start_matches("libera_");
+    let naive_mxid = format!("@{localpart_naive}:hackerspace.pl");
+    let maybe_member = UserId::parse(naive_mxid)?;
+
+    let response = match membership_status(maybe_member).await? {
         NotAMember => "not a member".s(),
         Stoned => "stoned".s(),
         Inactive => "not currently a member".s(),
