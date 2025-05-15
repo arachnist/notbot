@@ -45,12 +45,13 @@ use crate::prelude::*;
 use crate::alerts::receive_alerts;
 use crate::metrics::{serve_metrics, track_metrics};
 
+use askama::Template;
 use axum::{
     error_handling::HandleErrorLayer,
     extract::State,
     http::{header::AUTHORIZATION, request::Parts, StatusCode},
     middleware, response,
-    response::IntoResponse,
+    response::{IntoResponse, Response, Html},
     routing::{any, get, post},
     Router,
 };
@@ -68,6 +69,7 @@ use tower_sessions::{
     cookie::{time::Duration, SameSite},
     Expiry, MemoryStore, Session, SessionManagerLayer,
 };
+use askama;
 
 /// Web interface configuration
 #[derive(Clone, Deserialize, Debug)]
@@ -180,16 +182,16 @@ pub async fn webterface(mx: Client, bot_config: Config) -> anyhow::Result<()> {
 }
 
 /// Temporary main response for the web interface. Responds with different strings, depending on whether or not the user is authenthicated.
+#[axum::debug_handler]
 pub async fn maybe_authenticated(
     claims: Result<OidcClaims<HswawAdditionalClaims>, axum_oidc::error::ExtractorError>,
-) -> impl IntoResponse {
+) -> Result<Html<String>, WebError> {
     if let Ok(claims) = claims {
-        format!(
-            "Hello {}! You are already logged in from another Handler.",
-            claims.subject().as_str()
-        )
+        let main = templates::Main { claims };
+
+        Ok(Html(main.render()?))
     } else {
-        "Hello anon!".to_string()
+        Ok(Html(templates::MainAnon {}.render()?))
     }
 }
 
@@ -284,5 +286,39 @@ impl AuthBearer {
             Some(("Bearer", contents)) => Ok(Self::from_header(contents)),
             _ => Err((Self::ERROR_CODE, "Authorization header invalid")),
         }
+    }
+}
+
+/// Error responses from http web interface
+#[derive(Debug, displaydoc::Display, thiserror::Error)]
+pub enum WebError {
+    /// not found
+    NotFound,
+    /// could not render template
+    Render(#[from] askama::Error),
+}
+
+impl IntoResponse for WebError {
+    fn into_response(self) -> Response {
+        match &self {
+            WebError::NotFound => (StatusCode::NOT_FOUND, "content not found").into_response(),
+            WebError::Render(_) => (StatusCode::INTERNAL_SERVER_ERROR, "something went wrong").into_response(),
+        }
+    }
+}
+
+mod templates {
+    use super::HswawAdditionalClaims;
+    use super::OidcClaims;
+    use askama::Template;
+
+    #[derive(Template)]
+    #[template(path = "web/main-anon.html")]
+    pub struct MainAnon {}
+
+    #[derive(Template)]
+    #[template(path = "web/main.html")]
+    pub struct Main {
+        pub claims: OidcClaims<HswawAdditionalClaims>,
     }
 }
