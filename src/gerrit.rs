@@ -30,6 +30,8 @@ use crate::prelude::*;
 use gerrit_api::{gerrit_fetch, ChangeInfo};
 use tokio::time::{interval, Duration};
 
+use askama::Template;
+
 /// Configuration of a specific queried Gerrit instance
 #[derive(Clone, Debug, Deserialize)]
 pub struct GerritInstance {
@@ -127,7 +129,7 @@ pub async fn gerrit_feeds(mx: Client, module_config: GerritConfig) -> anyhow::Re
                 continue;
             }
 
-            let known_ids: &Vec<String> = change_ids.get(name).unwrap();
+            let known_ids = change_ids.get_mut(name).unwrap();
             let mut post_changes = vec![];
 
             for change in data.clone() {
@@ -155,45 +157,22 @@ pub async fn gerrit_feeds(mx: Client, module_config: GerritConfig) -> anyhow::Re
                 if known_ids.contains(&change.id) {
                     continue;
                 } else {
-                    trace!("added");
+                    known_ids.push(change.id.clone());
                     post_changes.push(change);
                 };
             }
-            change_ids.insert(name.to_owned(), data.iter().map(|e| e.id.clone()).collect());
 
-            let mut plain_parts: Vec<String> = vec![];
-            let mut html_parts: Vec<String> = vec![];
-
-            for change in post_changes {
-                // change_url: https://gerrit.hackerspace.pl/c/hscloud/+/2443
-                let owner = known_users
-                    .get(&(name.to_owned(), change.owner.account_id))
-                    .unwrap();
-                let project = change.project;
-                let subject = change.subject;
-                let change_url = format!(
-                    "{instance}/c/{project}/+/{change_number}",
-                    instance = instance.instance_url,
-                    change_number = change.number,
-                );
-
-                let plain_message =
-                    format!("{owner} has posted a new change to {project}: {subject} {change_url}");
-
-                let html_message = format!(
-                    r#"{owner} has posted a new change to {project} <a href="{change_url}">{subject}</a>"#,
-                );
-
-                plain_parts.push(plain_message);
-                html_parts.push(html_message);
-            }
-
-            if plain_parts.is_empty() {
-                continue;
+            let render_items = RenderItems {
+                instance_url: instance.instance_url.clone(),
+                instance_name: name.to_owned(),
+                known_users: known_users.clone(),
+                items: post_changes,
             };
 
-            let plain_response = plain_parts.join("\n");
-            let html_response = html_parts.join("<br/>");
+            let message = RoomMessageEventContent::text_html(
+                render_items.as_plain().render()?,
+                render_items.as_formatted().render()?,
+            );
 
             for room_name in &instance.feed_rooms {
                 let room = match maybe_get_room(&mx, room_name).await {
@@ -202,10 +181,7 @@ pub async fn gerrit_feeds(mx: Client, module_config: GerritConfig) -> anyhow::Re
                 };
 
                 if let Err(e) = room
-                    .send(RoomMessageEventContent::text_html(
-                        plain_response.clone(),
-                        html_response.clone(),
-                    ))
+                    .send(message.clone())
                     .await
                 {
                     error!("failed to send message: {e}");
@@ -213,6 +189,18 @@ pub async fn gerrit_feeds(mx: Client, module_config: GerritConfig) -> anyhow::Re
             }
         }
     }
+}
+
+#[derive(Template)]
+#[template(
+    path = "matrix/gerrit-message.html",
+    blocks = ["formatted", "plain"],
+)]
+struct RenderItems {
+    instance_url: String,
+    instance_name: String,
+    known_users: HashMap<(String, u64), String>,
+    items: Vec<ChangeInfo>,
 }
 
 pub mod gerrit_api {
