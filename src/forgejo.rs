@@ -148,24 +148,19 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
     info!("registering modules");
     let forgejo_config: ForgejoConfig = config.typed_module_config(module_path!())?;
 
+    let mut keywords_pr = vec![];
+    keywords_pr.extend(forgejo_config.keywords_pr_new.clone());
+    keywords_pr.extend(forgejo_config.keywords_pr_old.clone());
+
     Ok(vec![
         ModuleInfo::new(
-            "pr_new",
-            "display list of latest open pull requests",
+            "pr",
+            "display list of open pull requests, oldest or newest",
             vec![],
-            TriggerType::Keyword(forgejo_config.keywords_pr_new.clone()),
+            TriggerType::Keyword(keywords_pr),
             Some("forgejo communications error"),
             forgejo_config.clone(),
-            pr_new,
-        ),
-        ModuleInfo::new(
-            "pr_old",
-            "display list of oldest open pull requests",
-            vec![],
-            TriggerType::Keyword(forgejo_config.keywords_pr_old.clone()),
-            Some("forgejo communications error"),
-            forgejo_config.clone(),
-            pr_old,
+            pr,
         ),
         ModuleInfo::new(
             "issue_new",
@@ -214,13 +209,7 @@ async fn early_fail(
         return Err(NoInstancesConfigured.into());
     } else if event.args.is_none() {
         if config.instances.keys().len() == 1 {
-            config
-                .instances
-                .iter()
-                .map(|(_, v)| v)
-                .last()
-                .unwrap()
-                .to_owned()
+            config.instances.values().last().unwrap().to_owned()
         } else {
             event
                 .room
@@ -230,25 +219,23 @@ async fn early_fail(
                 .await?;
             return Err(NotProvidedMany.into());
         }
-    } else {
-        if config
+    } else if config
+        .instances
+        .contains_key(&event.args.clone().ok_or(anyhow!("wtf?"))?)
+    {
+        config
             .instances
-            .contains_key(&event.args.clone().ok_or(anyhow!("wtf?"))?)
-        {
-            config
-                .instances
-                .get(&event.args.unwrap())
-                .unwrap()
-                .to_owned()
-        } else {
-            event
-                .room
-                .send(RoomMessageEventContent::text_plain(
-                    "Argument provided but not found",
-                ))
-                .await?;
-            return Err(ProvidedNotFound.into());
-        }
+            .get(&event.args.unwrap())
+            .unwrap()
+            .to_owned()
+    } else {
+        event
+            .room
+            .send(RoomMessageEventContent::text_plain(
+                "Argument provided but not found",
+            ))
+            .await?;
+        return Err(ProvidedNotFound.into());
     };
 
     let auth = Auth::Token(&instance.token_secret);
@@ -257,8 +244,8 @@ async fn early_fail(
     Ok((instance.organization, forgejo))
 }
 
-/// Display list of latest open pull requests.
-pub async fn pr_new(event: ConsumerEvent, config: ForgejoConfig) -> anyhow::Result<()> {
+/// Display list of open pull requests.
+pub async fn pr(event: ConsumerEvent, config: ForgejoConfig) -> anyhow::Result<()> {
     use forgejo_api::structs::*;
     let (organization, forgejo) = early_fail(event.clone(), &config).await?;
     let repo_query = OrgListReposQuery {
@@ -289,29 +276,125 @@ pub async fn pr_new(event: ConsumerEvent, config: ForgejoConfig) -> anyhow::Resu
         }
     }
 
-    let mut response_parts_html: Vec<String> = vec![];
-    let mut response_parts_plain: Vec<String> = vec![];
-
     pull_requests.sort_by_key(|pr| pr.updated_at.unwrap());
 
-    for pr in pull_requests.iter().rev().take(config.objects_count.into()) {
-        trace!("pr: {:#?}", pr.title);
+    let shortlist: Vec<PullRequest> = if config.keywords_pr_old.contains(&event.keyword) {
+        pull_requests
+            .iter()
+            .take(config.objects_count.into())
+            .map(|x| x.to_owned())
+            .collect()
+    } else {
+        pull_requests
+            .iter()
+            .rev()
+            .take(config.objects_count.into())
+            .map(|x| x.to_owned())
+            .collect()
+    };
+
+    if let Err(e) = event.room.send(render_pr_message(shortlist)?).await {
+        error!("failed to send message: {e}");
     }
+
     Ok(())
 }
 
-/// Display list of oldest open pull requests.
-pub async fn pr_old(event: ConsumerEvent, config: ForgejoConfig) -> anyhow::Result<()> {
-    Ok(())
+/// Renders a list of pull request into a single matrix message.
+pub fn render_pr_message(
+    pulls: Vec<forgejo_api::structs::PullRequest>,
+) -> anyhow::Result<RoomMessageEventContent> {
+    let mut parts_plain: Vec<String> = vec![];
+    let mut parts_html: Vec<String> = vec![];
+
+    for pr in pulls {
+        let url = match pr.clone().html_url {
+            Some(u) => u.to_string(),
+            None => "unknown".s(),
+        };
+
+        let rendered_html = match render_pr_html(pr.clone()) {
+            Some(r) => r,
+            None => format!("(html) failed parsing pr: {url}",),
+        };
+        let rendered_plain = match render_pr_plain(pr.clone()) {
+            Some(r) => r,
+            None => format!("(plain) failed parsing pr: {url}",),
+        };
+
+        parts_plain.push(rendered_plain);
+        parts_html.push(rendered_html);
+    }
+
+    let plain_response = parts_plain.join("\n");
+    let html_response = parts_html.join("<br/>");
+
+    Ok(RoomMessageEventContent::text_html(
+        plain_response.clone(),
+        html_response.clone(),
+    ))
+}
+
+/// Renders a single PR into a single line formatted message
+pub fn render_pr_html(pr: forgejo_api::structs::PullRequest) -> Option<String> {
+    use unicode_ellipsis::truncate_str;
+    let mut response_parts: Vec<String> = vec![];
+
+    response_parts.push("on".s());
+    response_parts.push(pr.created_at?.date().to_string());
+
+    let user = pr.user?;
+    response_parts.push(format!(
+        r#"<a href="{url}">{name}</a>"#,
+        url = user.html_url?,
+        name = user.login?,
+    ));
+
+    response_parts.push("opened pr:".s());
+    response_parts.push(format!(
+        r#"<a href="{pr_url}">{pr_title}</a>"#,
+        pr_url = pr.html_url?,
+        pr_title = truncate_str(pr.title?.as_str(), 80),
+    ));
+
+    let update = pr.updated_at?;
+    response_parts.push("last updated at".s());
+    response_parts.push(update.date().to_string());
+
+    Some(response_parts.join(" "))
+}
+
+/// renders a single PR into a single line plain-text message
+pub fn render_pr_plain(pr: forgejo_api::structs::PullRequest) -> Option<String> {
+    use unicode_ellipsis::truncate_str;
+    let mut response_parts: Vec<String> = vec![];
+
+    response_parts.push("on".s());
+    response_parts.push(pr.created_at?.date().to_string());
+
+    let user = pr.user?;
+    response_parts.push((user.login?).to_string());
+
+    response_parts.push("opened pr:".s());
+    response_parts.push(format!(
+        r#"{pr_title}"#,
+        pr_title = truncate_str(pr.title?.as_str(), 80),
+    ));
+
+    let update = pr.updated_at?;
+    response_parts.push("last updated at".s());
+    response_parts.push(update.date().to_string());
+
+    Some(response_parts.join(" "))
 }
 
 /// Display list of latest open issues.
-pub async fn issue_new(event: ConsumerEvent, config: ForgejoConfig) -> anyhow::Result<()> {
+pub async fn issue_new(_event: ConsumerEvent, _config: ForgejoConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
 /// Display list of oldest open issues.
-pub async fn issue_old(event: ConsumerEvent, config: ForgejoConfig) -> anyhow::Result<()> {
+pub async fn issue_old(_event: ConsumerEvent, _config: ForgejoConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
