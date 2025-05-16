@@ -25,4 +25,8 @@ rustPlatform.buildRustPackage {
     openssl
     sqlite
   ];
+
+  postInstall = ''
+    cp -r $src/webui $out/webui
+  '';
 }
