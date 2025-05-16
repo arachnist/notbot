@@ -232,6 +232,7 @@ use matrix_sdk::{Client, Room};
 use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 
+use askama::Template;
 use mlua::Lua;
 
 /// Number of events consumed, grouped by module
@@ -1265,92 +1266,63 @@ async fn help_consumer(
     }
 }
 
+#[derive(Template)]
+#[template(
+    path = "matrix/help-message.html",
+    blocks = ["formatted", "plain", "specific"],
+)]
+struct RenderHelp {
+    config: Config,
+    modules: Vec<WeakModuleInfo>,
+    passthrough: Vec<PassThroughModuleInfo>,
+    workers: Vec<WorkerInfo>,
+    source_url: String,
+    docs_link: String,
+    matrix_contact: String,
+}
+
+impl RenderHelp {
+    fn failed(&self) -> (usize, usize, usize) {
+        (
+            self.modules
+                .iter()
+                .filter(|x| x.channel.upgrade().unwrap().is_closed())
+                .count(),
+            self.passthrough
+                .iter()
+                .filter(|x| x.0.channel.is_closed())
+                .count(),
+            self.workers
+                .iter()
+                .filter(|x| x.handle.is_finished())
+                .count(),
+        )
+    }
+}
+
 /// Processes help events. If provided with an argument, will try to match it against a name of known modules, passthrough modules, or
 /// workers, to provide more specific help.
 pub async fn help_processor(
     event: ConsumerEvent,
     config: Config,
-    registered_modules: Vec<WeakModuleInfo>,
-    registered_passthrough_modules: Vec<PassThroughModuleInfo>,
-    registered_workers: Vec<WorkerInfo>,
+    modules: Vec<WeakModuleInfo>,
+    passthrough: Vec<PassThroughModuleInfo>,
+    workers: Vec<WorkerInfo>,
 ) -> anyhow::Result<()> {
-    let generic_help = {
-        let modules_num = registered_modules.len();
-        let passthrough_num = registered_passthrough_modules.len();
-        let workers_num = registered_workers.len();
-        let failed_num = registered_modules
-            .iter()
-            .filter(|x| x.channel.upgrade().unwrap().is_closed())
-            .count();
-        let passthrough_failed_num = registered_passthrough_modules
-            .iter()
-            .filter(|x| x.0.channel.is_closed())
-            .count();
-        let workers_failed_num = registered_workers
-            .iter()
-            .filter(|x| x.handle.is_finished())
-            .count();
-        let failed_mod_str = match failed_num {
-            0 => String::new(),
-            _ => format!(", of which {failed_num} did not initialize correctly"),
-        };
-        let failed_passthrough_str = match passthrough_failed_num {
-            0 => String::new(),
-            _ => format!(", of which {passthrough_failed_num} did not initialize correctly"),
-        };
-        let failed_workers_str = match workers_failed_num {
-            0 => String::new(),
-            _ => format!(", of which {workers_failed_num} stopped working"),
-        };
-        let m_plural = if modules_num != 1 { "s" } else { "" };
-        let p_plural = if passthrough_num != 1 { "s" } else { "" };
-        let w_plural = if workers_num != 1 { "s" } else { "" };
-        let prefixes = config.prefixes();
-        let plain = format!(
-            r#"this is the notbot; source {source_url}; configured prefixes: {prefixes:?}
-there are currently {modules_num} module{m_plural} registered{failed_mod_str}{mod_maybe_newline} {passthrough_num} passthrough module{p_plural} registered{failed_passthrough_str}{mod_and_pass_maybe_newline} {workers_num} worker{w_plural} registered{failed_workers_str}
-call «list-modules» to get a list of modules, or «help <module name>» for brief description of the module function
-documentation is at {docs_link}
-contact {mx_contact} or {fedi_contact} if you need more help"#,
-            mod_maybe_newline = if failed_num == 0 {
-                ", and "
-            } else {
-                "\nthere are currently "
-            },
-            mod_and_pass_maybe_newline = if failed_num == 0 && passthrough_failed_num == 0 {
-                ", and "
-            } else {
-                "\nthere are currently "
-            },
-            source_url = ": https://code.hackerspace.pl/ar/notbot",
-            docs_link = "https://docs.rs/notbot/latest/notbot/",
-            mx_contact = "matrix: @ar:is-a.cat",
-            fedi_contact = "fedi: @ar@is-a.cat",
-        );
-        let html = format!(
-            r#"this is the notbot; source {source_url}; configured prefixes: {prefixes:?}<br />
-there are currently {modules_num} module{m_plural} registered{failed_mod_str}{mod_maybe_newline} {passthrough_num} passthrough module{p_plural} registered{failed_passthrough_str}{mod_and_pass_maybe_newline} {workers_num} worker{w_plural} registered{failed_workers_str}<br />
-call «list-modules» to get a list of modules, or «help <module name>» for brief description of the module function<br />
-documentation is at {docs_link}<br />
-contact {mx_contact} or {fedi_contact} if you need more help"#,
-            mod_maybe_newline = if failed_num == 0 {
-                ", and "
-            } else {
-                "<br />\nthere are currently "
-            },
-            mod_and_pass_maybe_newline = if failed_num == 0 && passthrough_failed_num == 0 {
-                ", and "
-            } else {
-                "\nthere are currently "
-            },
-            source_url = r#"is <a href="https://code.hackerspace.pl/ar/notbot">here</a>"#,
-            docs_link = "https://docs.rs/notbot/latest/notbot/",
-            mx_contact = r#"<a href="https://matrix.to/#/@ar:is-a.cat">@ar:is-a.cat</a>"#,
-            fedi_contact = r#"<a href="https://is-a.cat/@ar">@ar@is-a.cat</a>"#,
-        );
-
-        RoomMessageEventContent::text_html(plain, html)
+    let generic = RenderHelp {
+        config,
+        modules: modules.clone(),
+        passthrough: passthrough.clone(),
+        workers: workers.clone(),
+        source_url: "https://code.hackerspace.pl/ar/notbot".s(),
+        docs_link: "https://docs.rs/notbot/latest/notbot/".s(),
+        matrix_contact: "@ar:is-a.cat".s(),
     };
+
+    let generic_help = RoomMessageEventContent::text_html(
+        generic.as_plain().render()?,
+        generic.as_formatted().render()?,
+    );
 
     let Some(args) = event.args else {
         event.room.send(generic_help).await?;
@@ -1364,7 +1336,7 @@ contact {mx_contact} or {fedi_contact} if you need more help"#,
     };
 
     let mut specific_response: Option<RoomMessageEventContent> = None;
-    for module in registered_modules {
+    for module in modules {
         if module.name == maybe_module_name {
             let keywords = match module.trigger {
                 TriggerType::Catchall(_) => "".s(),
@@ -1389,7 +1361,7 @@ contact {mx_contact} or {fedi_contact} if you need more help"#,
         };
     }
 
-    for module in registered_passthrough_modules {
+    for module in passthrough {
         if module.0.name == maybe_module_name {
             let keywords = match module.0.trigger {
                 TriggerType::Keyword(t) => format!("; registered keywords: {t:?}"),
@@ -1410,7 +1382,7 @@ contact {mx_contact} or {fedi_contact} if you need more help"#,
         };
     }
 
-    for module in registered_workers {
+    for module in workers {
         if module.name == maybe_module_name {
             let response = format!(
                 r#"module {name} is {status}; help: {help}; status keyword: {keyword}"#,
