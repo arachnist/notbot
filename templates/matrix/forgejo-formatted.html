@@ -1,10 +1,40 @@
 {%- block formatted -%}
 {%- for item in items -%}
-on {{ item.create_date.date() }} <a href="{{ item.user_url }}">{{ item.user_name }}</a> opened: <a href="{{ item.item_url }}">{{ item.item_title }}</a>, last updated at {{ item.update_date.date() }}</br>
+{%- if let Some(date) = item.created_at %}on {{ date.date() }} {% endif -%}
+{%- if let Some(user) = item.user -%}
+  {%- if let Some(name) = user.login -%}
+    {%- if let Some(url) = user.html_url -%}
+      <a href="{{ url.to_string() }}">{{ name }}</a>
+    {%- else -%}
+      {{ name }}
+    {%- endif -%}
+  {%- endif -%}
+{%- endif %}
+{%~ if let Some(item_title) = item.title -%}
+  opened:
+  {%~ if let Some(url) = item.html_url -%}
+    <a href="{{ url.to_string() }}">{{ item_title|truncate(80) }}</a>
+  {%- else -%}
+    {{ item_title|truncate(80) }}
+  {%- endif -%}
+{%- endif %}
+{%~ if let Some(date) = item.updated_at %}, last updated on {{ date.date() }} {% endif -%}</br>
 {%- endfor -%}
 {%- endblock -%}
+
 {%- block plain -%}
-{%- for item in items %}
-on {{ item.create_date.date() }} {{ item.user_name }} opened: {{ item.item_url }} {{ item.item_title }}, last updated at {{ item.update_date.date() }}
-{%- endfor -%}
+{%- for item in items -%}
+{%- if let Some(date) = item.created_at -%}
+  on {{ date.date() }}
+{%- endif ~%} {%~ if let Some(user) = item.user -%}
+  {%- if let Some(name) = user.login -%}
+    {{ name }}
+  {%- endif -%}
+{%- endif ~%} {%~ if let Some(item_title) = item.title -%}
+  opened:
+  {%- if let Some(url) = item.html_url %} {{ url.to_string() }}
+  {%- endif %} {{ item_title|truncate(80) }}
+{%- endif -%}
+{%- if let Some(date) = item.updated_at %}, last updated on {{ date.date() }} {%- endif ~%}
+{%~ endfor -%}
 {%- endblock -%}

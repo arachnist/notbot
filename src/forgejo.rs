@@ -303,7 +303,7 @@ pub async fn forgejo_query(event: ConsumerEvent, config: ForgejoConfig) -> anyho
             .collect()
     };
 
-    let render_items: RenderItems = shortlist.try_into()?;
+    let render_items = RenderItems { items: shortlist };
     let message = RoomMessageEventContent::text_html(
         render_items.as_plain().render()?,
         render_items.as_formatted().render()?,
@@ -320,61 +320,7 @@ pub async fn forgejo_query(event: ConsumerEvent, config: ForgejoConfig) -> anyho
     blocks = ["formatted", "plain"],
 )]
 struct RenderItems {
-    items: Vec<RenderedItem>,
-}
-
-struct RenderedItem {
-    item_title: String,
-    item_url: String,
-    user_name: String,
-    user_url: String,
-    create_date: OffsetDateTime,
-    update_date: OffsetDateTime,
-}
-
-impl TryFrom<forgejo_api::structs::Issue> for RenderedItem {
-    type Error = anyhow::Error;
-
-    fn try_from(item: forgejo_api::structs::Issue) -> anyhow::Result<Self> {
-        let user = item.user.ok_or(anyhow!("user not found"))?;
-
-        Ok(RenderedItem {
-            item_title: unicode_ellipsis::truncate_str(
-                &item.title.ok_or(anyhow!("item title not present"))?,
-                80,
-            )
-            .to_string(),
-            item_url: item
-                .html_url
-                .ok_or(anyhow!("item url not present"))?
-                .to_string(),
-            user_name: user.login.ok_or(anyhow!("user login not present"))?,
-            user_url: user
-                .html_url
-                .ok_or(anyhow!("user url not present"))?
-                .to_string(),
-            create_date: item
-                .created_at
-                .ok_or(anyhow!("item creation date not present"))?,
-            update_date: item
-                .updated_at
-                .ok_or(anyhow!("item update date not present"))?,
-        })
-    }
-}
-
-impl TryFrom<Vec<forgejo_api::structs::Issue>> for RenderItems {
-    type Error = anyhow::Error;
-
-    fn try_from(issues: Vec<forgejo_api::structs::Issue>) -> anyhow::Result<Self> {
-        let mut items: Vec<RenderedItem> = vec![];
-
-        for issue in issues {
-            items.push(issue.try_into()?);
-        }
-
-        Ok(RenderItems { items })
-    }
+    items: Vec<forgejo_api::structs::Issue>,
 }
 
 pub(crate) fn workers(mx: &Client, config: &Config) -> anyhow::Result<Vec<WorkerInfo>> {
