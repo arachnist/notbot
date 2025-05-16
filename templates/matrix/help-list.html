@@ -1,0 +1,37 @@
+{%- block formatted -%}
+{%- set mod_names = list_modules(modules) -%}
+{%- set pmod_names = list_modules(passthrough) -%}
+{%- set w_names = list_workers() -%}
+{%- if !modules.is_empty() -%}
+  <b>modules:</b>
+  {%- for name in mod_names.0 %} <code>{{ name }}</code>{%- endfor -%}
+  </br>
+{%- endif %}
+{% if !passthrough.is_empty() -%}
+  <b>passthrough:</b>
+  {%- for name in pmod_names.0 %} <code>{{ name }}</code>{%- endfor -%}
+  </br>
+{%- endif -%}
+{% if !workers.is_empty() -%}
+  <b>workers:</b>
+  {%- for name in w_names.0 %} <code>{{ name }}</code>{%- endfor -%}
+{%- endif -%}{%- if mod_names.1 || pmod_names.1 || w_names.1 -%}; modules marked with <code>*</code> stopped working {%- endif -%}
+{%- endblock -%}
+
+{%- block plain -%}
+{%- set mod_names = list_modules(modules) -%}
+{%- set pmod_names = list_modules(passthrough) -%}
+{%- set w_names = list_workers() -%}
+{%- if !modules.is_empty() -%}
+  modules:
+  {%- for name in mod_names.0 %} {{ name }}{%- endfor -%}
+{% endif %}
+{% if !passthrough.is_empty() -%}
+  passthrough:
+  {%- for name in pmod_names.0 %} {{ name }}{%- endfor -%}
+{% endif -%}
+{% if !workers.is_empty() -%}
+  passthrough:
+  {%- for name in w_names.0 %} {{ name }}{%- endfor -%}
+{%- endif -%}{%- if mod_names.1 || pmod_names.1 || w_names.1 -%}; modules marked with * stopped working {%- endif -%}
+{%- endblock -%}

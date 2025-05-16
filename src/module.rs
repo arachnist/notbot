@@ -1379,12 +1379,60 @@ pub async fn help_processor(
     Ok(())
 }
 
+#[derive(Template)]
+#[template(
+    path = "matrix/help-list.html",
+    blocks = ["formatted", "plain"],
+)]
+struct RenderList {
+    modules: Vec<WeakModuleInfo>,
+    passthrough: Vec<WeakModuleInfo>,
+    workers: Vec<WorkerInfo>,
+}
+
+impl RenderList {
+    fn list_modules(&self, m: &Vec<WeakModuleInfo>) -> (Vec<String>, bool) {
+        let mut failed = false;
+        (
+            m.iter()
+                .map(|x| {
+                    let mut s = x.name.clone();
+                    if x.channel.upgrade().unwrap().is_closed() {
+                        s.push('*');
+                        failed = true;
+                    }
+                    s
+                })
+                .collect(),
+            failed,
+        )
+    }
+
+    fn list_workers(&self) -> (Vec<String>, bool) {
+        let mut failed = false;
+        (
+            self.workers
+                .iter()
+                .map(|x| {
+                    let mut s = x.name.clone();
+                    if x.handle.is_finished() {
+                        s.push('*');
+                        failed = true;
+                    };
+                    s
+                })
+                .collect(),
+            failed,
+        )
+    }
+}
+
 /// Provides a list of all registered modules, passthrough modules, and workers.
 pub async fn list_consumer(
     mut rx: mpsc::Receiver<ConsumerEvent>,
-    registered_modules: Vec<WeakModuleInfo>,
-    registered_passthrough_modules: Vec<WeakModuleInfo>,
-    registered_workers: Vec<WorkerInfo>,
+    modules: Vec<WeakModuleInfo>,
+    passthrough: Vec<WeakModuleInfo>,
+    workers: Vec<WorkerInfo>,
 ) -> anyhow::Result<()> {
     loop {
         let event = match rx.recv().await {
@@ -1395,67 +1443,18 @@ pub async fn list_consumer(
             }
         };
 
-        let mut failed = false;
-        let modules: Vec<String> = registered_modules
-            .iter()
-            .map(|x| {
-                let mut s = x.name.clone();
-                if x.channel.upgrade().unwrap().is_closed() {
-                    s.push('*');
-                    failed = true;
-                }
-                s
-            })
-            .collect();
-        let passthrough: Vec<String> = registered_passthrough_modules
-            .iter()
-            .map(|x| {
-                let mut s = x.name.clone();
-                if x.channel.upgrade().unwrap().is_closed() {
-                    s.push('*');
-                    failed = true;
-                }
-                s
-            })
-            .collect();
-        let workers: Vec<String> = registered_workers
-            .iter()
-            .map(|x| {
-                let mut s = x.name.clone();
-                if x.handle.is_finished() {
-                    s.push('*');
-                    failed = true;
-                };
-                s
-            })
-            .collect();
+        let render_list = RenderList {
+            modules: modules.clone(),
+            passthrough: passthrough.clone(),
+            workers: workers.clone(),
+        };
 
-        let response = format!(
-            r#"{maybe_modules}{modules_list}{maybe_newline}{maybe_passthrough}{passthrough_list}{maybe_post_passthrough_newline}{maybe_workers}{workers_list}{maybe_failed}"#,
-            maybe_modules = if !modules.is_empty() { "modules: " } else { "" },
-            modules_list = modules.join(", "),
-            maybe_newline = if !modules.is_empty() { "\n" } else { "" },
-            maybe_passthrough = if !passthrough.is_empty() {
-                "passthrough: "
-            } else {
-                ""
-            },
-            passthrough_list = passthrough.join(", "),
-            maybe_post_passthrough_newline = if !passthrough.is_empty() { "\n" } else { "" },
-            maybe_workers = if !workers.is_empty() { "workers: " } else { "" },
-            workers_list = workers.join(", "),
-            maybe_failed = if failed {
-                "\nmodules marked with * are failed"
-            } else {
-                ""
-            },
+        let response = RoomMessageEventContent::text_html(
+            render_list.as_plain().render()?,
+            render_list.as_formatted().render()?,
         );
 
-        if let Err(e) = event
-            .room
-            .send(RoomMessageEventContent::text_plain(response))
-            .await
-        {
+        if let Err(e) = event.room.send(response).await {
             error!("failed sending list response: {e}");
         }
     }
