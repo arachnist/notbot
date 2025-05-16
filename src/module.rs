@@ -1116,23 +1116,27 @@ pub fn core_starter(
     modules.push(shutdown);
 
     // avoids a cyclic reference of help/list holding their own receivers and senders at the same time
-    let weak_registered_modules: Vec<WeakModuleInfo> = registered_modules
+    let weak_modules: Vec<WeakModuleInfo> = registered_modules
         .iter()
         .chain(&modules)
+        .map(|m| m.into())
+        .collect();
+    let weak_passthrough: Vec<WeakModuleInfo> = registered_passthrough_modules
+        .iter()
         .map(|m| m.into())
         .collect();
 
     tokio::task::spawn(help_consumer(
         help_rx,
         config.clone(),
-        weak_registered_modules.clone(),
-        registered_passthrough_modules.clone(),
+        weak_modules.clone(),
+        weak_passthrough.clone(),
         registered_workers.clone(),
     ));
     tokio::task::spawn(list_consumer(
         list_rx,
-        weak_registered_modules.clone(),
-        registered_passthrough_modules.clone(),
+        weak_modules.clone(),
+        weak_passthrough.clone(),
         registered_workers.clone(),
     ));
     tokio::task::spawn(reload_consumer(reload_rx, reload_ev_tx));
@@ -1180,7 +1184,11 @@ pub fn core_starter(
 /// 1. event channels for passthrough modules and workers being closed
 /// 1. passthrough modules and worker helpers event consumer loops exiting
 /// 1. workers being stopped when their helper consumer loops exit, by calling [`tokio::task::AbortHandle::abort`] on their handles.
-#[derive(Clone)]
+#[derive(Clone, Debug, Template)]
+#[template(
+    path = "matrix/help-module.html",
+    blocks = ["formatted", "plain"],
+)]
 pub struct WeakModuleInfo {
     /// Name of the module
     pub name: String,
@@ -1192,17 +1200,6 @@ pub struct WeakModuleInfo {
     pub channel: mpsc::WeakSender<ConsumerEvent>,
 }
 
-impl From<ModuleInfo> for WeakModuleInfo {
-    fn from(m: ModuleInfo) -> Self {
-        WeakModuleInfo {
-            name: m.name,
-            help: m.help,
-            trigger: m.trigger,
-            channel: m.channel.downgrade(),
-        }
-    }
-}
-
 impl From<&ModuleInfo> for WeakModuleInfo {
     fn from(m: &ModuleInfo) -> Self {
         WeakModuleInfo {
@@ -1210,6 +1207,17 @@ impl From<&ModuleInfo> for WeakModuleInfo {
             help: m.help.to_owned(),
             trigger: m.trigger.to_owned(),
             channel: m.channel.downgrade(),
+        }
+    }
+}
+
+impl From<&PassThroughModuleInfo> for WeakModuleInfo {
+    fn from(m: &PassThroughModuleInfo) -> Self {
+        WeakModuleInfo {
+            name: m.0.name.to_owned(),
+            help: m.0.help.to_owned(),
+            trigger: m.0.trigger.to_owned(),
+            channel: m.0.channel.downgrade(),
         }
     }
 }
@@ -1231,9 +1239,9 @@ pub async fn shutdown_consumer(mut rx: mpsc::Receiver<ConsumerEvent>) -> anyhow:
 async fn help_consumer(
     mut rx: mpsc::Receiver<ConsumerEvent>,
     config: Config,
-    registered_modules: Vec<WeakModuleInfo>,
-    registered_passthrough_modules: Vec<PassThroughModuleInfo>,
-    registered_workers: Vec<WorkerInfo>,
+    modules: Vec<WeakModuleInfo>,
+    passthrough_modules: Vec<WeakModuleInfo>,
+    workers: Vec<WorkerInfo>,
 ) -> anyhow::Result<()> {
     loop {
         let event = match rx.recv().await {
@@ -1247,9 +1255,9 @@ async fn help_consumer(
         if let Err(e) = help_processor(
             event.clone(),
             config.clone(),
-            registered_modules.clone(),
-            registered_passthrough_modules.clone(),
-            registered_workers.clone(),
+            modules.clone(),
+            passthrough_modules.clone(),
+            workers.clone(),
         )
         .await
         {
@@ -1268,13 +1276,13 @@ async fn help_consumer(
 
 #[derive(Template)]
 #[template(
-    path = "matrix/help-message.html",
-    blocks = ["formatted", "plain", "specific"],
+    path = "matrix/help-generic.html",
+    blocks = ["formatted", "plain"],
 )]
 struct RenderHelp {
     config: Config,
     modules: Vec<WeakModuleInfo>,
-    passthrough: Vec<PassThroughModuleInfo>,
+    passthrough: Vec<WeakModuleInfo>,
     workers: Vec<WorkerInfo>,
     source_url: String,
     docs_link: String,
@@ -1290,7 +1298,7 @@ impl RenderHelp {
                 .count(),
             self.passthrough
                 .iter()
-                .filter(|x| x.0.channel.is_closed())
+                .filter(|x| x.channel.upgrade().unwrap().is_closed())
                 .count(),
             self.workers
                 .iter()
@@ -1306,7 +1314,7 @@ pub async fn help_processor(
     event: ConsumerEvent,
     config: Config,
     modules: Vec<WeakModuleInfo>,
-    passthrough: Vec<PassThroughModuleInfo>,
+    passthrough: Vec<WeakModuleInfo>,
     workers: Vec<WorkerInfo>,
 ) -> anyhow::Result<()> {
     let generic = RenderHelp {
@@ -1336,48 +1344,14 @@ pub async fn help_processor(
     };
 
     let mut specific_response: Option<RoomMessageEventContent> = None;
-    for module in modules {
-        if module.name == maybe_module_name {
-            let keywords = match module.trigger {
-                TriggerType::Catchall(_) => "".s(),
-                TriggerType::Keyword(v) => format!(
-                    "\nkeyword{maybe_s}: {kws}",
-                    maybe_s = if v.len() > 1 { "s" } else { "" },
-                    kws = v.join(", ")
-                ),
-            };
-            let response = format!(
-                r#"module {name} is {status}; help: {help}{keywords}"#,
-                name = module.name,
-                help = module.help,
-                status = if module.channel.upgrade().unwrap().is_closed() {
-                    "failed"
-                } else {
-                    "running"
-                },
-            );
-            specific_response = Some(RoomMessageEventContent::text_plain(response));
-            break;
-        };
-    }
 
-    for module in passthrough {
-        if module.0.name == maybe_module_name {
-            let keywords = match module.0.trigger {
-                TriggerType::Keyword(t) => format!("; registered keywords: {t:?}"),
-                _ => String::new(),
-            };
-            let response = format!(
-                r#"module {name} is {status}; help: {help}{keywords}"#,
-                name = module.0.name,
-                help = module.0.help,
-                status = if module.0.channel.is_closed() {
-                    "failed"
-                } else {
-                    "running"
-                },
+    for module in modules.iter().chain(&passthrough) {
+        if module.name == maybe_module_name {
+            let specific_help = RoomMessageEventContent::text_html(
+                module.as_plain().render()?,
+                module.as_formatted().render()?,
             );
-            specific_response = Some(RoomMessageEventContent::text_plain(response));
+            specific_response = Some(specific_help);
             break;
         };
     }
@@ -1412,7 +1386,7 @@ pub async fn help_processor(
 pub async fn list_consumer(
     mut rx: mpsc::Receiver<ConsumerEvent>,
     registered_modules: Vec<WeakModuleInfo>,
-    registered_passthrough_modules: Vec<PassThroughModuleInfo>,
+    registered_passthrough_modules: Vec<WeakModuleInfo>,
     registered_workers: Vec<WorkerInfo>,
 ) -> anyhow::Result<()> {
     loop {
@@ -1439,8 +1413,8 @@ pub async fn list_consumer(
         let passthrough: Vec<String> = registered_passthrough_modules
             .iter()
             .map(|x| {
-                let mut s = x.0.name.clone();
-                if x.0.channel.is_closed() {
+                let mut s = x.name.clone();
+                if x.channel.upgrade().unwrap().is_closed() {
                     s.push('*');
                     failed = true;
                 }

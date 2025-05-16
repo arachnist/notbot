@@ -1,0 +1,25 @@
+{% block formatted %}
+module {{ name }} is
+{%- if channel.upgrade().unwrap().is_closed() -%}
+ failed
+{%- else -%}
+ running
+{%- endif -%}; help: {{ help }}
+{%- match trigger -%}
+  {% when TriggerType::Keyword(v) %}; keyword{{ v.len() | pluralize }}:{% for kw in v %} <code>{{ kw }}</code>{%- endfor -%}</br>
+  {%- when _ -%}
+{%- endmatch -%}
+{%- endblock -%}
+
+{%- block plain -%}
+module {{ name }} is
+{%- if channel.upgrade().unwrap().is_closed() -%}
+ failed
+{%- else -%}
+ running
+{%- endif -%}; help: {{ help }}
+{%- match trigger -%}
+  {% when TriggerType::Keyword(v) %}; keyword{{ v.len() | pluralize }}:{% for kw in v %} {{ kw }}{%- endfor -%}
+  {%- when _ -%}
+{%- endmatch -%}
+{%- endblock -%}

@@ -15,7 +15,6 @@ this is the notbot; docs are here: {{ docs_link }}; configured prefixes: {{ conf
 there are currently {{ modules.len() }} module{{ modules.len() | pluralize }}, {{ passthrough.len() }} passthrough module{{ passthrough.len() | pluralize }}, and {{ workers.len() }} worker{{ workers.len() | pluralize }} registered.
 {%- if f.0 > 0 %} {{ f.0 }} module{{ f.0 | pluralize }} failed to initialize; {%- endif -%}
 {%- if f.1 > 0 %} {{ f.1 }} passthrough module{{ f.1 | pluralize }} failed to initialize; {%- endif -%}
-{%- if f.2 > 0 %} {{ f.2 }} worker{{ f.2 | pluralize }} stopped working {%- endif %}
-call «list-modules» to get a list of modules, or «help module_name» for brief description of the module function.
+{%- if f.2 > 0 %} {{ f.2 }} worker{{ f.2 | pluralize }} stopped working {%- endif %}; call «list-modules» to get a list of modules, or «help module_name» for brief description of the module function.
 you can find the source at {{ source_url }} and you can contact the author at https://matrix.to/#/{{ matrix_contact }} if you need more help
 {%- endblock -%}
