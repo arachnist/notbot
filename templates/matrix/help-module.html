@@ -1,4 +1,4 @@
-{% block formatted %}
+{%- block formatted -%}
 module {{ name }} is
 {%- if channel.upgrade().unwrap().is_closed() -%}
  failed

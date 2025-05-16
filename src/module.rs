@@ -497,7 +497,11 @@ pub enum Consumption {
 /// Defines things needed from the worker by the help system
 /// Workers are intended to be used by background tasks that act on events outside of matrix, even if the do sometimes interact with matrix.
 /// Examples of such tasks include a web interface, or SpaceAPI observer.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Template)]
+#[template(
+    path = "matrix/help-worker.html",
+    blocks = ["formatted", "plain"],
+)]
 pub struct WorkerInfo {
     /// Worker name
     name: String,
@@ -1358,18 +1362,11 @@ pub async fn help_processor(
 
     for module in workers {
         if module.name == maybe_module_name {
-            let response = format!(
-                r#"module {name} is {status}; help: {help}; status keyword: {keyword}"#,
-                name = module.name,
-                help = module.help,
-                status = if module.handle.is_finished() {
-                    "stopped"
-                } else {
-                    "working"
-                },
-                keyword = module.keyword,
+            let specific_help = RoomMessageEventContent::text_html(
+                module.as_plain().render()?,
+                module.as_formatted().render()?,
             );
-            specific_response = Some(RoomMessageEventContent::text_plain(response));
+            specific_response = Some(specific_help);
             break;
         };
     }

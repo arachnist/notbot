@@ -1,0 +1,17 @@
+{%- block formatted -%}
+worker {{ name }} is
+{%- if handle.is_finished() -%}
+ stopped
+{%- else -%}
+ running
+{%- endif -%}; help: {{ help }}; status keyword: <code>{{ keyword }}</code>
+{%- endblock -%}
+
+{%- block plain -%}
+worker {{ name }} is
+{%- if handle.is_finished() -%}
+ stopped
+{%- else -%}
+ running
+{%- endif -%}; help: {{ help }}; status keyword: {{ keyword }}
+{%- endblock -%}
