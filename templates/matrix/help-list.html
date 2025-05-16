@@ -29,9 +29,9 @@
 {% if !passthrough.is_empty() -%}
   passthrough:
   {%- for name in pmod_names.0 %} {{ name }}{%- endfor -%}
-{% endif -%}
+{% endif %}
 {% if !workers.is_empty() -%}
-  passthrough:
+  workers:
   {%- for name in w_names.0 %} {{ name }}{%- endfor -%}
 {%- endif -%}{%- if mod_names.1 || pmod_names.1 || w_names.1 -%}; modules marked with * stopped working {%- endif -%}
 {%- endblock -%}
