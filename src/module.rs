@@ -1391,7 +1391,7 @@ struct RenderList {
 }
 
 impl RenderList {
-    fn list_modules(&self, m: &Vec<WeakModuleInfo>) -> (Vec<String>, bool) {
+    fn list_modules(&self, m: &[WeakModuleInfo]) -> (Vec<String>, bool) {
         let mut failed = false;
         (
             m.iter()
