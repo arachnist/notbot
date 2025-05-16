@@ -50,7 +50,6 @@ use crate::prelude::*;
 
 use std::fmt::Debug;
 
-use time::OffsetDateTime;
 use tokio::time::{interval, Duration};
 
 use forgejo_api::structs::ActivityOpType;
