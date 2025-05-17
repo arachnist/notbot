@@ -37,7 +37,7 @@
 
 use crate::prelude::*;
 
-use crate::notbottime::{NotBotTime, NOTBOT_EPOCH};
+use crate::notbottime::{NOTBOT_EPOCH, NotBotTime};
 
 use matrix_sdk::ruma::events::reaction::OriginalSyncReactionEvent;
 

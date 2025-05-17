@@ -2,7 +2,7 @@
 name = "notbot"
 version = "0.6.12"
 authors = ["Ari Gato <ari@is-a.cat>"]
-edition = "2021"
+edition = "2024"
 autobins = true
 description = "Matrix chatbot, primarily used around the Warsaw Hackerspace channels and spaces"
 documentation = "https://docs.rs/notbot/latest/notbot"

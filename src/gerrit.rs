@@ -27,8 +27,8 @@
 
 use crate::prelude::*;
 
-use gerrit_api::{gerrit_fetch, ChangeInfo};
-use tokio::time::{interval, Duration};
+use gerrit_api::{ChangeInfo, gerrit_fetch};
+use tokio::time::{Duration, interval};
 
 use askama::Template;
 
@@ -184,10 +184,7 @@ pub async fn gerrit_feeds(mx: Client, module_config: GerritConfig) -> anyhow::Re
                     Err(_) => continue,
                 };
 
-                if let Err(e) = room
-                    .send(message.clone())
-                    .await
-                {
+                if let Err(e) = room.send(message.clone()).await {
                     error!("failed to send message: {e}");
                 }
             }

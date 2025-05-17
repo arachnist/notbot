@@ -45,31 +45,31 @@ use crate::prelude::*;
 use crate::alerts::receive_alerts;
 use crate::metrics::{serve_metrics, track_metrics};
 
+use askama;
 use askama::Template;
 use axum::{
+    Router,
     error_handling::HandleErrorLayer,
     extract::State,
-    http::{header::AUTHORIZATION, request::Parts, StatusCode},
+    http::{StatusCode, header::AUTHORIZATION, request::Parts},
     middleware, response,
-    response::{IntoResponse, Response, Html},
+    response::{Html, IntoResponse, Response},
     routing::{any, get, post},
-    Router,
 };
 use axum_core::extract::FromRequestParts;
 use axum_oidc::{
-    error::MiddlewareError, handle_oidc_redirect, AdditionalClaims, OidcAuthLayer, OidcClaims,
-    OidcClient, OidcLoginLayer,
+    AdditionalClaims, OidcAuthLayer, OidcClaims, OidcClient, OidcLoginLayer,
+    error::MiddlewareError, handle_oidc_redirect,
 };
 use openidconnect::ClientSecret;
 use tokio::net::TcpListener;
-use tokio::time::{sleep, Duration as TokioDuration};
+use tokio::time::{Duration as TokioDuration, sleep};
 use tower::ServiceBuilder;
 use tower_http::services::ServeDir;
 use tower_sessions::{
-    cookie::{time::Duration, SameSite},
     Expiry, MemoryStore, Session, SessionManagerLayer,
+    cookie::{SameSite, time::Duration},
 };
-use askama;
 
 /// Web interface configuration
 #[derive(Clone, Deserialize, Debug)]
@@ -302,7 +302,9 @@ impl IntoResponse for WebError {
     fn into_response(self) -> Response {
         match &self {
             WebError::NotFound => (StatusCode::NOT_FOUND, "content not found").into_response(),
-            WebError::Render(_) => (StatusCode::INTERNAL_SERVER_ERROR, "something went wrong").into_response(),
+            WebError::Render(_) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "something went wrong").into_response()
+            }
         }
     }
 }

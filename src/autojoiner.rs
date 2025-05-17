@@ -25,7 +25,7 @@
 
 use crate::prelude::*;
 
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 use prometheus::Counter;
 use prometheus::{opts, register_counter};
@@ -205,8 +205,7 @@ pub async fn autojoiner(
 
     trace!(
         "checking if invite is for a room on permitted homeserver: {:#?}, {:#?}",
-        &room_homeserver,
-        &module_config.homeservers
+        &room_homeserver, &module_config.homeservers
     );
     if !module_config
         .homeservers

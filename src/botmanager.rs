@@ -13,13 +13,13 @@ use std::time::{Duration, SystemTime};
 use crate::config::Config;
 
 use matrix_sdk::{
+    Client, Error as MatrixError, LoopCtrl, Room,
     authentication::matrix::MatrixSession,
     config::SyncSettings,
     event_handler::EventHandlerHandle,
     ruma::events::room::message::{
         MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
     },
-    Client, Error as MatrixError, LoopCtrl, Room,
 };
 
 use tracing::{debug, error, info, trace};

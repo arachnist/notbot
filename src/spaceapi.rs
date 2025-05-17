@@ -38,7 +38,7 @@
 
 use crate::prelude::*;
 
-use tokio::time::{interval, Duration};
+use tokio::time::{Duration, interval};
 
 /// SpaceAPI module configuration
 #[derive(Clone, Deserialize)]

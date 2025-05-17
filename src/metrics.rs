@@ -57,8 +57,8 @@ use axum::{
     body::HttpBody, extract::Request, http::StatusCode, middleware::Next, response::IntoResponse,
 };
 
-use prometheus::{opts, register_histogram_vec, register_int_counter_vec};
 use prometheus::{HistogramVec, IntCounterVec, TextEncoder};
+use prometheus::{opts, register_histogram_vec, register_int_counter_vec};
 
 /// Counts the number of http requests, grouped by method and response status.
 pub static HTTP_COUNTER: LazyLock<IntCounterVec> = LazyLock::new(|| {

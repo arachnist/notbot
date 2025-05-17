@@ -507,7 +507,7 @@ pub mod activity_fmt {
         Some(format!(r#"{item_url}{item_title}{item_emoji}"#,))
     }
 
-    fn content_commits(s: &String) -> anyhow::Result<ContentCommits> {
+    fn content_commits(s: &str) -> anyhow::Result<ContentCommits> {
         let data: ContentCommits = match serde_json::from_str(s) {
             Ok(d) => d,
             Err(e) => anyhow::bail!("err while parsing commit details from activity: {e}"),

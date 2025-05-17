@@ -211,7 +211,7 @@
 
 use crate::config::Config;
 use crate::klaczdb::KlaczDB;
-use crate::tools::{membership_status, room_name, ToStringExt};
+use crate::tools::{ToStringExt, membership_status, room_name};
 
 use std::ops::{Add, Deref};
 use std::sync::LazyLock;
@@ -219,14 +219,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::bail;
 use futures::Future;
-use prometheus::{opts, register_int_counter_vec, IntCounterVec};
+use prometheus::{IntCounterVec, opts, register_int_counter_vec};
 use tracing::{debug, error, info, trace, warn};
 
 use matrix_sdk::event_handler::{Ctx, EventHandlerHandle};
+use matrix_sdk::ruma::OwnedUserId;
 use matrix_sdk::ruma::events::room::message::{
     MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
 };
-use matrix_sdk::ruma::OwnedUserId;
 use matrix_sdk::{Client, Room};
 
 use tokio::sync::mpsc;

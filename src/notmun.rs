@@ -23,15 +23,15 @@ use crate::prelude::*;
 
 use std::ops::Add;
 
-use tokio::sync::mpsc::{channel, Receiver};
+use tokio::sync::mpsc::{Receiver, channel};
 
 use futures::pin_mut;
-use tokio_postgres::{types::Type, Row};
+use tokio_postgres::{Row, types::Type};
 use tokio_stream::StreamExt;
 
 use mlua::{
-    chunk, ExternalError, ExternalResult, Lua, LuaSerdeExt, Result as LuaResult, Table, Value,
-    Variadic,
+    ExternalError, ExternalResult, Lua, LuaSerdeExt, Result as LuaResult, Table, Value, Variadic,
+    chunk,
 };
 
 #[derive(Clone, Deserialize)]
