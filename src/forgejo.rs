@@ -50,7 +50,7 @@ use crate::prelude::*;
 
 use std::fmt::Debug;
 
-use tokio::time::{interval, Duration};
+use tokio::time::{Duration, interval};
 
 use forgejo_api::structs::ActivityOpType;
 use forgejo_api::{Auth, Forgejo};
@@ -395,6 +395,12 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
                 known_act_ids = vec![];
             };
 
+            if first_loop.get(name).unwrap().to_owned() {
+                first_loop.insert(name.to_owned(), false);
+
+                continue;
+            }
+
             for activity in returned_activities {
                 if let Some(a_id) = activity.id {
                     new_known_activities.push(activity.clone());
@@ -410,46 +416,16 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
 
             activities.insert((name.to_owned(), org.to_owned()), new_known_activities);
 
-            if first_loop.get(name).unwrap().to_owned() {
-                first_loop.insert(name.to_owned(), false);
-
+            if potentially_pushed_activities.is_empty() {
                 continue;
             }
 
-            let mut html_parts: Vec<String> = vec![];
-            let mut plain_parts: Vec<String> = vec![];
-
-            for act in potentially_pushed_activities {
-                let op_type = act.clone().op_type;
-
-                let plain_action_message = match activity_fmt::message_plain(act.clone()) {
-                    Some(message) => message,
-                    None => {
-                        format!("uh oh, {:?} for plain is broken", op_type)
-                    }
-                };
-
-                let html_action_message = match activity_fmt::message_html(act) {
-                    Some(message) => message,
-                    None => {
-                        format!(
-                            "uh oh, apparently i don't handle {:?} for html; plain: {}",
-                            op_type,
-                            plain_action_message.clone()
-                        )
-                    }
-                };
-
-                plain_parts.push(plain_action_message);
-                html_parts.push(html_action_message);
-            }
-
-            if plain_parts.is_empty() {
-                continue;
+            let render_feed = activity_fmt::RenderFeed {
+                items: potentially_pushed_activities,
             };
 
-            let plain_response = plain_parts.join("\n");
-            let html_response = html_parts.join("<br/>");
+            let plain = render_feed.as_plain().render().unwrap();
+            let html = render_feed.as_formatted().render().unwrap();
 
             for room_name in &config.feed_rooms {
                 let room = match maybe_get_room(&mx, room_name).await {
@@ -459,8 +435,8 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
 
                 if let Err(e) = room
                     .send(RoomMessageEventContent::text_html(
-                        plain_response.clone(),
-                        html_response.clone(),
+                        plain.clone(),
+                        html.clone(),
                     ))
                     .await
                 {
@@ -474,102 +450,29 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
 pub mod activity_fmt {
     //! Formating forgejo feed activities, separated into its own module.
     use crate::tools::ToStringExt;
-    use forgejo_api::structs::{Activity, ActivityOpType, User};
+    use askama::Template;
+    use forgejo_api::structs::{Activity, ActivityOpType};
     use reqwest::Url;
+    use serde_derive::Deserialize;
     use unicode_ellipsis::truncate_str;
 
-    /// Turns the ActivityOpType into a human readable string, admittedly somewhat naively.
-    pub fn activity_descr(act: ActivityOpType) -> String {
-        use ActivityOpType::*;
-        match act {
-            // act on repo
-            CreateRepo => "created repository",
-            RenameRepo => "renamed repository",
-            StarRepo => "starred",
-            WatchRepo => "started watching",
-            CommitRepo => "commited to",
-            TransferRepo => "transferred",
-            PushTag => "pushed tag in",
-            DeleteTag => "deleted tag in",
-            DeleteBranch => "deleted branch in",
-            PublishRelease => "has published release for",
-
-            // act on issue
-            CreateIssue => "created issue in",
-            CommentIssue => "commented on issue",
-            CloseIssue => "closed issue in",
-            ReopenIssue => "reopened issue in",
-
-            // act on pull request
-            CreatePullRequest => "created pull request in",
-            MergePullRequest => "merged pull request in",
-            ClosePullRequest => "closed pull request in",
-            ReopenPullRequest => "reopened pull request in",
-            ApprovePullRequest => "has approved pull request in",
-            RejectPullRequest => "has rejected pull request in",
-            CommentPull => "has commented on pull request in",
-            PullReviewDismissed => "has dismissed pull review in",
-            PullRequestReadyForReview => "has marked pull request as ready for review in",
-            AutoMergePullRequest => "has automatically merged pull request in",
-
-            MirrorSyncPush => "mirror operation has pushed sync to",
-            MirrorSyncCreate => "mirror has created",
-            MirrorSyncDelete => "mirror has deleted",
-            // _ => todo!(), rustc doesn't like the possibility that forgejo might implement more features ;)
-        }
-        .s()
-    }
-
-    /// Renders a single Activity to matrix-acceptable HTML
-    pub fn message_html(act: Activity) -> Option<String> {
-        use ActivityOpType::*;
-        let mut response_parts: Vec<String> = vec![];
-
-        let act_user = act.act_user?;
-        if act_user.id? > 0 {
-            response_parts.push(format!(
-                r#"<a href="{}">{}</a>"#,
-                act_user.clone().html_url?,
-                act_user_display_name(act_user)?,
-            ));
-        } else {
-            response_parts.push(act_user.login?);
-        };
-
-        response_parts.push("has".s());
-        let act_op = act.op_type?;
-        response_parts.push(activity_descr(act_op));
-
-        let act_repo = act.repo?;
-        let act_repo_url = act_repo.html_url?;
-        response_parts.push(format!(
-            r#"<a href="{act_repo_url}">{name}</a>   "#,
-            name = act_repo.name?,
-        ));
-
-        match act_op {
-            CreatePullRequest | MergePullRequest | ClosePullRequest | ReopenPullRequest
-            | ApprovePullRequest | RejectPullRequest | CommentPull | PullReviewDismissed
-            | AutoMergePullRequest => {
-                let content = act.content?;
-                response_parts.push(act_content_part_html(act_repo_url, "pulls", content)?)
-            }
-            CreateIssue | CommentIssue | CloseIssue | ReopenIssue => {
-                let content = act.content?;
-                response_parts.push(act_content_part_html(act_repo_url, "issues", content)?)
-            }
-            _ => (),
-        };
-
-        Some(response_parts.join(" "))
+    /// Object for rendering a Matrix message from filtered forgejo feed results.
+    #[derive(Template)]
+    #[template(
+        path = "matrix/forgejo-observer.html",
+        blocks = ["formatted", "plain"],
+    )]
+    pub struct RenderFeed {
+        /// List of activities to render
+        pub items: Vec<Activity>,
     }
 
     /// Turns act.content into formatted response part. Applicable for PRs and Issues only
-    pub fn act_content_part_html(repo_url: Url, item: &str, content: String) -> Option<String> {
+    pub fn act_content_part_html(repo_url: &Url, item: &str, content: String) -> Option<String> {
         let mut parts = content.splitn(3, '|');
         let item_nr = parts.next()?;
         let item_title = if let Some(title) = parts.next() {
-            format!(" {}", truncate_str(title, 40))
+            format!(" {}", truncate_str(title, 60))
         } else {
             "".s()
         };
@@ -585,45 +488,12 @@ pub mod activity_fmt {
         ))
     }
 
-    /// Renders a single Activity to hopefully appservice-irc-acceptable plain text
-    pub fn message_plain(act: Activity) -> Option<String> {
-        use ActivityOpType::*;
-        let mut response_parts: Vec<String> = vec![];
-
-        let act_user = act.act_user?;
-        response_parts.push(act_user_display_name(act_user)?);
-
-        response_parts.push("has".s());
-        let act_op = act.op_type?;
-        response_parts.push(activity_descr(act_op));
-
-        let act_repo = act.repo?;
-        let act_repo_url = act_repo.html_url?;
-        response_parts.push(format!("{}:", act_repo.name?));
-
-        match act_op {
-            CreatePullRequest | MergePullRequest | ClosePullRequest | ReopenPullRequest
-            | ApprovePullRequest | RejectPullRequest | CommentPull | PullReviewDismissed
-            | AutoMergePullRequest => {
-                let content = act.content?;
-                response_parts.push(act_content_part_plain(act_repo_url, "pulls", content)?)
-            }
-            CreateIssue | CommentIssue | CloseIssue | ReopenIssue => {
-                let content = act.content?;
-                response_parts.push(act_content_part_plain(act_repo_url, "issues", content)?)
-            }
-            _ => (),
-        };
-
-        Some(response_parts.join(" "))
-    }
-
     /// Turns act.content into plain response part. Applicable for PRs and Issues only
-    pub fn act_content_part_plain(repo_url: Url, item: &str, content: String) -> Option<String> {
+    pub fn act_content_part_plain(repo_url: &Url, item: &str, content: String) -> Option<String> {
         let mut parts = content.splitn(3, '|');
         let item_nr = parts.next()?;
         let item_title = if let Some(title) = parts.next() {
-            format!(" {}", truncate_str(title, 40))
+            format!(" {}", truncate_str(title, 60))
         } else {
             "".s()
         };
@@ -637,17 +507,37 @@ pub mod activity_fmt {
         Some(format!(r#"{item_url}{item_title}{item_emoji}"#,))
     }
 
-    /// Shortens username if necessary, for display purposes.
-    pub fn act_user_short(user: User) -> Option<String> {
-        Some(truncate_str(user.login?.as_str(), 20).into_owned())
+    fn content_commits(s: &String) -> anyhow::Result<ContentCommits> {
+        let data: ContentCommits = match serde_json::from_str(s) {
+            Ok(d) => d,
+            Err(e) => anyhow::bail!("err while parsing commit details from activity: {e}"),
+        };
+
+        Ok(data)
     }
 
-    /// Shows user configured name or shortened username.
-    pub fn act_user_display_name(user: User) -> Option<String> {
-        if user.clone().full_name.is_some_and(|n| !n.is_empty()) {
-            Some(user.full_name?.trim().to_owned())
-        } else {
-            act_user_short(user)
-        }
+    /// Generated from the json that's *sometimes* present in `content` field in [`Activity`]
+    #[allow(missing_docs)]
+    #[derive(Default, Debug, Clone, Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    pub struct ContentCommits {
+        pub commits: Vec<Commit>,
+        pub head_commit: Commit,
+        #[serde(rename = "CompareURL")]
+        pub compare_url: String,
+        pub len: i64,
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Default, Debug, Clone, Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    pub struct Commit {
+        pub sha1: String,
+        pub message: String,
+        pub author_email: String,
+        pub author_name: String,
+        pub committer_email: String,
+        pub committer_name: String,
+        pub timestamp: String,
     }
 }

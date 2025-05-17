@@ -1,0 +1,139 @@
+{%- macro displayname(user) -%}
+{%- if user.clone().full_name.is_some() && user.clone().full_name.unwrap().is_empty() -%}
+  {{ user.clone().full_name.unwrap() | trim }}
+{%- else -%}
+  {{ user.clone().login.unwrap() | truncate(20) }}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro activity_descr(op_type) -%}
+{%- match op_type -%}
+  {%- when ActivityOpType::CreateRepo -%} created repository {%- endwhen -%}
+  {%- when ActivityOpType::RenameRepo -%} renamed repository {%- endwhen -%}
+  {%- when ActivityOpType::StarRepo -%} starred {%- endwhen -%}
+  {%- when ActivityOpType::WatchRepo -%} started watching {%- endwhen -%}
+  {%- when ActivityOpType::CommitRepo -%} commited to {%- endwhen -%}
+  {%- when ActivityOpType::TransferRepo -%} transferred {%- endwhen -%}
+  {%- when ActivityOpType::PushTag -%} pushed tag in {%- endwhen -%}
+  {%- when ActivityOpType::DeleteTag -%} deleted tag in {%- endwhen -%}
+  {%- when ActivityOpType::DeleteBranch -%} deleted branch in {%- endwhen -%}
+  {%- when ActivityOpType::PublishRelease -%} has published release for {%- endwhen -%}
+
+  {%- when ActivityOpType::CreateIssue -%} created issue in {%- endwhen -%}
+  {%- when ActivityOpType::CommentIssue -%} commented on issue {%- endwhen -%}
+  {%- when ActivityOpType::CloseIssue -%} closed issue in {%- endwhen -%}
+  {%- when ActivityOpType::ReopenIssue -%} reopened issue in {%- endwhen -%}
+
+  {%- when ActivityOpType::CreatePullRequest -%} created pull request in {%- endwhen -%}
+  {%- when ActivityOpType::MergePullRequest -%} merged pull request in {%- endwhen -%}
+  {%- when ActivityOpType::ClosePullRequest -%} closed pull request in {%- endwhen -%}
+  {%- when ActivityOpType::ReopenPullRequest -%} reopened pull request in {%- endwhen -%}
+  {%- when ActivityOpType::ApprovePullRequest -%} has approved pull request in {%- endwhen -%}
+  {%- when ActivityOpType::RejectPullRequest -%} has rejected pull request in {%- endwhen -%}
+  {%- when ActivityOpType::CommentPull -%} has commented on pull request in {%- endwhen -%}
+  {%- when ActivityOpType::PullReviewDismissed -%} has dismissed pull review in {%- endwhen -%}
+  {%- when ActivityOpType::PullRequestReadyForReview -%} has marked pull request as ready for review in {%- endwhen -%}
+  {%- when ActivityOpType::AutoMergePullRequest -%} has automatically merged pull request in {%- endwhen -%}
+
+  {%- when ActivityOpType::MirrorSyncPush -%} mirror operation has pushed sync to {%- endwhen -%}
+  {%- when ActivityOpType::MirrorSyncCreate -%} mirror has created {%- endwhen -%}
+  {%- when ActivityOpType::MirrorSyncDelete -%} mirror has deleted {%- endwhen -%}
+{%- endmatch -%}
+{%- endmacro -%}
+
+{%- block formatted -%}
+{%- for item in items -%}
+{%- set act_user = item.act_user.as_ref().unwrap() -%}
+{%- set act_op = item.op_type.clone().unwrap() -%}
+{%- if act_op == ActivityOpType::CommitRepo -%}
+  {%- set content = item.content.clone().unwrap() -%}
+  {%- if content.is_empty() -%}
+    {%- continue -%}
+  {%- endif -%}
+{%- endif -%}
+{%- set act_repo = item.repo.clone().unwrap() -%}
+{%- set act_repo_url = act_repo.html_url.unwrap() -%}
+{%- if act_user.id.unwrap() > 0 -%}
+  <a href="{{ act_user.clone().html_url.unwrap().to_string() }}">{% call displayname(act_user) %}</a>
+{%- else -%}
+  {{ act_user.login.clone().unwrap() | truncate(20) }}
+{%- endif -%}
+{{ " has" }} {% call activity_descr(act_op) %} <a href="{{ act_repo_url.to_string() }}">{{ act_repo.name.unwrap() }}</a>
+{%- match act_op -%}
+  {%- when ActivityOpType::CreatePullRequest | ActivityOpType::MergePullRequest | ActivityOpType::ClosePullRequest
+         | ActivityOpType::ReopenPullRequest | ActivityOpType::ApprovePullRequest | ActivityOpType::RejectPullRequest
+         | ActivityOpType::PullReviewDismissed | ActivityOpType::AutoMergePullRequest -%}
+         {%- set content = item.content.clone().unwrap() -%}
+         {{ ":   " }}{{ self::act_content_part_html(act_repo_url, "pulls", content.clone()).unwrap() | safe}}
+  {%- endwhen -%}
+  {%- when ActivityOpType::CommentPull | ActivityOpType::CommentIssue -%}
+    {%- set comment = item.comment.clone().unwrap() -%}
+    {%- set comment_link = comment.html_url.unwrap().to_string() -%}
+    {%- set comment_text = comment.body.unwrap() -%}
+    {{ ":   " }}<a href="{{ comment_link }}">{{ comment_text | truncate(60) }}</a>
+  {%- endwhen -%}
+  {%- when ActivityOpType::CreateIssue | ActivityOpType::CloseIssue | ActivityOpType::ReopenIssue -%}
+         {%- set content = item.content.clone().unwrap() -%}
+         {{ ":   " }}{{ self::act_content_part_html(act_repo_url, "issues", content.clone()).unwrap() | safe}}
+  {%- endwhen -%}
+  {%- when ActivityOpType::CommitRepo -%}
+    {%- set content = item.content.clone().unwrap() -%}
+    {%- if ! content.is_empty() -%}
+      {%- set change = self::content_commits(content).unwrap() -%}
+      {%- set lines = change.head_commit.message.lines().collect::<Vec<&str>>() -%}
+      {{ ":   " }}<a href="{{ act_repo_url }}/commit/{{ change.head_commit.sha1 }}">{{ lines.first().unwrap() | truncate(80) }}</a>
+    {%- endif -%}
+  {%- endwhen -%}
+  {%- when _ -%}{%- endwhen -%}
+{%- endmatch -%}
+</br>
+{%- endfor -%}
+{%- endblock -%}
+
+{%- block plain -%}
+{%- for item in items -%}
+{%- set act_user = item.act_user.as_ref().unwrap() -%}
+{%- set act_op = item.op_type.clone().unwrap() -%}
+{%- if act_op == ActivityOpType::CommitRepo -%}
+  {%- set content = item.content.clone().unwrap() -%}
+  {%- if content.is_empty() -%}
+    {%- continue -%}
+  {%- endif -%}
+{%- endif -%}
+{%- set act_repo = item.repo.clone().unwrap() -%}
+{%- set act_repo_url = act_repo.html_url.unwrap() -%}
+{%- if act_user.id.unwrap() > 0 -%}
+  {% call displayname(act_user) %}
+{%- else -%}
+  {{ act_user.login.clone().unwrap() | truncate(20) }}
+{%- endif -%}
+{{ " has" }} {% call activity_descr(act_op) %} {{ act_repo.name.unwrap() }}
+{%- match act_op -%}
+  {%- when ActivityOpType::CreatePullRequest | ActivityOpType::MergePullRequest | ActivityOpType::ClosePullRequest
+         | ActivityOpType::ReopenPullRequest | ActivityOpType::ApprovePullRequest | ActivityOpType::RejectPullRequest
+         | ActivityOpType::PullReviewDismissed | ActivityOpType::AutoMergePullRequest -%}
+         {%- set content = item.content.clone().unwrap() -%}
+         {{ ":   " }}{{ self::act_content_part_plain(act_repo_url, "pulls", content.clone()).unwrap() | safe}}
+  {%- endwhen -%}
+  {%- when ActivityOpType::CommentPull | ActivityOpType::CommentIssue -%}
+    {%- set comment = item.comment.clone().unwrap() -%}
+    {%- set comment_link = comment.html_url.unwrap().to_string() -%}
+    {%- set comment_text = comment.body.unwrap() -%}
+    {{ ":   " }}{{ comment_link }} {{ comment_text | truncate(60) | safe }}</a>
+  {%- endwhen -%}
+  {%- when ActivityOpType::CreateIssue | ActivityOpType::CloseIssue | ActivityOpType::ReopenIssue -%}
+         {%- set content = item.content.clone().unwrap() -%}
+         {{ ":   " }}{{ self::act_content_part_plain(act_repo_url, "issues", content.clone()).unwrap() | safe}}
+  {%- endwhen -%}
+  {%- when ActivityOpType::CommitRepo -%}
+    {%- set content = item.content.clone().unwrap() -%}
+    {%- if ! content.is_empty() -%}
+      {%- set change = self::content_commits(content).unwrap() -%}
+      {%- set lines = change.head_commit.message.lines().collect::<Vec<&str>>() -%}
+      {{ ":   " }}{{ act_repo_url }}/commit/{{ change.head_commit.sha1 }} {{ lines.first().unwrap() | truncate(60) }}
+    {%- endif -%}
+  {%- endwhen -%}
+  {%- when _ -%}{%- endwhen -%}
+{%- endmatch ~%}
+{%~ endfor -%}
+{%- endblock -%}
