@@ -395,12 +395,6 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
                 known_act_ids = vec![];
             };
 
-            if first_loop.get(name).unwrap().to_owned() {
-                first_loop.insert(name.to_owned(), false);
-
-                continue;
-            }
-
             for activity in returned_activities {
                 if let Some(a_id) = activity.id {
                     new_known_activities.push(activity.clone());
@@ -415,6 +409,12 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
             }
 
             activities.insert((name.to_owned(), org.to_owned()), new_known_activities);
+
+            if first_loop.get(name).unwrap().to_owned() {
+                first_loop.insert(name.to_owned(), false);
+
+                continue;
+            }
 
             if potentially_pushed_activities.is_empty() {
                 continue;
