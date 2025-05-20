@@ -913,7 +913,7 @@ pub async fn dispatch_module(
             }
             ActiveHswawMember => {
                 use crate::tools::MembershipStatus::*;
-                match membership_status(sender.clone()).await {
+                match membership_status(config.capacifier_token(), sender.clone()).await {
                     Err(e) => {
                         error!("checking membership for {sender} failed: {e}");
                         failed = true;
@@ -927,7 +927,7 @@ pub async fn dispatch_module(
             }
             MaybeInactiveHswawMember => {
                 use crate::tools::MembershipStatus::*;
-                match membership_status(sender.clone()).await {
+                match membership_status(config.capacifier_token(), sender.clone()).await {
                     Err(e) => {
                         error!("checking membership for {sender} failed: {e}");
                         failed = true;

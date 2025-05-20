@@ -58,6 +58,7 @@ struct ConfigInner {
     acl_deny: Vec<String>,
     ignored: Vec<String>,
     admins: Vec<String>,
+    capacifier_token: String,
 }
 
 impl TryFrom<String> for ConfigInner {
@@ -155,6 +156,12 @@ impl Config {
     pub fn admins(&self) -> Vec<String> {
         let inner = &self.inner.lock().unwrap();
         inner.admins.clone()
+    }
+
+    /// Capacifier token.
+    pub fn capacifier_token(&self) -> String {
+        let inner = &self.inner.lock().unwrap();
+        inner.capacifier_token.clone()
     }
 
     /// Retrieve module configuration by section name

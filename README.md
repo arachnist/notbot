@@ -48,7 +48,7 @@ In no particular order:
 * Soon: tests
 * actual web interface
 * some semi-automatic handling of web interface routes/handlers
-* Soon: better ability to map between matrix user ids and hswaw members
+* ~~Soon: better ability to map between matrix user ids and hswaw members~~ Done
 * feature-gating features, especially things hswaw specific
 * using <https://github.com/clarkmcc/cel-rust> for ACLs
 * using regular expressions and/or clap for defining module arguments.

@@ -55,6 +55,8 @@ pub struct ModuleConfig {
     /// Keywords the [`due_me_processor`] will respond to
     #[serde(default = "default_due_me_keywords")]
     pub keywords_due_me: Vec<String>,
+    /// Token for querying capacifier
+    pub capacifier_token: String,
 }
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
@@ -89,7 +91,7 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
 /// Processes checks for other user membership fees status. If a message explicitly mentions someone,
 /// [`matrix_sdk::ruma::events::Mentions`], try using the first mentioned user. Otherwise, make a best-effort attempt
 /// at parsing provided plaintext argument.
-pub async fn due_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
+pub async fn due_processor(event: ConsumerEvent, c: ModuleConfig) -> anyhow::Result<()> {
     use MembershipStatus::*;
 
     if event.args.is_none() {
@@ -136,7 +138,7 @@ pub async fn due_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Res
     };
 
     let member = target.localpart();
-    let response = match membership_status(target.clone()).await? {
+    let response = match membership_status(c.capacifier_token, target.clone()).await? {
         NotAMember => "not a member".s(),
         Stoned => "stoned".s(),
         Inactive => "not currently a member".s(),
@@ -157,15 +159,10 @@ pub async fn due_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Res
 }
 
 /// Processes checks for membership status of the user sending the event.
-pub async fn due_me_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
+pub async fn due_me_processor(event: ConsumerEvent, c: ModuleConfig) -> anyhow::Result<()> {
     use MembershipStatus::*;
 
-    let localpart = event.sender.localpart().to_lowercase();
-    let localpart_naive = localpart.trim_start_matches("libera_");
-    let naive_mxid = format!("@{localpart_naive}:hackerspace.pl");
-    let maybe_member = UserId::parse(naive_mxid)?;
-
-    let response = match membership_status(maybe_member).await? {
+    let response = match membership_status(c.capacifier_token, event.sender).await? {
         NotAMember => "not a member".s(),
         Stoned => "stoned".s(),
         Inactive => "not currently a member".s(),
@@ -243,7 +240,8 @@ pub async fn nag_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow
         return Ok(());
     };
 
-    let Ok(Active(months)) = membership_status(event.sender.clone()).await else {
+    let Ok(Active(months)) = membership_status(config.capacifier_token, event.sender.clone()).await
+    else {
         return Ok(());
     };
 
