@@ -39,6 +39,7 @@
 use crate::prelude::*;
 
 use tokio::time::{Duration, interval};
+use tokio_postgres::types::Type as dbtype;
 
 /// SpaceAPI module configuration
 #[derive(Clone, Deserialize)]
@@ -56,6 +57,14 @@ pub struct ModuleConfig {
     /// Keywords to respond to for checking currently present members. Default is `at`
     #[serde(default = "keywords")]
     pub keywords: Vec<String>,
+    /// Database to store persistent
+    #[serde(default = "presence_db")]
+    pub presence_db: String,
+    /// Keywords to respond to for retrieving heatmap. Defaults are `heatmap`, `hm`
+    #[serde(default = "keywords_heatmap")]
+    pub keywords_heatmap: Vec<String>,
+    /// External heatmap url map
+    pub heatmap_map: HashMap<String, String>,
 }
 
 fn presence_interval() -> u64 {
@@ -68,6 +77,14 @@ fn empty_response() -> String {
 
 fn keywords() -> Vec<String> {
     vec!["at".s()]
+}
+
+fn presence_db() -> String {
+    "notbot".s()
+}
+
+fn keywords_heatmap() -> Vec<String> {
+    vec!["heatmap".s(), "hm".s()]
 }
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
@@ -83,9 +100,19 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         channel: tx,
         error_prefix: Some("error getting presence status".s()),
     };
-    at.spawn(rx, module_config, at_processor);
+    at.spawn(rx, module_config.clone(), at_processor);
 
-    Ok(vec![at])
+    let heatmap = ModuleInfo::new(
+        "heatmap",
+        "show activity at the hackerspace for the last week",
+        vec![],
+        TriggerType::Keyword(module_config.keywords_heatmap.clone()),
+        Some("error generating heatmap"),
+        module_config,
+        heatmap,
+    );
+
+    Ok(vec![at, heatmap])
 }
 
 /// query SpaceAPI for present state.
@@ -119,6 +146,20 @@ pub async fn at_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow:
     Ok(())
 }
 
+/// Present a heatmap of people activity at the Hackerspace
+///
+/// Currently fetches external data, but once we gather enough of our own, we should switch to that
+pub async fn heatmap(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
+    let name = room_name(&event.room);
+
+    let url = match config.heatmap_map.get(&name) {
+        Some(url) => url,
+        None => bail!("no heatmap source defined for this channel"),
+    };
+
+    Ok(())
+}
+
 pub(crate) fn workers(mx: &Client, config: &Config) -> anyhow::Result<Vec<WorkerInfo>> {
     let module_config: ModuleConfig = config.typed_module_config(module_path!())?;
     Ok(vec![WorkerInfo::new(
@@ -129,6 +170,24 @@ pub(crate) fn workers(mx: &Client, config: &Config) -> anyhow::Result<Vec<Worker
         module_config,
         presence_observer,
     )?])
+}
+
+#[derive(Clone, Debug)]
+struct PresenceData {
+    handle: String,
+}
+
+impl PresenceData {
+    const INSERT_DATAPOINT: &str = r#"INSERT INTO presence (ts, url, count)
+    VALUES ( now(), $1, $2 )"#;
+    async fn insert(self, url: String, count: i64) -> anyhow::Result<()> {
+        let client = DBPools::get_client(self.handle.as_str()).await?;
+        let statement = client
+            .prepare_typed_cached(Self::INSERT_DATAPOINT, &[dbtype::VARCHAR, dbtype::INT8])
+            .await?;
+        client.execute(&statement, &[&url, &count]).await?;
+        Ok(())
+    }
 }
 
 /// Worker observing SpaceAPI endpoints for changes and providing updates to configured rooms.
@@ -146,13 +205,27 @@ pub async fn presence_observer(client: Client, module_config: ModuleConfig) -> a
         interval.tick().await;
 
         for (url, rooms) in &module_config.presence_map {
+            let presence = PresenceData {
+                handle: module_config.presence_db.clone(),
+            };
+
             trace!("fetching spaceapi url: {}", url);
             let data = match fetch_and_decode_json::<space_api::SpaceAPI>(url.to_owned()).await {
                 Ok(d) => d,
                 Err(fe) => {
                     error!("error fetching data: {fe}");
+                    if let Err(e) = presence.insert(url.clone(), -1).await {
+                        error!("error storing spaceapi persistence data: {e}");
+                    };
                     continue;
                 }
+            };
+
+            if let Err(e) = presence
+                .insert(url.clone(), data.sensors.people_now_present.len() as i64)
+                .await
+            {
+                error!("error storing spaceapi persistence data: {e}");
             };
 
             let current: Vec<String> = names_dehighlighted(data.sensors.people_now_present);
@@ -360,5 +433,43 @@ pub mod space_api {
     pub struct PeopleNowPresent {
         pub value: u32,
         pub names: Vec<String>,
+    }
+}
+
+pub(crate) mod heatmap_api {
+    use serde_derive::Deserialize;
+    use serde_derive::Serialize;
+    use serde_json::Value;
+
+    #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct Root {
+        pub copyright: String,
+        pub license: String,
+        pub data: Data,
+        pub tz: String,
+        pub period: String,
+        #[serde(rename = "space-state")]
+        pub space_state: String,
+    }
+
+    #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct Data {
+        #[serde(rename = "1")]
+        pub n1: Vec<Value>,
+        #[serde(rename = "2")]
+        pub n2: Vec<Value>,
+        #[serde(rename = "3")]
+        pub n3: Vec<Value>,
+        #[serde(rename = "4")]
+        pub n4: Vec<Value>,
+        #[serde(rename = "5")]
+        pub n5: Vec<Value>,
+        #[serde(rename = "6")]
+        pub n6: Vec<Value>,
+        #[serde(rename = "7")]
+        pub n7: Vec<Value>,
+        pub avg: Vec<f64>,
     }
 }
