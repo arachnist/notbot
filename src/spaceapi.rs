@@ -537,7 +537,8 @@ pub mod space_api {
     }
 }
 
-pub(crate) mod heatmap_api {
+pub mod heatmap_api {
+    //! Module for making interactions with the heatmap API, including rendering data it returns, easier.
     use plotters::{prelude::*, style::full_palette::PURPLE_A400};
     use serde_derive::Deserialize;
     use serde_nested_with::serde_nested;
@@ -555,35 +556,46 @@ pub(crate) mod heatmap_api {
         pub space_state: String,
     }
 
+    /// Structure reflecting API response, somewhat. The floats are a lie. The api actually returns a list of strings holding floats, with
+    /// a single actual float at the end.
     #[allow(dead_code)]
     #[serde_nested]
     #[derive(Default, Debug, Clone, Deserialize)]
-    pub(crate) struct Data {
-        #[serde(rename = "1")]
-        #[serde_nested(sub = "f64", serde(deserialize_with = "as_f64"))]
-        pub n1: Vec<f64>,
+    pub struct Data {
+        /// As the name `n2` (or, in the source json, just `2`) implies, the first day of the week - Monday datapoints
         #[serde(rename = "2")]
         #[serde_nested(sub = "f64", serde(deserialize_with = "as_f64"))]
         pub n2: Vec<f64>,
+        /// Tuesday
         #[serde(rename = "3")]
         #[serde_nested(sub = "f64", serde(deserialize_with = "as_f64"))]
         pub n3: Vec<f64>,
+        /// Wednesday
         #[serde(rename = "4")]
         #[serde_nested(sub = "f64", serde(deserialize_with = "as_f64"))]
         pub n4: Vec<f64>,
+        /// Thursday
         #[serde(rename = "5")]
         #[serde_nested(sub = "f64", serde(deserialize_with = "as_f64"))]
         pub n5: Vec<f64>,
+        /// Friday
         #[serde(rename = "6")]
         #[serde_nested(sub = "f64", serde(deserialize_with = "as_f64"))]
         pub n6: Vec<f64>,
+        /// Saturday
         #[serde(rename = "7")]
         #[serde_nested(sub = "f64", serde(deserialize_with = "as_f64"))]
         pub n7: Vec<f64>,
+        /// Sunday
+        #[serde(rename = "1")]
+        #[serde_nested(sub = "f64", serde(deserialize_with = "as_f64"))]
+        pub n1: Vec<f64>,
+        /// Overall averages. Not used.
         pub avg: Vec<f64>,
     }
 
-    pub(crate) fn draw(out_file: &str, data: Data) -> anyhow::Result<()> {
+    /// Renders the provided [`Data`] into a file. Formatting options are, for now, hardcoded.
+    pub fn draw(out_file: &str, data: Data) -> anyhow::Result<()> {
         let colormap: Box<dyn ColorMap<RGBAColor>> = Box::new(ViridisRGBA {});
 
         // 24*7 * 40×40 + legend + 5/5/5/5 margins
