@@ -38,6 +38,11 @@
 
 use crate::prelude::*;
 
+use js_int::uint;
+use matrix_sdk::attachment::{AttachmentConfig, AttachmentInfo, BaseImageInfo};
+
+use reqwest::{ClientBuilder, redirect};
+use tempfile::Builder;
 use tokio::time::{Duration, interval};
 use tokio_postgres::types::Type as dbtype;
 
@@ -65,6 +70,9 @@ pub struct ModuleConfig {
     pub keywords_heatmap: Vec<String>,
     /// External heatmap url map
     pub heatmap_map: HashMap<String, String>,
+    /// Directory where heatmap temp data will be written to. Default is `./`
+    #[serde(default = "heatmap_tmp_dir")]
+    pub heatmap_tmp_dir: String,
 }
 
 fn presence_interval() -> u64 {
@@ -85,6 +93,10 @@ fn presence_db() -> String {
 
 fn keywords_heatmap() -> Vec<String> {
     vec!["heatmap".s(), "hm".s()]
+}
+
+fn heatmap_tmp_dir() -> String {
+    "./".s()
 }
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
@@ -152,12 +164,100 @@ pub async fn at_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow:
 pub async fn heatmap(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
     let name = room_name(&event.room);
 
-    let url = match config.heatmap_map.get(&name) {
+    let period: HeatmapPeriod = event.args.try_into()?;
+
+    let base_url = match config.heatmap_map.get(&name) {
         Some(url) => url,
         None => bail!("no heatmap source defined for this channel"),
     };
 
+    let url = format!("{base_url}&period={}", Into::<String>::into(period.clone()));
+
+    let client = ClientBuilder::new()
+        .redirect(redirect::Policy::none())
+        .build()?;
+
+    let response = client.get(url).send().await?;
+
+    if !response.status().is_success() {
+        bail!("wrong api response: {:?}", response.status());
+    };
+
+    let data: heatmap_api::Root = response.json().await?;
+
+    let named_tempfile = Builder::new()
+        .prefix("notbot-heatmap-")
+        .suffix(".png")
+        .rand_bytes(5)
+        .tempfile_in(config.heatmap_tmp_dir)?;
+
+    let name = named_tempfile
+        .path()
+        .to_str()
+        .ok_or(anyhow::anyhow!("tempfile error"))?;
+
+    trace!("heatmap tmpfile: {name}");
+    heatmap_api::draw(name, data.data)?;
+
+    let image = fs::read(name)?;
+
+    let caption = Some(format!("Activity in the last {period:?}"));
+
+    let attachment_config = AttachmentConfig::new()
+        .caption(caption)
+        .info(AttachmentInfo::Image(BaseImageInfo {
+            height: Some(uint!(330)),
+            width: Some(uint!(1010)),
+            ..Default::default()
+        }));
+
+    event
+        .room
+        .send_attachment("heatmap.png", &mime::IMAGE_PNG, image, attachment_config)
+        .await?;
+
+    std::fs::remove_file(name)?;
+
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+enum HeatmapPeriod {
+    Week,
+    Month,
+    Year,
+    All,
+}
+
+impl TryFrom<Option<String>> for HeatmapPeriod {
+    type Error = anyhow::Error;
+
+    fn try_from(s: Option<String>) -> anyhow::Result<HeatmapPeriod> {
+        use HeatmapPeriod::*;
+
+        match s {
+            None => Ok(Week),
+            Some(maybe) => match maybe.to_lowercase().trim() {
+                "week" | "tydzień" | "tydzien" => Ok(Week),
+                "month" | "miesiąc" | "miesiac" => Ok(Month),
+                "year" | "rok" => Ok(Year),
+                "all" | "wszystko" => Ok(All),
+                _ => bail!("invalid period"),
+            },
+        }
+    }
+}
+
+impl From<HeatmapPeriod> for String {
+    fn from(val: HeatmapPeriod) -> Self {
+        use HeatmapPeriod::*;
+        match val {
+            Week => "week".s(),
+            Month => "month".s(),
+            Year => "year".s(),
+            All => "all".s(),
+        }
+    }
 }
 
 pub(crate) fn workers(mx: &Client, config: &Config) -> anyhow::Result<Vec<WorkerInfo>> {
@@ -221,14 +321,12 @@ pub async fn presence_observer(client: Client, module_config: ModuleConfig) -> a
                 }
             };
 
-            if let Err(e) = presence
-                .insert(url.clone(), data.sensors.people_now_present.len() as i64)
-                .await
-            {
+            let current: Vec<String> = names_dehighlighted(data.sensors.people_now_present);
+
+            if let Err(e) = presence.insert(url.clone(), current.len() as i64).await {
                 error!("error storing spaceapi persistence data: {e}");
             };
 
-            let current: Vec<String> = names_dehighlighted(data.sensors.people_now_present);
             let mut arrived: Vec<String> = vec![];
             let mut left: Vec<String> = vec![];
             let mut also_there: Vec<String> = vec![];
@@ -429,7 +527,7 @@ pub mod space_api {
     }
 
     #[allow(dead_code, missing_docs)]
-    #[derive(Clone, Deserialize)]
+    #[derive(Clone, Deserialize, Debug)]
     pub struct PeopleNowPresent {
         pub value: u32,
         pub names: Vec<String>,
@@ -437,13 +535,14 @@ pub mod space_api {
 }
 
 pub(crate) mod heatmap_api {
+    use plotters::{prelude::*, style::full_palette::PURPLE_A400};
     use serde_derive::Deserialize;
-    use serde_derive::Serialize;
-    use serde_json::Value;
+    use serde_nested_with::serde_nested;
+    use serde_this_or_that::as_f64;
 
-    #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct Root {
+    #[allow(dead_code)]
+    #[derive(Default, Debug, Clone, Deserialize)]
+    pub(crate) struct Root {
         pub copyright: String,
         pub license: String,
         pub data: Data,
@@ -453,23 +552,125 @@ pub(crate) mod heatmap_api {
         pub space_state: String,
     }
 
-    #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct Data {
+    #[allow(dead_code)]
+    #[serde_nested]
+    #[derive(Default, Debug, Clone, Deserialize)]
+    pub(crate) struct Data {
         #[serde(rename = "1")]
-        pub n1: Vec<Value>,
+        #[serde_nested(sub = "f64", serde(deserialize_with = "as_f64"))]
+        pub n1: Vec<f64>,
         #[serde(rename = "2")]
-        pub n2: Vec<Value>,
+        #[serde_nested(sub = "f64", serde(deserialize_with = "as_f64"))]
+        pub n2: Vec<f64>,
         #[serde(rename = "3")]
-        pub n3: Vec<Value>,
+        #[serde_nested(sub = "f64", serde(deserialize_with = "as_f64"))]
+        pub n3: Vec<f64>,
         #[serde(rename = "4")]
-        pub n4: Vec<Value>,
+        #[serde_nested(sub = "f64", serde(deserialize_with = "as_f64"))]
+        pub n4: Vec<f64>,
         #[serde(rename = "5")]
-        pub n5: Vec<Value>,
+        #[serde_nested(sub = "f64", serde(deserialize_with = "as_f64"))]
+        pub n5: Vec<f64>,
         #[serde(rename = "6")]
-        pub n6: Vec<Value>,
+        #[serde_nested(sub = "f64", serde(deserialize_with = "as_f64"))]
+        pub n6: Vec<f64>,
         #[serde(rename = "7")]
-        pub n7: Vec<Value>,
+        #[serde_nested(sub = "f64", serde(deserialize_with = "as_f64"))]
+        pub n7: Vec<f64>,
         pub avg: Vec<f64>,
+    }
+
+    pub(crate) fn draw(out_file: &str, data: Data) -> anyhow::Result<()> {
+        let colormap: Box<dyn ColorMap<RGBAColor>> = Box::new(ViridisRGBA {});
+
+        // 24*7 * 40×40 + legend + 5/5/5/5 margins
+        let root = BitMapBackend::new(out_file, (1010, 330))
+            .into_drawing_area()
+            .margin(5, 5, 5, 5);
+        root.fill(&TRANSPARENT)?;
+
+        let text_style = TextStyle::from(("monospace", 20).into_font());
+
+        let hour_areas = root.margin(0, 970, 40, 0).split_evenly((1, 24));
+        for (i, area) in hour_areas.iter().enumerate() {
+            let text_zero = format!("{:0>2}", i);
+            let text = format!("{:>3}", text_zero);
+            area.draw_text(&text, &text_style.color(&PURPLE_A400), (5, 13))?;
+        }
+
+        let day_areas = root.margin(40, 0, 0, 270).split_evenly((7, 1));
+        for (i, area) in day_areas.iter().enumerate() {
+            let day: Weekday = i.into();
+            let text = format!("{:?}", day);
+            area.draw_text(&text, &text_style.color(&PURPLE_A400), (5, 13))?;
+        }
+
+        let drawing_areas = root.margin(40, 0, 40, 0).split_evenly((7, 24));
+        let mut areas = drawing_areas.into_iter();
+
+        // monday is n2? ok…
+        for datapoint in skip_last(data.n2.iter())
+            .chain(skip_last(data.n3.iter()))
+            .chain(skip_last(data.n4.iter()))
+            .chain(skip_last(data.n5.iter()))
+            .chain(skip_last(data.n6.iter()))
+            .chain(skip_last(data.n7.iter()))
+            .chain(skip_last(data.n1.iter()))
+        {
+            let area = areas.next().ok_or(anyhow::anyhow!("not enough areas?"))?;
+            let value = format!("{:>3}", (datapoint * 100.0).round());
+            let bg_color = colormap.get_color(datapoint.to_owned() as f32);
+
+            // https://gamedev.stackexchange.com/a/38561
+            let (c_red, c_green, c_blue) = bg_color.rgb();
+            let c_red: f64 = Into::<f64>::into(c_red) / 255.0;
+            let c_green: f64 = Into::<f64>::into(c_green) / 255.0;
+            let c_blue: f64 = Into::<f64>::into(c_blue) / 255.0;
+            const GAMMA: f64 = 2.2;
+            let l: f64 = 0.2126 * c_red.powf(GAMMA)
+                       + 0.7152 * c_green.powf(GAMMA)
+                       + 0.0722 * c_blue.powf(GAMMA);
+
+            let text_color = if l > 0.5_f64.powf(GAMMA) { &BLACK } else { &WHITE };
+
+            area.margin(2, 2, 2, 2)
+                .fill(&bg_color)?;
+            area.draw_text(&value, &text_style.color(text_color), (5, 13))?;
+        }
+        Ok(())
+    }
+
+    #[derive(Debug)]
+    enum Weekday {
+        Mon,
+        Tue,
+        Wed,
+        Thu,
+        Fri,
+        Sat,
+        Sun,
+    }
+
+    impl From<usize> for Weekday {
+        fn from(value: usize) -> Self {
+            use Weekday::*;
+            match value {
+                0 => Mon,
+                1 => Tue,
+                2 => Wed,
+                3 => Thu,
+                4 => Fri,
+                5 => Sat,
+                6 => Sun,
+                _ => Mon,
+            }
+        }
+    }
+
+    fn skip_last<I, T>(iter: I) -> impl Iterator<Item = T>
+    where
+        I: Iterator<Item = T> + std::iter::DoubleEndedIterator + std::iter::ExactSizeIterator,
+    {
+        iter.rev().skip(1).rev()
     }
 }
