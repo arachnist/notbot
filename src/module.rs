@@ -1527,10 +1527,10 @@ pub async fn mod_manager(event: ConsumerEvent, config: Config) -> anyhow::Result
     };
 
     match event.keyword.as_str() {
-        "disable" => config.disable_module(modname),
-        "enable" => config.enable_module(modname),
-        "fence" => config.fence_module(modname),
-        "unfence" => config.unfence_module(modname),
+        "disable" => config.disable_module(modname.clone()),
+        "enable" => config.enable_module(modname.clone()),
+        "fence" => config.fence_module(modname.clone()),
+        "unfence" => config.unfence_module(modname.clone()),
         "disabled" => {
             let disabled = config.modules_disabled();
             let message = format!("disabled modules: {:?}", disabled);
@@ -1538,7 +1538,7 @@ pub async fn mod_manager(event: ConsumerEvent, config: Config) -> anyhow::Result
                 .room
                 .send(RoomMessageEventContent::text_plain(message))
                 .await?;
-            Ok(())
+            return Ok(());
         }
         "fenced" => {
             let fenced = config.modules_fenced();
@@ -1547,8 +1547,17 @@ pub async fn mod_manager(event: ConsumerEvent, config: Config) -> anyhow::Result
                 .room
                 .send(RoomMessageEventContent::text_plain(message))
                 .await?;
-            Ok(())
+            return Ok(());
         }
         _ => bail!("wtf? wrong keyword passed somehow"),
-    }
+    }?;
+
+    let message = format!("module {} successfully {}d", modname, event.keyword);
+
+    event
+        .room
+        .send(RoomMessageEventContent::text_plain(message))
+        .await?;
+
+    Ok(())
 }
