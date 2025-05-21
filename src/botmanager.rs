@@ -77,12 +77,22 @@ impl BotManagerInner {
     pub fn reload(&mut self) -> Result<(), ReloadError> {
         use ReloadError::*;
 
+        let fenced = self.config.modules_fenced();
+        let disabled = self.config.modules_disabled();
+
         self.config = match Config::new(self.config_path.clone()) {
             Ok(c) => c,
             Err(e) => {
                 return Err(ConfigParseError(e));
             }
         };
+
+        for modname in fenced {
+            let _ = self.config.fence_module(modname);
+        }
+        for modname in disabled {
+            let _ = self.config.disable_module(modname);
+        }
 
         trace!("config: {:#?}", self.config);
 

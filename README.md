@@ -53,7 +53,7 @@ In no particular order:
 * using <https://github.com/clarkmcc/cel-rust> for ACLs
 * using regular expressions and/or clap for defining module arguments.
 * providing more defaults for configuration values, graceful degradation if they're not provided
-* Soon: ability to explicitly enable/disable modules at runtime, preferrably in a persistent way
+* ~~Soon: ability to explicitly enable/disable modules at runtime, preferrably in a persistent way~~ Done
 * ingesting notmun modules directly as notbot modules, with a thin rust wrapper around each one.
   right now we're pretending to what remains of mun runtime that there's an irc connection in there somewhere.
 * Maybe: resurrecting [dyncfg](https://github.com/arachnist/dyncfg) in some form for dynamic per-room/sender configuration

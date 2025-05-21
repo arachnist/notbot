@@ -643,13 +643,16 @@ pub mod heatmap_api {
             let c_blue: f64 = Into::<f64>::into(c_blue) / 255.0;
             const GAMMA: f64 = 2.2;
             let l: f64 = 0.2126 * c_red.powf(GAMMA)
-                       + 0.7152 * c_green.powf(GAMMA)
-                       + 0.0722 * c_blue.powf(GAMMA);
+                + 0.7152 * c_green.powf(GAMMA)
+                + 0.0722 * c_blue.powf(GAMMA);
 
-            let text_color = if l > 0.5_f64.powf(GAMMA) { &BLACK } else { &WHITE };
+            let text_color = if l > 0.5_f64.powf(GAMMA) {
+                &BLACK
+            } else {
+                &WHITE
+            };
 
-            area.margin(2, 2, 2, 2)
-                .fill(&bg_color)?;
+            area.margin(2, 2, 2, 2).fill(&bg_color)?;
             area.draw_text(&value, &text_style.color(text_color), (5, 13))?;
         }
         Ok(())

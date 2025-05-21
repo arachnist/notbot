@@ -968,6 +968,14 @@ pub async fn dispatch_module(
         return Ok(());
     };
 
+    // also filter out fenced modules, so they don't get sent any events while still running
+    if config.modules_disabled().contains(&module.name)
+        || config.modules_fenced().contains(&module.name)
+    {
+        trace!("module disabled: {}", module.name);
+        return Ok(());
+    }
+
     trace!("attempting to reserve channel space");
     // .unwrap() is safe here because star
     let reservation = match module.channel.clone().try_reserve_owned() {
@@ -1044,6 +1052,9 @@ pub fn init_modules(
         };
     }
 
+    modules.retain(|x| !config.modules_fenced().contains(&x.name));
+    passthrough_modules.retain(|x| !config.modules_fenced().contains(&x.0.name));
+
     match core_starter(
         config,
         reload_tx,
@@ -1118,6 +1129,24 @@ pub fn core_starter(
         error_prefix: None,
     };
     modules.push(shutdown);
+
+    let mod_manager = ModuleInfo::new(
+        "mod_manager",
+        "fences off/disables/unfences/enables modules",
+        vec![Acl::SpecificUsers(config.admins())],
+        TriggerType::Keyword(vec![
+            "enable".s(),
+            "disable".s(),
+            "fence".s(),
+            "unfence".s(),
+            "disabled".s(),
+            "fenced".s(),
+        ]),
+        Some("action failed"),
+        config.clone(),
+        mod_manager,
+    );
+    modules.push(mod_manager);
 
     // avoids a cyclic reference of help/list holding their own receivers and senders at the same time
     let weak_modules: Vec<WeakModuleInfo> = registered_modules
@@ -1484,5 +1513,42 @@ pub async fn reload_consumer(
         };
 
         reservation.send(event.room);
+    }
+}
+
+/// Enables/disables/fences off/unfences modules.
+pub async fn mod_manager(event: ConsumerEvent, config: Config) -> anyhow::Result<()> {
+    let modname = match event.args {
+        None => match event.keyword.as_str() {
+            "fenced" | "disabled" => "".s(),
+            _ => bail!("no module name provided"),
+        },
+        Some(m) => m.trim().s(),
+    };
+
+    match event.keyword.as_str() {
+        "disable" => config.disable_module(modname),
+        "enable" => config.enable_module(modname),
+        "fence" => config.fence_module(modname),
+        "unfence" => config.unfence_module(modname),
+        "disabled" => {
+            let disabled = config.modules_disabled();
+            let message = format!("disabled modules: {:?}", disabled);
+            event
+                .room
+                .send(RoomMessageEventContent::text_plain(message))
+                .await?;
+            Ok(())
+        }
+        "fenced" => {
+            let fenced = config.modules_fenced();
+            let message = format!("fenced modules: {:?}", fenced);
+            event
+                .room
+                .send(RoomMessageEventContent::text_plain(message))
+                .await?;
+            Ok(())
+        }
+        _ => bail!("wtf? wrong keyword passed somehow"),
     }
 }
