@@ -201,7 +201,10 @@ pub async fn heatmap(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Resu
 
     let image = fs::read(name)?;
 
-    let caption = Some(format!("Activity in the last {period:?}"));
+    let caption = match period {
+        HeatmapPeriod::All => Some("All acquired datapoints".s()),
+        _ => Some(format!("Activity in the last {period:?}")),
+    };
 
     let attachment_config = AttachmentConfig::new()
         .caption(caption)
