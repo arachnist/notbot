@@ -331,35 +331,18 @@ impl ModuleInfo {
     {
         let owned_error_prefix = error_prefix.map(str::to_owned);
         let (tx, rx) = mpsc::channel(1);
-        Self::spawn_inner(name, owned_error_prefix.clone(), rx, config, processor);
 
-        Self {
+        let module = Self {
             name: name.to_owned(),
             help: help.to_owned(),
             acl,
             trigger,
             channel: tx,
             error_prefix: owned_error_prefix,
-        }
-    }
+        };
+        module.spawn(rx, config, processor);
 
-    fn spawn_inner<C, Fut>(
-        name: &str,
-        error_prefix: Option<String>,
-        rx: mpsc::Receiver<ConsumerEvent>,
-        config: C,
-        processor: impl Fn(ConsumerEvent, C) -> Fut + Send + 'static,
-    ) where
-        C: Clone + Send + Sync + 'static,
-        Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
-    {
-        tokio::task::spawn(Self::consumer(
-            rx,
-            config,
-            error_prefix,
-            processor,
-            name.to_owned(),
-        ));
+        module
     }
 
     /// Convenience function to spawn generic event channel consumer.
@@ -386,7 +369,7 @@ impl ModuleInfo {
 
     /// Generic event consumer.
     ///
-    /// Consumes events from the `ConsumerEvent` channel and passes them on to the
+    /// Consumes events from the [`ConsumerEvent`] channel and passes them on to the
     /// provided processor function.
     /// # Errors
     /// Will return `Err` if the event channel gets closed.
@@ -421,6 +404,111 @@ impl ModuleInfo {
                     }
                 };
             }
+        }
+    }
+
+    /// Registers a Mun command as notbot module.
+    #[must_use]
+    pub fn new_mun_command(
+        name: &str,
+        keyword: String, // Command
+        arity: i64,
+        processor: mlua::Function, // Callback
+        help: &str,
+        klacz_level: i64,
+    ) -> Self {
+        let (tx, rx) = mpsc::channel(1);
+
+        tokio::task::spawn(Self::mun_command_consumer(
+            rx,
+            name.to_owned(),
+            processor,
+            arity,
+        ));
+
+        Self {
+            name: name.to_owned(),
+            help: help.to_owned(),
+            acl: vec![Acl::KlaczLevel(klacz_level)],
+            trigger: TriggerType::Keyword(vec![keyword]),
+            channel: tx,
+            error_prefix: None,
+        }
+    }
+
+    /// Mun command event consumer.
+    ///
+    /// Like the generic consumer, consumes events from a [`ConsumerEvent`] channel,
+    /// but constructs from them arguments that Mun commands expect.
+    ///
+    /// # Errors
+    /// This function will return `Err` if:
+    /// * the event channel is closed
+    /// * casting arity to usize fails
+    pub async fn mun_command_consumer(
+        mut rx: mpsc::Receiver<ConsumerEvent>,
+        name: String,
+        processor: mlua::Function,
+        arity: i64,
+    ) -> anyhow::Result<()> {
+        loop {
+            let Some(event) = rx.recv().await else {
+                warn!("{name} channel closed");
+                bail!("channel closed");
+            };
+
+            let mut lua_args: Vec<String> = vec![];
+
+            if let Some(argstr) = event.args {
+                if arity == -1 {
+                    lua_args.push(argstr);
+                } else {
+                    let split_args = argstr.split_whitespace();
+
+                    for arg in split_args {
+                        lua_args.push(arg.to_owned());
+                    }
+                }
+            }
+
+            if arity == -1 && lua_args.is_empty() {
+                if let Err(e) = event
+                    .room
+                    .send(RoomMessageEventContent::text_plain(format!(
+                        "Command '{name}' expects '{arity}' arguments, got '{}'.",
+                        lua_args.len()
+                    )))
+                    .await
+                {
+                    error!("{name}: sending arity error message failed: {e}");
+                }
+
+                continue;
+            }
+
+            if arity != -1 && lua_args.len() != usize::try_from(arity)? {
+                if let Err(e) = event
+                    .room
+                    .send(RoomMessageEventContent::text_plain(format!(
+                        "Command '{name}' expects '{arity}' arguments, got '{}'.",
+                        lua_args.len()
+                    )))
+                    .await
+                {
+                    error!("{name}: sending arity error message failed: {e}");
+                }
+
+                continue;
+            }
+
+            let target = room_name(&event.room);
+
+            if let Err(e) = processor
+                .call_async::<()>((event.sender.as_str(), target.as_str(), lua_args.join(" ")))
+                .await
+            {
+                error!("mun {name} command failed: {e}");
+            };
         }
     }
 }
