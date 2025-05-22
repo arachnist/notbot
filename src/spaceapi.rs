@@ -244,7 +244,7 @@ impl TryFrom<Option<String>> for HeatmapPeriod {
                 "week" | "tydzień" | "tydzien" => Ok(Week),
                 "month" | "miesiąc" | "miesiac" => Ok(Month),
                 "year" | "rok" => Ok(Year),
-                "all" | "wszystko" => Ok(All),
+                "all" | "everything" | "wszystko" => Ok(All),
                 _ => bail!("invalid period"),
             },
         }
@@ -258,7 +258,7 @@ impl From<HeatmapPeriod> for String {
             Week => "week".s(),
             Month => "month".s(),
             Year => "year".s(),
-            All => "all".s(),
+            All => "everything".s(),
         }
     }
 }
