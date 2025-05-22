@@ -35,6 +35,10 @@ pub enum MembershipStatus {
 }
 
 /// Shorthand for making an http request to retrieve a json object, and deserialize it.
+/// # Errors
+/// Will return `Err` if:
+/// * fetching remote data fails.
+/// * data doesn't deserialize to provided type.
 pub async fn fetch_and_decode_json<D: de::DeserializeOwned>(url: String) -> anyhow::Result<D> {
     let client = RClient::new();
 
@@ -44,28 +48,35 @@ pub async fn fetch_and_decode_json<D: de::DeserializeOwned>(url: String) -> anyh
 }
 
 /// Given a string (either an alias, or a room id), try to resolve it to a room object.
+/// # Errors
+/// Will return `Err` if:
+/// * resolving room alias fails.
+/// * we can't get a room object for a given room name, eg. we haven't joined that room.
 pub async fn maybe_get_room(c: &Client, maybe_room: &str) -> anyhow::Result<Room> {
-    let room_id: OwnedRoomId = match maybe_room.try_into() {
-        Ok(r) => r,
-        Err(_) => {
-            let alias_id = OwnedRoomAliasId::try_from(maybe_room)?;
+    let room_id: OwnedRoomId = if let Ok(r) = maybe_room.try_into() {
+        r
+    } else {
+        let alias_id = OwnedRoomAliasId::try_from(maybe_room)?;
 
-            c.resolve_room_alias(&alias_id).await?.room_id
-        }
+        c.resolve_room_alias(&alias_id).await?.room_id
     };
 
-    c.get_room(&room_id).ok_or(anyhow!("no room"))
+    c.get_room(&room_id).ok_or_else(|| anyhow!("no room"))
 }
 
 /// Retrieve the canonical room alias, if known. Otherwise return room id.
+#[must_use]
 pub fn room_name(room: &Room) -> String {
-    match room.canonical_alias() {
-        Some(a) => a.to_string(),
-        None => room.room_id().to_string(),
-    }
+    room.canonical_alias()
+        .map_or_else(|| room.room_id().to_string(), |a| a.to_string())
 }
 
 /// Query the capacifier KVL api; requires Bearer token.
+/// # Errors
+/// Will return `Err` if:
+/// * building http client fails
+/// * querying capacifier fails
+/// * capacifier response doesn't deserialize properly
 pub async fn capacifier_kvl_query(
     capacifier_token: String,
     req_type: &str,
@@ -97,11 +108,15 @@ pub async fn capacifier_kvl_query(
 
 // TODO: implement configurable urls
 /// Return membership status for a given user. Best effort.
+/// # Errors
+/// Will return `Err` if:
+/// * querying capacifier fails.
+/// * querying kasownik fails.
 pub async fn membership_status(
     capacifier_token: String,
     user: OwnedUserId,
 ) -> anyhow::Result<MembershipStatus> {
-    use MembershipStatus::*;
+    use MembershipStatus::{Active, Inactive, NotAMember, Stoned};
 
     let mut mxid_map = MXID_HSWAW_MEMBER.lock().await;
 
@@ -141,8 +156,7 @@ pub async fn membership_status(
         member.clone(),
         Duration::from_secs(168 * 60 * 60),
     );
-
-    let mut memberships = MEMBERSHIPS.lock().await;
+    drop(mxid_map);
 
     let client = reqwest::ClientBuilder::new()
         .redirect(reqwest::redirect::Policy::none())
@@ -170,7 +184,10 @@ pub async fn membership_status(
         _ => bail!("kasownik responded with weird status code",),
     };
 
-    memberships.insert(member, membership.clone(), Duration::from_secs(3 * 60 * 60));
+    MEMBERSHIPS
+        .lock()
+        .await
+        .insert(member, membership.clone(), Duration::from_secs(3 * 60 * 60));
 
     Ok(membership)
 }
@@ -200,7 +217,7 @@ struct Kasownik {
     modified: String,
 }
 
-/// Shorter to_string() alias
+/// Shorter `to_string()` alias
 pub trait ToStringExt: ToString {
     #[allow(missing_docs)]
     fn s(&self) -> String {

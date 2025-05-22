@@ -1,4 +1,4 @@
-//! KlaczDB module
+//! `KlaczDB` module
 //!
 //! # Configuration
 //!
@@ -137,7 +137,7 @@ use std::fmt;
 use tokio_postgres::types::Type as dbtype;
 
 #[derive(Clone)]
-/// KlaczDB struct
+/// `KlaczDB` struct
 ///
 /// Just holds a name of the database handle that will be requested from the [`crate::db`] module.
 pub struct KlaczDB {
@@ -151,6 +151,9 @@ impl KlaczDB {
     pub const GET_INSTANCE_ID: &str = "SELECT nextval('_instance_id')";
 
     /// Function for getting next value from the `_instance_id` sequence.
+    ///
+    /// # Errors
+    /// Will return `Err` if underlying database operations fail.
     async fn get_instance_id(&self) -> anyhow::Result<i64> {
         let client = DBPools::get_client(self.handle).await?;
         let statement = client.prepare_cached(Self::GET_INSTANCE_ID).await?;
@@ -161,14 +164,17 @@ impl KlaczDB {
     }
 
     /// Get permission for a given `_channel` and `_account` pair.
-    pub const GET_LEVEL: &str = r#"SELECT _level::bigint
+    pub const GET_LEVEL: &str = r"SELECT _level::bigint
         FROM _level
         WHERE
             _channel = $1
             AND _account = $2
-        LIMIT 1"#;
+        LIMIT 1";
 
     /// Function returning permission level defined in Klacz database for a given user/room pair.
+    ///
+    /// # Errors
+    /// Will return `Err` if underlying database operations fail.
     pub async fn get_level(&self, room: &Room, user: &UserId) -> anyhow::Result<i64> {
         let name = room_name(room);
         let user_name = user.as_str();
@@ -193,10 +199,13 @@ impl KlaczDB {
     /// Add new permission level.
     ///
     /// The schema has almost no unique constraints, so `insert on conflict update` can't be used.
-    pub const INSERT_LEVELS: &str = r#"INSERT INTO _level (_oid, _channel, _account, _level)
-        VALUES ($1, $2, $3, $4)"#;
+    pub const INSERT_LEVELS: &str = r"INSERT INTO _level (_oid, _channel, _account, _level)
+        VALUES ($1, $2, $3, $4)";
 
     /// Function for setting the permission level for a given user/room pair.
+    ///
+    /// # Errors
+    /// Will return `Err` if underlying database operations fail, or database state is inconsistent.
     pub async fn add_level(&self, room: &Room, user: &UserId, level: i64) -> anyhow::Result<()> {
         let name = room_name(room);
         let user_name = user.as_str();
@@ -238,19 +247,22 @@ impl KlaczDB {
     }
 
     /// Retrieve the `_oid` for term definition, if any.
-    pub const GET_TERM_OID: &str = r#"SELECT _oid
+    pub const GET_TERM_OID: &str = r"SELECT _oid
         FROM _term
-        WHERE _name = $1"#;
+        WHERE _name = $1";
     /// Retrieve a random entry for a given term.
     ///
     /// This could be done in a single query, but splitting it into two lets us handle error cases in a more user-friendly way.
-    pub const GET_TERM_ENTRY: &str = r#"SELECT _text
+    pub const GET_TERM_ENTRY: &str = r"SELECT _text
         FROM _entry
         WHERE _term_oid = $1
         ORDER BY random()
-        LIMIT 1"#;
+        LIMIT 1";
 
     /// Retrieve a random entry from Klacz knowledge base
+    ///
+    /// # Errors
+    /// Will return `Err` if underlying database operations fail, or database state is inconsistent.
     pub async fn get_entry(&self, term: &str) -> anyhow::Result<String> {
         let client = DBPools::get_client(self.handle).await?;
 
@@ -266,31 +278,40 @@ impl KlaczDB {
         let term_oid: i64 = match term_rows.len() {
             0 => return Err(KlaczError::EntryNotFound.into()),
             2.. => return Err(KlaczError::DBInconsistency.into()),
-            1 => term_rows.first().unwrap().try_get(0)?,
+            1 => term_rows
+                .first()
+                .ok_or_else(|| anyhow!("no row returned despite len() == 1"))?
+                .try_get(0)?,
         };
 
         let entry_rows = client.query(&entry_statement, &[&term_oid]).await?;
         match entry_rows.len() {
-            1 => Ok(entry_rows.first().unwrap().try_get(0)?),
+            1 => Ok(entry_rows
+                .first()
+                .ok_or_else(|| anyhow!("no row returned despite len() == 1"))?
+                .try_get(0)?),
             _ => Err(KlaczError::DBInconsistency.into()),
         }
     }
 
     /// Remove the term entry, if it no longer has any definitions
-    pub const REMOVE_TERM: &str = r#"DELETE FROM _term WHERE _oid = $1"#;
+    pub const REMOVE_TERM: &str = r"DELETE FROM _term WHERE _oid = $1";
     /// Remove a single instance of a matching entry from the database
-    pub const REMOVE_ENTRY: &str = r#"DELETE FROM _entry
+    pub const REMOVE_ENTRY: &str = r"DELETE FROM _entry
         WHERE _oid = (
             SELECT max(_oid)
             FROM _entry
             WHERE
                 _term_oid = $1
                 AND _text = $2
-        )"#;
+        )";
     /// Count existing entried for a given term
-    pub const COUNT_ENTRIES: &str = r#"SELECT count(*) FROM _entry WHERE _term_oid = $1"#;
+    pub const COUNT_ENTRIES: &str = r"SELECT count(*) FROM _entry WHERE _term_oid = $1";
 
     /// Remove a signle entry for a given term by its existing content.
+    ///
+    /// # Errors
+    /// Will return `Err` if underlying database operations fail, or database state is inconsistent.
     pub async fn remove_entry(&self, term: &str, entry: &str) -> anyhow::Result<KlaczKBChange> {
         let mut response = KlaczKBChange::Unchanged;
         let mut client = DBPools::get_client(self.handle).await?;
@@ -313,7 +334,10 @@ impl KlaczDB {
         let term_oid: i64 = match term_rows.len() {
             0 => return Err(KlaczError::TermNotFound.into()),
             2.. => return Err(KlaczError::DBInconsistency.into()),
-            1 => term_rows.first().unwrap().try_get(0)?,
+            1 => term_rows
+                .first()
+                .ok_or_else(|| anyhow!("no row returned despite len() == 1"))?
+                .try_get(0)?,
         };
 
         let deleted = transaction
@@ -346,13 +370,16 @@ impl KlaczDB {
     }
 
     /// Add a new term.
-    pub const INSERT_TERM: &str = r#"INSERT INTO _term (_oid, _name, _visible)
-        VALUES ($1, $2, true)"#;
+    pub const INSERT_TERM: &str = r"INSERT INTO _term (_oid, _name, _visible)
+        VALUES ($1, $2, true)";
     /// Add an entry for a given term.
-    pub const INSERT_ENTRY: &str = r#"INSERT INTO _entry (_oid, _term_oid, _added_by, _text, _added_at, _visible)
-        VALUES ($1, $2, $3, $4, now(), true)"#;
+    pub const INSERT_ENTRY: &str = r"INSERT INTO _entry (_oid, _term_oid, _added_by, _text, _added_at, _visible)
+        VALUES ($1, $2, $3, $4, now(), true)";
 
     /// Add entry to the knowledge database
+    ///
+    /// # Errors
+    /// Will return `Err` if underlying database operations fail, or database state is inconsistent.
     pub async fn add_entry(
         &self,
         user: &UserId,
@@ -381,7 +408,10 @@ impl KlaczDB {
         let term_rows = transaction.query(&get_term_statement, &[&term]).await?;
         let term_oid: i64 = match term_rows.len() {
             2.. => return Err(KlaczError::DBInconsistency.into()),
-            1 => term_rows.first().unwrap().try_get(0)?,
+            1 => term_rows
+                .first()
+                .ok_or_else(|| anyhow!("no row returned despite len() == 1"))?
+                .try_get(0)?,
             0 => {
                 let term_instance_id = self.get_instance_id().await?;
                 let term_oid_new = KlaczClass::Term.make_oid(term_instance_id);
@@ -415,12 +445,12 @@ impl KlaczDB {
 
 /// Maxmium OID value, as defined in the [hu.dwim.perec](https://hub.darcs.net/hu.dwim/hu.dwim.perec) ORM.
 #[allow(dead_code)]
-pub const OID_MAXIMUM_INSTANCE_ID: i64 = 281474976710655;
+pub const OID_MAXIMUM_INSTANCE_ID: i64 = 281_474_976_710_655;
 /// Maximum value of the class id. Since the class id is stored in the lower
 /// 16 bit of the oid, it can't be allowed to grow beyond that.
 pub const OID_MAXIMUM_CLASS_ID: u32 = 65535;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 /// Possible non-error outcomes of attempting to modify the knowledge database.
 pub enum KlaczKBChange {
     /// A new term has been created.
@@ -437,7 +467,7 @@ pub enum KlaczKBChange {
 
 impl fmt::Display for KlaczKBChange {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 
@@ -465,7 +495,7 @@ pub enum KlaczClass {
 
 impl fmt::Display for KlaczClass {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 
@@ -494,6 +524,7 @@ impl FromStr for KlaczClass {
 
 impl KlaczClass {
     /// Class name in the form that is used for calculating the class ID
+    #[must_use]
     pub fn class_name(&self) -> String {
         self.to_string().to_case(Case::UpperKebab)
     }
@@ -501,6 +532,7 @@ impl KlaczClass {
     /// Calculate the class id by taking the appropriately-formated name, calculating a crc32 of it,
     /// and taking the reminder of a division (modulo) of the hash by maximum defined class id.
     /// The modulo operation ensures the result will fit in 16 bits.
+    #[must_use]
     pub fn class_id(&self) -> i64 {
         (crc32(self.class_name().as_bytes()) % OID_MAXIMUM_CLASS_ID).into()
     }
@@ -534,7 +566,7 @@ pub enum KlaczError {
 
 impl fmt::Display for KlaczError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 
@@ -581,12 +613,15 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         channel: removetx,
         error_prefix: Some("error removing entry".s()),
     };
-    remove.spawn(removerx, module_config.clone(), remove_processor);
+    remove.spawn(removerx, module_config, remove_processor);
 
     Ok(vec![add, remove])
 }
 
 /// Adds entries/terms to the database.
+///
+/// # Errors
+/// Will return `Err` if arguments are missing, database manipulation fails, or sending response fails.
 pub async fn add_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
     let Some(body) = event.args else {
         event
@@ -599,7 +634,7 @@ pub async fn add_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Res
     };
 
     let mut args = body.splitn(2, [' ', '\n']);
-    let term = args.next().unwrap();
+    let term = args.next().ok_or_else(|| anyhow!("missing arguments"))?;
     let Some(definition) = args.next() else {
         event
             .room
@@ -631,6 +666,9 @@ pub async fn add_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Res
 }
 
 /// Removes entries/terms from the database.
+///
+/// # Errors
+/// Will return `Err` if arguments are missing, database manipulation fails, or sending response fails.
 pub async fn remove_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
     let Some(body) = event.args else {
         event
@@ -643,7 +681,7 @@ pub async fn remove_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::
     };
 
     let mut args = body.splitn(2, [' ', '\n']);
-    let term = args.next().unwrap();
+    let term = args.next().ok_or_else(|| anyhow!("missing arguments"))?;
     let Some(definition) = args.next() else {
         event
             .room

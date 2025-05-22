@@ -1,4 +1,15 @@
-#![warn(missing_docs)]
+#![warn(
+    missing_docs,
+    clippy::all,
+    clippy::pedantic,
+    clippy::nursery,
+    clippy::cargo
+)]
+#![allow(
+    clippy::transmute_undefined_repr,
+    clippy::transmute_ptr_to_ptr,
+    reason = "unavoidable without serde_nested_with changes"
+)]
 #![doc = include_str!("../README.md")]
 
 pub mod prelude;

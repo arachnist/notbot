@@ -21,7 +21,7 @@
 //! * `join room-name` - attempts to join a room by name. [`join_processor`], [`join_consumer`].
 //! * `leave [room-name]` - will leave either the named, or - if name's not present - current room. [`leave_processor`]
 //!
-//! The bot will also attempt to join rooms when invited, and the room has room_id on one of the allowed homeservers. [`autojoiner`]
+//! The bot will also attempt to join rooms when invited, and the room has `room_id` on one of the allowed homeservers. [`autojoiner`]
 
 use crate::prelude::*;
 
@@ -90,12 +90,18 @@ pub(crate) fn starter(mx: &Client, config: &Config) -> anyhow::Result<Vec<Module
         channel: leave_tx,
         error_prefix: Some("couldn't leave room".s()),
     };
-    leave.spawn(leave_rx, module_config.clone(), leave_processor);
+    leave.spawn(leave_rx, module_config, leave_processor);
 
     Ok(vec![join, leave])
 }
 
 /// Leaves rooms when requested to do so. Will optionally take a room name argument, to leave a different room than current one.
+///
+/// # Errors
+/// Will return `Err` if:
+/// * can't resolve room provided as argument
+/// * sending goodbye message fails
+/// * leaving the room fails
 pub async fn leave_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
     let leave_room = if let Some(room_str) = event.args {
         maybe_get_room(&event.room.client(), &room_str).await?
@@ -111,20 +117,21 @@ pub async fn leave_processor(event: ConsumerEvent, config: ModuleConfig) -> anyh
 }
 
 /// Forwards join requests to [`join_processor`] and stops the invite event listener as needed.
+///
+/// # Errors
+/// Will return `Err` if:
+/// * event channel gets closed
 pub async fn join_consumer(
     mut rx: mpsc::Receiver<ConsumerEvent>,
     mx: Client,
     autojoiner_handle: EventHandlerHandle,
 ) -> anyhow::Result<()> {
     loop {
-        let event = match rx.recv().await {
-            Some(e) => e,
-            None => {
-                warn!("channel closed");
-                info!("stopping the autojoiner");
-                mx.remove_event_handler(autojoiner_handle);
-                bail!("channel closed");
-            }
+        let Some(event) = rx.recv().await else {
+            warn!("channel closed");
+            info!("stopping the autojoiner");
+            mx.remove_event_handler(autojoiner_handle);
+            bail!("channel closed");
         };
 
         if let Err(e) = join_processor(mx.clone(), event.clone()).await {
@@ -143,6 +150,12 @@ pub async fn join_consumer(
 }
 
 /// Processes join requests.
+///
+/// # Errors
+/// Will return `Err` if:
+/// * no argument is provided
+/// * argument doesn't parse as room
+/// * joining room fails.
 pub async fn join_processor(mx: Client, event: ConsumerEvent) -> anyhow::Result<()> {
     if let Some(room_str) = event.args {
         let room = maybe_get_room(&mx, &room_str).await?;
@@ -173,7 +186,7 @@ pub async fn join_processor(mx: Client, event: ConsumerEvent) -> anyhow::Result<
         let response = if joined {
             format!("joined {room_str}")
         } else {
-            format!("couldn't join {room_str}")
+            bail!("couldn't join {room_str}")
         };
         event
             .room
@@ -187,20 +200,31 @@ pub async fn join_processor(mx: Client, event: ConsumerEvent) -> anyhow::Result<
 }
 
 /// Listens for invitation events, and joins the appropriate room if the room id is from one of the permitted homeservers.
+///
+/// # Errors
+/// Will return `Err` if:
+/// * invite not ment for us
+/// * retrieving room server name fails
+/// * room is on wrong homeserver
+#[allow(clippy::unused_async)]
 pub async fn autojoiner(
     room_member: StrippedRoomMemberEvent,
     client: Client,
     room: Room,
     module_config: ModuleConfig,
-) {
+) -> anyhow::Result<()> {
     // ignore invites not meant for us
-    if room_member.state_key != client.user_id().unwrap() {
-        return;
+    if room_member.state_key
+        != client
+            .user_id()
+            .ok_or_else(|| anyhow!("missing our own userid!?"))?
+    {
+        bail!("invite not ment for us");
     }
 
     trace!("getting homeserver name for room");
     let Some(room_homeserver) = &room.room_id().server_name() else {
-        return;
+        bail!("retrieving room server name fails");
     };
 
     trace!(
@@ -211,7 +235,7 @@ pub async fn autojoiner(
         .homeservers
         .contains(&room_homeserver.to_string())
     {
-        return;
+        bail!("room is on wrong homeserver");
     };
 
     ROOM_INVITES.inc();
@@ -239,4 +263,6 @@ pub async fn autojoiner(
         }
         trace!("Successfully joined room {}", room.room_id());
     });
+
+    Ok(())
 }

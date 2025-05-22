@@ -71,7 +71,7 @@ struct FiringAlerts {
 }
 
 impl FiringAlerts {
-    fn fire(&self, name: String, alerts: Vec<Alert>) -> anyhow::Result<Vec<Alert>> {
+    fn fire(&self, name: &str, alerts: Vec<Alert>) -> anyhow::Result<Vec<Alert>> {
         trace!("gathering alerts to fire");
         let mut inner = match self.inner.lock() {
             Ok(i) => i,
@@ -81,17 +81,17 @@ impl FiringAlerts {
         let mut changed: Vec<Alert> = vec![];
 
         trace!("listing known alerts");
-        let known_alerts: Vec<String> = match inner.get(&name) {
-            None => {
+        let known_alerts: Vec<String> = inner.get(name).map_or_else(
+            || {
                 changed.extend(alerts.clone());
                 vec![]
-            }
-            Some(a) => a.iter().map(|a| a.fingerprint.clone()).collect(),
-        };
+            },
+            |a| a.iter().map(|a| a.fingerprint.clone()).collect(),
+        );
 
         trace!("adding unique firing alerts");
         inner
-            .entry(name)
+            .entry(name.to_owned())
             .and_modify(|va| {
                 for a in alerts.clone() {
                     if !known_alerts.contains(&a.fingerprint) {
@@ -101,12 +101,11 @@ impl FiringAlerts {
                 }
             })
             .or_insert(alerts);
-
-        trace!("inner status: {inner:#?}");
+        drop(inner);
         Ok(changed)
     }
 
-    fn resolve(&self, name: String, alerts: Vec<Alert>) -> anyhow::Result<Vec<Alert>> {
+    fn resolve(&self, name: &str, alerts: Vec<Alert>) -> anyhow::Result<Vec<Alert>> {
         let mut inner = match self.inner.lock() {
             Ok(i) => i,
             Err(e) => bail!("failed locking alerts map: {e}"),
@@ -118,35 +117,29 @@ impl FiringAlerts {
             alerts.iter().map(|a| a.fingerprint.clone()).collect();
 
         inner
-            .entry(name)
+            .entry(name.to_owned())
             .and_modify(|va| va.retain(|a| !resolved_fingerprints.contains(&a.fingerprint)));
+        drop(inner);
 
         Ok(alerts)
     }
 
-    fn get(&self, name: String) -> Option<Vec<Alert>> {
-        let inner = match self.inner.lock() {
-            Ok(i) => i,
-            Err(_) => return None,
+    fn get(&self, name: &str) -> Option<Vec<Alert>> {
+        let Ok(inner) = self.inner.lock() else {
+            return None;
         };
-
-        trace!("known instances: {:#?}", inner.keys());
-
-        inner.get(&name).map(|va| va.to_owned())
+        inner.get(name).map(std::borrow::ToOwned::to_owned)
     }
 
     // our known state has desynched for whatever reason, start from empty slate
     fn purge(&self) -> anyhow::Result<()> {
-        let mut inner = match self.inner.lock() {
-            Ok(i) => i,
-            Err(e) => bail!("failed locking alerts map: {e}"),
+        if let Ok(mut inner) = self.inner.lock() {
+            for instance in inner.values_mut() {
+                instance.truncate(0);
+            }
+        } else {
+            bail!("failed locking alerts map");
         };
-
-        trace!("known instances: {:#?}", inner.keys());
-
-        for instance in inner.values_mut() {
-            instance.truncate(0);
-        }
 
         Ok(())
     }
@@ -196,13 +189,20 @@ fn no_firing_alerts_responses() -> Vec<String> {
 /// Handles incoming webhooks from grafana instances.
 ///
 /// Matches bearer tokens to known instances, updates state of known alerts, and dispatches alerts to matrix rooms accordingly.
+///
+/// # Errors
+/// Will return `Err` if:
+/// * module is misconfigured (missing auth configuration)
+/// * gets called with unknown token
+/// * modifying inner list of alert states fails
+/// * sending room notifications fails
 #[axum::debug_handler]
 pub async fn receive_alerts(
     State(app_state): State<WebAppState>,
     AuthBearer(token): AuthBearer,
     Json(alerts): Json<Alerts>,
 ) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
-    use AlertStatus::*;
+    use AlertStatus::{Firing, Resolved};
     let module_config: ModuleConfig = {
         match app_state.config.typed_module_config(module_path!()) {
             Err(_) => return Err((StatusCode::INTERNAL_SERVER_ERROR, "no auth configuration")),
@@ -210,16 +210,16 @@ pub async fn receive_alerts(
         }
     };
 
-    let mut instance: Option<String> = None;
+    let mut maybe_instance: Option<String> = None;
 
-    for (name, config) in module_config.grafanas.iter() {
+    for (name, config) in &module_config.grafanas {
         if token == config.token {
-            instance = Some(name.to_owned());
+            maybe_instance = Some(name.to_owned());
             break;
         }
     }
 
-    if instance.is_none() {
+    let Some(instance) = maybe_instance else {
         return Err((StatusCode::FORBIDDEN, "unknown token"));
     };
 
@@ -227,10 +227,10 @@ pub async fn receive_alerts(
 
     let changed = match alerts.status {
         Firing => FIRING_ALERTS
-            .fire(instance.clone().unwrap(), alerts.alerts)
+            .fire(&instance, alerts.alerts)
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to fire alerts")),
         Resolved => FIRING_ALERTS
-            .resolve(instance.clone().unwrap(), alerts.alerts)
+            .resolve(&instance, alerts.alerts)
             .map_err(|_| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -245,12 +245,10 @@ pub async fn receive_alerts(
             return Ok(());
         };
         async {
-            // can .unwrap() as the .is_none() case is handled above
-            if let Some(grafana_config) = module_config.grafanas.get(&instance.clone().unwrap()) {
+            if let Some(grafana_config) = module_config.grafanas.get(&instance) {
                 for room in grafana_config.rooms.clone() {
                     if let Ok(mx_room) = maybe_get_room(&app_state.mx, &room).await {
-                        let mx_message =
-                            to_matrix_message(alerts.clone(), instance.clone().unwrap());
+                        let mx_message = to_matrix_message(alerts.clone(), &instance);
                         if let Err(e) = mx_room.send(mx_message).await {
                             trace!("failed to send room notification: {e}");
                         }
@@ -304,10 +302,14 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
 /// Removes entries from the list of known alerts.
 ///
 /// Also, a perfect example of how using acls and triggers reduces the amount of code.
+/// # Errors
+/// Will return `Err` if:
+/// * purging inner state fails
+/// * sending response fails
 pub async fn purge_processor(ev: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
     trace!("purging alerts");
     let response = match FIRING_ALERTS.purge() {
-        Ok(_) => "alerts purged",
+        Ok(()) => "alerts purged",
         Err(e) => return Err(e),
     };
 
@@ -319,6 +321,12 @@ pub async fn purge_processor(ev: ConsumerEvent, _: ModuleConfig) -> anyhow::Resu
 }
 
 /// Handles requests to display current status of known alerts
+///
+/// # Errors
+/// Will return `Err` if:
+/// * argument is provided but is either malformed, or doesn't match a known grafana instance
+/// * sending responses fails
+/// * module is misconfigured and configuration deserializing didn't catch this.
 pub async fn alerting_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
     let mut grafanas: Vec<GrafanaConfig> = vec![];
     let mut sent: bool = false;
@@ -328,7 +336,10 @@ pub async fn alerting_processor(event: ConsumerEvent, config: ModuleConfig) -> a
         let mut maybe_grafanas: Vec<String> = vec![];
         let mut args = maybe_grafana_instances.split_whitespace();
 
-        let first = args.next().unwrap().to_string();
+        let first = args
+            .next()
+            .ok_or_else(|| anyhow!("missing arguments"))?
+            .to_string();
 
         maybe_grafanas.push(first);
 
@@ -351,11 +362,11 @@ pub async fn alerting_processor(event: ConsumerEvent, config: ModuleConfig) -> a
     trace!("grafanas to check: {grafanas:#?}");
 
     for grafana in grafanas {
-        let name = grafana.name.clone();
-        let alerts = FIRING_ALERTS.get(name.clone());
+        let name = grafana.name.as_str();
+        let alerts = FIRING_ALERTS.get(name);
         match alerts {
             None => {
-                trace!("no alerts known")
+                trace!("no alerts known");
             }
             Some(va) => {
                 if va.is_empty() {
@@ -368,18 +379,19 @@ pub async fn alerting_processor(event: ConsumerEvent, config: ModuleConfig) -> a
     }
 
     if !sent {
-        let mut response = config
+        let mut response = String::new();
+        config
             .no_firing_alerts_responses
             .first()
-            .unwrap()
-            .to_owned();
+            .ok_or_else(|| anyhow!("module misconfigured: missing `ok` responses"))?
+            .clone_into(&mut response);
         // same hack as crate::module::dispatch_module()
         if let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) {
             let milis = now.as_millis();
             // FIXME: sketchy AF
             let chosen_idx: usize = milis as usize % config.no_firing_alerts_responses.len();
             if let Some(option) = config.no_firing_alerts_responses.get(chosen_idx) {
-                response = option.to_owned();
+                option.clone_into(&mut response);
             };
         };
 
@@ -393,23 +405,21 @@ pub async fn alerting_processor(event: ConsumerEvent, config: ModuleConfig) -> a
 }
 
 /// Convert a vector of alerts into an html formatted matrix message.
-pub fn to_matrix_message(
-    va: Vec<grafana::Alert>,
-    instance: String,
-) -> impl MessageLikeEventContent {
+#[must_use]
+pub fn to_matrix_message(va: Vec<grafana::Alert>, instance: &str) -> impl MessageLikeEventContent {
     let mut response_html = format!("instance: <b>{instance}</b><br />");
     let mut response = format!("instance: {instance}\n");
 
-    for alert in va.clone() {
+    for alert in va {
         let mut annotations_html = "".s();
         for (key, value) in alert.annotations.clone() {
             annotations_html.push_str(format!("{key}: <b>{value}</b><br/>").as_str());
         }
         response_html.push_str(
             format!(
-                r#"{state_emoji}<b>{state}</b><br/>
+                r"{state_emoji}<b>{state}</b><br/>
 {annotations}
-since: {since}<br />"#,
+since: {since}<br />",
                 state_emoji = alert.status.clone().into_emoji(),
                 state = alert.status,
                 annotations = annotations_html,
@@ -447,7 +457,7 @@ pub mod grafana {
     use std::fmt;
 
     /// Possible states of an alert.
-    #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Default)]
+    #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
     pub enum AlertStatus {
         /// Grafana informed us that alert conditions aren't satisfied
         #[serde(rename = "resolved")]
@@ -460,7 +470,7 @@ pub mod grafana {
 
     impl fmt::Display for AlertStatus {
         fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-            use AlertStatus::*;
+            use AlertStatus::{Firing, Resolved};
             match self {
                 Resolved => write!(fmt, "Resolved"),
                 Firing => write!(fmt, "Firing"),
@@ -469,8 +479,8 @@ pub mod grafana {
     }
 
     impl AlertStatus {
-        pub(crate) fn into_emoji(self) -> &'static str {
-            use AlertStatus::*;
+        pub(crate) const fn into_emoji(self) -> &'static str {
+            use AlertStatus::{Firing, Resolved};
             match self {
                 Firing => "🔥",
                 Resolved => "🩷",

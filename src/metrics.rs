@@ -74,7 +74,7 @@ pub static HTTP_BODY_HISTOGRAM: LazyLock<HistogramVec> = LazyLock::new(|| {
         "http_response_size_bytes",
         "The HTTP response lower bound sizes in bytes.",
         &["method", "status"],
-        vec![10.0, 100.0, 1000.0, 10000.0, 100000.0]
+        vec![10.0, 100.0, 1000.0, 10_000.0, 100_000.0]
     )
     .unwrap()
 });
@@ -89,6 +89,9 @@ pub static HTTP_REQ_HISTOGRAM: LazyLock<HistogramVec> = LazyLock::new(|| {
 });
 
 /// Exposes metrics gathered by the bot.
+///
+/// # Errors
+/// Will return error if encoding metrics to text fails.
 pub async fn serve_metrics() -> Result<impl IntoResponse, (StatusCode, &'static str)> {
     let encoder = TextEncoder::new();
     let metric_families = prometheus::gather();
@@ -113,6 +116,10 @@ pub async fn track_metrics(req: Request, next: Next) -> impl IntoResponse {
     let latency = timer.elapsed().as_secs_f64();
 
     let status = response.status().as_u16().to_string();
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "we're strongly unlikely to return 2^52 long http response"
+    )]
     let response_size: f64 = response.body().size_hint().lower() as f64;
 
     HTTP_COUNTER

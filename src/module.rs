@@ -315,7 +315,7 @@ pub struct ModuleInfo {
 }
 
 impl ModuleInfo {
-    /// Builds a new ModuleInfo object, taking care of creating channels, and spawning the consumer
+    /// Builds a new `ModuleInfo` object, taking care of creating channels, and spawning the consumer
     pub fn new<C, Fut>(
         name: &str,
         help: &str,
@@ -324,7 +324,7 @@ impl ModuleInfo {
         error_prefix: Option<&str>,
         config: C,
         processor: impl Fn(ConsumerEvent, C) -> Fut + Send + 'static,
-    ) -> ModuleInfo
+    ) -> Self
     where
         C: Clone + Send + Sync + 'static,
         Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
@@ -333,7 +333,7 @@ impl ModuleInfo {
         let (tx, rx) = mpsc::channel(1);
         Self::spawn_inner(name, owned_error_prefix.clone(), rx, config, processor);
 
-        ModuleInfo {
+        Self {
             name: name.to_owned(),
             help: help.to_owned(),
             acl,
@@ -355,8 +355,8 @@ impl ModuleInfo {
     {
         tokio::task::spawn(Self::consumer(
             rx,
-            config.clone(),
-            error_prefix.clone(),
+            config,
+            error_prefix,
             processor,
             name.to_owned(),
         ));
@@ -377,7 +377,7 @@ impl ModuleInfo {
     {
         tokio::task::spawn(Self::consumer(
             rx,
-            config.clone(),
+            config,
             self.error_prefix.clone(),
             processor,
             self.name.clone(),
@@ -386,8 +386,10 @@ impl ModuleInfo {
 
     /// Generic event consumer.
     ///
-    /// Consumes events from the ConsumerEvent channel and passes them on to the
+    /// Consumes events from the `ConsumerEvent` channel and passes them on to the
     /// provided processor function.
+    /// # Errors
+    /// Will return `Err` if the event channel gets closed.
     pub async fn consumer<C, Fut>(
         mut rx: mpsc::Receiver<ConsumerEvent>,
         config: C,
@@ -400,12 +402,9 @@ impl ModuleInfo {
         Fut: Future<Output = anyhow::Result<()>>,
     {
         loop {
-            let event = match rx.recv().await {
-                Some(e) => e,
-                None => {
-                    warn!("{name} channel closed");
-                    bail!("channel closed");
-                }
+            let Some(event) = rx.recv().await else {
+                warn!("{name} channel closed");
+                bail!("channel closed");
             };
 
             if let Err(e) = processor(event.clone(), config.clone()).await {
@@ -426,7 +425,7 @@ impl ModuleInfo {
     }
 }
 
-/// Thin wrapper around ModuleInfo
+/// Thin wrapper around `ModuleInfo`
 ///
 /// Exists because the matrix-rust-sdk can only hold one extra context object per type.
 #[derive(Clone)]
@@ -496,7 +495,7 @@ pub enum Consumption {
 ///
 /// Defines things needed from the worker by the help system
 /// Workers are intended to be used by background tasks that act on events outside of matrix, even if the do sometimes interact with matrix.
-/// Examples of such tasks include a web interface, or SpaceAPI observer.
+/// Examples of such tasks include a web interface, or `SpaceAPI` observer.
 #[derive(Clone, Debug, Template)]
 #[template(
     path = "matrix/help-worker.html",
@@ -516,7 +515,7 @@ pub struct WorkerInfo {
 }
 
 impl WorkerInfo {
-    /// Builds a new WokrerInfo object, and spawns the worker and its associated helper module.
+    /// Builds a new `WokrerInfo` object, and spawns the worker and its associated helper module.
     pub fn new<C, Fut>(
         name: &str,
         help: &str,
@@ -524,12 +523,12 @@ impl WorkerInfo {
         mx: Client,
         config: C,
         worker: impl Fn(Client, C) -> Fut + Send + 'static,
-    ) -> anyhow::Result<WorkerInfo>
+    ) -> Self
     where
         C: Clone + Send + Sync + 'static,
         Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
     {
-        let handle = tokio::task::spawn(worker(mx.clone(), config.clone())).abort_handle();
+        let handle = tokio::task::spawn(worker(mx, config)).abort_handle();
         let (tx, rx) = mpsc::channel(1);
         let helper_module = ModuleInfo {
             name: name.to_owned(),
@@ -541,13 +540,13 @@ impl WorkerInfo {
         };
         tokio::task::spawn(Self::status_consumer(rx, handle.clone(), name.to_owned()));
 
-        Ok(WorkerInfo {
+        Self {
             name: name.to_owned(),
             help: help.to_owned(),
             keyword: keyword.to_owned(),
             helper_module,
             handle,
-        })
+        }
     }
 
     async fn status_consumer(
@@ -556,13 +555,10 @@ impl WorkerInfo {
         name: String,
     ) -> anyhow::Result<()> {
         loop {
-            let event = match rx.recv().await {
-                Some(e) => e,
-                None => {
-                    warn!("{name} channel closed");
-                    worker_handle.abort();
-                    bail!("channel closed");
-                }
+            let Some(event) = rx.recv().await else {
+                warn!("{name} channel closed");
+                worker_handle.abort();
+                bail!("channel closed");
             };
 
             if let Err(e) = event
@@ -584,10 +580,9 @@ impl WorkerInfo {
 /// Handles incoming text-like events, checks if they're not our own echoed back events,
 /// checks whether they match a prefix and keyword, handles consumption levels logic for
 /// regular and passthrough (rejection only) modules, and modules and events to [`dispatch_module`]
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub async fn dispatcher(
     ev: OriginalSyncRoomMessageEvent,
-    client: Client,
     room: Room,
     config: Ctx<Config>,
     modules: Ctx<Vec<ModuleInfo>>,
@@ -595,32 +590,30 @@ pub async fn dispatcher(
     workers: Ctx<Vec<WorkerInfo>>,
     klacz: Ctx<KlaczDB>,
     lua: Ctx<Lua>,
-) -> anyhow::Result<()> {
-    use Consumption::*;
+) {
+    use Consumption::{Exclusive, Inclusive, Passthrough, Reject};
+    use TriggerType::{Catchall, Keyword};
 
     let Some(ev_ts) = ev.origin_server_ts.to_system_time() else {
         error!("event timestamp couldn't get parsed to system time");
-        return Ok(());
+        return;
     };
 
     if ev_ts.add(Duration::from_secs(10)) < SystemTime::now() {
         debug!("received too old event: {ev_ts:?}");
-        return Ok(());
+        return;
     };
 
     let sender: OwnedUserId = ev.sender.clone();
 
-    if config.user_id() == sender
-        || config.ignored().contains(&sender.to_string())
-        || client.user_id().unwrap() == sender
-    {
-        return Ok(());
+    if config.user_id() == sender || config.ignored().contains(&sender.to_string()) {
+        return;
     }
 
     // filter unhandled message types
     match ev.content.msgtype {
         MessageType::Text(_) | MessageType::Notice(_) => (),
-        _ => return Ok(()),
+        _ => return,
     }
 
     let text = ev.content.body();
@@ -639,15 +632,16 @@ pub async fn dispatcher(
 
     let mut prefixes_all: Vec<String> = config.prefixes();
     if let Some(hash) = config.prefixes_restricted() {
-        prefixes_all.extend(hash.keys().map(|e| e.to_owned()))
+        prefixes_all.extend(hash.keys().map(std::borrow::ToOwned::to_owned));
     };
     let mut prefix_selected: Option<String> = None;
 
     trace!("cursed prefix matching");
     let (keyword, remainder): (String, Option<String>) = {
-        match first {
-            None => (String::new(), None),
-            Some(word) => {
+        first.map_or_else(
+            || (String::new(), None),
+            #[allow(clippy::cognitive_complexity)]
+            |word| {
                 trace!("first word exists: {word}");
                 let (mut kw_candidate, mut remainder_candidate) = (String::new(), None);
                 for prefix in prefixes_all {
@@ -657,7 +651,8 @@ pub async fn dispatcher(
                             None => continue,
                             Some(w) => {
                                 kw_candidate = w.to_string();
-                                remainder_candidate = args.next().map(|s| s.to_string());
+                                remainder_candidate =
+                                    args.next().map(std::string::ToString::to_string);
                                 trace!("selected prefix: {prefix}");
                                 prefix_selected = Some(prefix);
                                 break;
@@ -671,8 +666,9 @@ pub async fn dispatcher(
                                         shifted_text.trim_start().splitn(2, [' ', ' ', '\t']);
                                     if let Some(second) = shifted_args.next() {
                                         kw_candidate = second.to_string();
-                                        remainder_candidate =
-                                            shifted_args.next().map(|s| s.to_string());
+                                        remainder_candidate = shifted_args
+                                            .next()
+                                            .map(std::string::ToString::to_string);
                                     };
                                 };
                                 trace!("selected prefix: {prefix}");
@@ -685,8 +681,8 @@ pub async fn dispatcher(
                 }
 
                 (kw_candidate, remainder_candidate)
-            }
-        }
+            },
+        )
     };
 
     let consumer_event = ConsumerEvent {
@@ -699,7 +695,6 @@ pub async fn dispatcher(
         lua: lua.deref().clone(),
         klacz: klacz.deref().clone(),
     };
-    // trace!("consumer event: {consumer_event:#?}");
 
     let mut run_modules: Vec<(Consumption, ModuleInfo)> = vec![];
     let mut consumption = Inclusive;
@@ -712,8 +707,6 @@ pub async fn dispatcher(
         .chain(workers.iter().map(|w| &w.helper_module))
     {
         trace!("considering module: {}", module.name);
-        use TriggerType::*;
-
         if module.channel.is_closed() {
             debug!("failed module, skipping");
             continue;
@@ -751,7 +744,7 @@ pub async fn dispatcher(
             Exclusive => {
                 run_modules.truncate(0);
                 run_modules.push((module_consumption.clone(), module.clone()));
-                consumption = module_consumption.clone();
+                consumption = module_consumption;
                 break;
             }
             Passthrough => {
@@ -762,9 +755,9 @@ pub async fn dispatcher(
             Inclusive => {
                 if consumption > module_consumption {
                     continue;
-                } else {
-                    run_modules.push((module_consumption, module.clone()));
-                }
+                };
+
+                run_modules.push((module_consumption, module.clone()));
             }
             Reject => continue,
         };
@@ -782,7 +775,7 @@ pub async fn dispatcher(
                     for (_, module) in &run_modules {
                         // if any module we're trying to run is not on the list, bail.
                         if !list.contains(&module.name) {
-                            return Ok(());
+                            return;
                         }
                     }
                 }
@@ -792,7 +785,7 @@ pub async fn dispatcher(
 
     trace!("dispatching event to modules");
     for (_, module) in run_modules {
-        if let Err(e) = dispatch_module(
+        dispatch_module(
             config.clone(),
             true,
             &module,
@@ -801,18 +794,13 @@ pub async fn dispatcher(
             room.clone(),
             consumer_event.clone(),
         )
-        .await
-        {
-            error!("dispatching module {} failed: {e}", module.name);
-        };
+        .await;
     }
 
     match consumption {
         Consumption::Inclusive | Consumption::Passthrough => {
             trace!("dispatching event to passthrough modules");
             let mut run_passthrough_modules: Vec<ModuleInfo> = vec![];
-
-            use TriggerType::*;
 
             for module in passthrough_modules.iter() {
                 // we're in passthrough already, so we don't
@@ -845,7 +833,7 @@ pub async fn dispatcher(
                     continue;
                 };
 
-                if let Err(e) = dispatch_module(
+                dispatch_module(
                     config.clone(),
                     false,
                     &module,
@@ -854,24 +842,20 @@ pub async fn dispatcher(
                     room.clone(),
                     consumer_event.clone(),
                 )
-                .await
-                {
-                    error!("dispatching passthrough module {} failed: {e}", module.name);
-                };
+                .await;
             }
         }
         _ => {
             debug!("skipping passthrough modules");
         }
-    }
-
-    Ok(())
+    };
 }
 
 /// Actual module event dispatcher.
 ///
 /// Checks ACLs, responds accordingly if ACLs fail, checks if event can be sent to
 /// the module, and sends the event.
+#[allow(clippy::too_many_lines)]
 pub async fn dispatch_module(
     config: Config,
     general: bool,
@@ -880,9 +864,13 @@ pub async fn dispatch_module(
     sender: OwnedUserId,
     room: Room,
     consumer_event: ConsumerEvent,
-) -> anyhow::Result<()> {
+) {
+    use crate::tools::MembershipStatus::{Active, Inactive, NotAMember, Stoned};
+    use Acl::{
+        ActiveHswawMember, Homeserver, KlaczLevel, MaybeInactiveHswawMember, Room, SpecificUsers,
+    };
+
     trace!("dispatching module: {}", module.name);
-    use Acl::*;
 
     let mut failed = false;
 
@@ -912,7 +900,6 @@ pub async fn dispatch_module(
                 }
             }
             ActiveHswawMember => {
-                use crate::tools::MembershipStatus::*;
                 match membership_status(config.capacifier_token(), sender.clone()).await {
                     Err(e) => {
                         error!("checking membership for {sender} failed: {e}");
@@ -926,7 +913,6 @@ pub async fn dispatch_module(
                 }
             }
             MaybeInactiveHswawMember => {
-                use crate::tools::MembershipStatus::*;
                 match membership_status(config.capacifier_token(), sender.clone()).await {
                     Err(e) => {
                         error!("checking membership for {sender} failed: {e}");
@@ -962,10 +948,14 @@ pub async fn dispatch_module(
                     response = option;
                 };
             };
-            room.send(RoomMessageEventContent::text_plain(response))
-                .await?;
+            if let Err(e) = room
+                .send(RoomMessageEventContent::text_plain(response))
+                .await
+            {
+                error!("sending acl failure response failed: {e}");
+            }
         };
-        return Ok(());
+        return;
     };
 
     // also filter out fenced modules, so they don't get sent any events while still running
@@ -973,25 +963,22 @@ pub async fn dispatch_module(
         || config.modules_fenced().contains(&module.name)
     {
         trace!("module disabled: {}", module.name);
-        return Ok(());
+        return;
     }
 
     trace!("attempting to reserve channel space");
-    // .unwrap() is safe here because star
     let reservation = match module.channel.clone().try_reserve_owned() {
         Ok(r) => r,
         Err(e) => {
             MODULE_CHANNEL_FULL.with_label_values(&[&module.name]).inc();
             error!("module {} channel can't accept message: {e}", module.name);
-            return Ok(());
+            return;
         }
     };
 
     MODULE_EVENTS.with_label_values(&[&module.name]).inc();
     trace!("sending event");
     reservation.send(consumer_event);
-
-    Ok(())
 }
 
 /// Main module initializer
@@ -999,20 +986,25 @@ pub async fn dispatch_module(
 /// Initializes "notmun" runtime, sets of main and passthrough modules, and core help,
 /// and configuration reloading functionality.
 /// This is also where the list of modules to try to initialize lives, see the two for loops
+#[allow(
+    clippy::cognitive_complexity,
+    reason = "Just a few loops, heurestics seem wrong here"
+)]
 pub fn init_modules(
     mx: &Client,
     config: &Config,
     reload_tx: mpsc::Sender<Room>,
-) -> anyhow::Result<EventHandlerHandle> {
+) -> EventHandlerHandle {
     let klacz = KlaczDB { handle: "main" };
     let mut modules: Vec<ModuleInfo> = vec![];
     let mut passthrough_modules: Vec<PassThroughModuleInfo> = vec![];
     let mut workers: Vec<WorkerInfo> = vec![];
 
     // start moving notmun to becoming a 1st-class citizen
-    match crate::notmun::module_starter(mx, config) {
-        Err(e) => error!("failed initializing notmun: {e}"),
-        Ok(()) => info!("initialized notmun"),
+    if let Err(e) = crate::notmun::module_starter(mx, config) {
+        error!("failed initializing notmun: {e}");
+    } else {
+        info!("initialized notmun");
     };
 
     for starter in [
@@ -1055,16 +1047,13 @@ pub fn init_modules(
     modules.retain(|x| !config.modules_fenced().contains(&x.name));
     passthrough_modules.retain(|x| !config.modules_fenced().contains(&x.0.name));
 
-    match core_starter(
+    modules.extend(core_starter(
         config,
         reload_tx,
-        modules.clone(),
-        passthrough_modules.clone(),
+        &modules,
+        &passthrough_modules,
         workers.clone(),
-    ) {
-        Err(e) => error!("core modules module initialization failed fatally: {e}"),
-        Ok(m) => modules.extend(m),
-    };
+    ));
 
     mx.add_event_handler_context(klacz);
     mx.add_event_handler_context(config.clone());
@@ -1072,17 +1061,17 @@ pub fn init_modules(
     mx.add_event_handler_context(passthrough_modules);
     mx.add_event_handler_context(workers);
 
-    Ok(mx.add_event_handler(dispatcher))
+    mx.add_event_handler(dispatcher)
 }
 
 /// Initializes help, list, reload, and shutdown modules.
 pub fn core_starter(
     config: &Config,
     reload_ev_tx: mpsc::Sender<Room>,
-    registered_modules: Vec<ModuleInfo>,
-    registered_passthrough_modules: Vec<PassThroughModuleInfo>,
+    registered_modules: &[ModuleInfo],
+    registered_passthrough_modules: &[PassThroughModuleInfo],
     registered_workers: Vec<WorkerInfo>,
-) -> anyhow::Result<Vec<ModuleInfo>> {
+) -> Vec<ModuleInfo> {
     info!("registering modules");
     let mut modules: Vec<ModuleInfo> = vec![];
 
@@ -1152,11 +1141,11 @@ pub fn core_starter(
     let weak_modules: Vec<WeakModuleInfo> = registered_modules
         .iter()
         .chain(&modules)
-        .map(|m| m.into())
+        .map(std::convert::Into::into)
         .collect();
     let weak_passthrough: Vec<WeakModuleInfo> = registered_passthrough_modules
         .iter()
-        .map(|m| m.into())
+        .map(std::convert::Into::into)
         .collect();
 
     tokio::task::spawn(help_consumer(
@@ -1168,14 +1157,14 @@ pub fn core_starter(
     ));
     tokio::task::spawn(list_consumer(
         list_rx,
-        weak_modules.clone(),
-        weak_passthrough.clone(),
-        registered_workers.clone(),
+        weak_modules,
+        weak_passthrough,
+        registered_workers,
     ));
     tokio::task::spawn(reload_consumer(reload_rx, reload_ev_tx));
     tokio::task::spawn(shutdown_consumer(shutdown_rx));
 
-    Ok(modules)
+    modules
 }
 
 /// Simplified structure for holding information on registered modules. Used by [`help_processor`] and [`list_consumer`], and stores
@@ -1210,12 +1199,12 @@ pub fn core_starter(
 /// Thus, the object drop order is now:
 /// 1. (old) global lists of modules, passthrough modules, and workers
 /// 1. "primary" strong event channel references for modules, passthrough modules, and workers
-/// 1. event channels for modules being closed.
+/// 1. event channels for modules and passthrough modules being closed.
 /// 1. help and list event consumer loops exiting, along with all the other "normal" modules
-/// 1. "secondary" lists of passthrough modules and workers previously held by help and list modules
-/// 1. strong channel references for passthrough modules and worker helpers
-/// 1. event channels for passthrough modules and workers being closed
-/// 1. passthrough modules and worker helpers event consumer loops exiting
+/// 1. "secondary" list of workers previously held by help and list modules
+/// 1. strong channel references for worker helpers
+/// 1. event channels for workers being closed
+/// 1. worker helpers event consumer loops exiting
 /// 1. workers being stopped when their helper consumer loops exit, by calling [`tokio::task::AbortHandle::abort`] on their handles.
 #[derive(Clone, Debug, Template)]
 #[template(
@@ -1235,10 +1224,10 @@ pub struct WeakModuleInfo {
 
 impl From<&ModuleInfo> for WeakModuleInfo {
     fn from(m: &ModuleInfo) -> Self {
-        WeakModuleInfo {
-            name: m.name.to_owned(),
-            help: m.help.to_owned(),
-            trigger: m.trigger.to_owned(),
+        Self {
+            name: m.name.clone(),
+            help: m.help.clone(),
+            trigger: m.trigger.clone(),
             channel: m.channel.downgrade(),
         }
     }
@@ -1246,23 +1235,22 @@ impl From<&ModuleInfo> for WeakModuleInfo {
 
 impl From<&PassThroughModuleInfo> for WeakModuleInfo {
     fn from(m: &PassThroughModuleInfo) -> Self {
-        WeakModuleInfo {
-            name: m.0.name.to_owned(),
-            help: m.0.help.to_owned(),
-            trigger: m.0.trigger.to_owned(),
+        Self {
+            name: m.0.name.clone(),
+            help: m.0.help.clone(),
+            trigger: m.0.trigger.clone(),
             channel: m.0.channel.downgrade(),
         }
     }
 }
 
 /// Processes bot shutdown request. Singular. This is not a loop, as the process is will exit.
+/// # Errors
+/// Will return `Err` if event channel is closed.
 pub async fn shutdown_consumer(mut rx: mpsc::Receiver<ConsumerEvent>) -> anyhow::Result<()> {
-    match rx.recv().await {
-        Some(_) => (),
-        None => {
-            warn!("shutdown channel closed");
-            bail!("channel closed");
-        }
+    if rx.recv().await.is_none() {
+        warn!("shutdown channel closed");
+        bail!("channel closed");
     };
 
     info!("received process exit request");
@@ -1277,12 +1265,9 @@ async fn help_consumer(
     workers: Vec<WorkerInfo>,
 ) -> anyhow::Result<()> {
     loop {
-        let event = match rx.recv().await {
-            Some(e) => e,
-            None => {
-                warn!("help channel closed");
-                bail!("channel closed");
-            }
+        let Some(event) = rx.recv().await else {
+            warn!("help channel closed");
+            bail!("channel closed");
         };
 
         if let Err(e) = help_processor(
@@ -1343,6 +1328,8 @@ impl RenderHelp {
 
 /// Processes help events. If provided with an argument, will try to match it against a name of known modules, passthrough modules, or
 /// workers, to provide more specific help.
+/// # Errors
+/// Will return error if rendering or sending message fails.
 pub async fn help_processor(
     event: ConsumerEvent,
     config: Config,
@@ -1370,8 +1357,8 @@ pub async fn help_processor(
         return Ok(());
     };
 
-    let mut argv = args.split_whitespace();
-    let Some(maybe_module_name) = argv.next() else {
+    let mut arguments = args.split_whitespace();
+    let Some(maybe_module_name) = arguments.next() else {
         event.room.send(generic_help).await?;
         return Ok(());
     };
@@ -1420,6 +1407,7 @@ struct RenderList {
 }
 
 impl RenderList {
+    #[allow(clippy::unused_self, reason = "required by templating engine")]
     fn list_modules(&self, m: &[WeakModuleInfo]) -> (Vec<String>, bool) {
         let mut failed = false;
         (
@@ -1457,6 +1445,9 @@ impl RenderList {
 }
 
 /// Provides a list of all registered modules, passthrough modules, and workers.
+///
+/// # Errors
+/// Will return `Err` when its own channel gets dropped, or rendering response fails.
 pub async fn list_consumer(
     mut rx: mpsc::Receiver<ConsumerEvent>,
     modules: Vec<WeakModuleInfo>,
@@ -1464,12 +1455,9 @@ pub async fn list_consumer(
     workers: Vec<WorkerInfo>,
 ) -> anyhow::Result<()> {
     loop {
-        let event = match rx.recv().await {
-            Some(e) => e,
-            None => {
-                warn!("list channel closed");
-                bail!("channel closed");
-            }
+        let Some(event) = rx.recv().await else {
+            warn!("list channel closed");
+            bail!("channel closed");
         };
 
         let render_list = RenderList {
@@ -1491,17 +1479,16 @@ pub async fn list_consumer(
 
 /// Reloads bot configuration, and reinitializes all modules, tasks, and workers, including [`crate::notmun`] state.
 /// Is a loop to handle the case where a reload fails due to configuration errors.
+/// # Errors
+/// Will return `Err` when its own channel gets dropped.
 pub async fn reload_consumer(
     mut rx: mpsc::Receiver<ConsumerEvent>,
     reload_tx: mpsc::Sender<Room>,
 ) -> anyhow::Result<()> {
     loop {
-        let event = match rx.recv().await {
-            Some(e) => e,
-            None => {
-                warn!("reload channel closed");
-                bail!("channel closed");
-            }
+        let Some(event) = rx.recv().await else {
+            warn!("reload channel closed");
+            bail!("channel closed");
         };
 
         let reservation = match reload_tx.clone().try_reserve_owned() {
@@ -1517,6 +1504,10 @@ pub async fn reload_consumer(
 }
 
 /// Enables/disables/fences off/unfences modules.
+///
+/// # Errors
+/// When no module name to disable/fence/enable/unfence is provided, gets passed an unhandled keyword,
+/// or sending response fails.
 pub async fn mod_manager(event: ConsumerEvent, config: Config) -> anyhow::Result<()> {
     let modname = match event.args {
         None => match event.keyword.as_str() {
@@ -1528,12 +1519,12 @@ pub async fn mod_manager(event: ConsumerEvent, config: Config) -> anyhow::Result
 
     match event.keyword.as_str() {
         "disable" => config.disable_module(modname.clone()),
-        "enable" => config.enable_module(modname.clone()),
+        "enable" => config.enable_module(&modname),
         "fence" => config.fence_module(modname.clone()),
-        "unfence" => config.unfence_module(modname.clone()),
+        "unfence" => config.unfence_module(&modname),
         "disabled" => {
             let disabled = config.modules_disabled();
-            let message = format!("disabled modules: {:?}", disabled);
+            let message = format!("disabled modules: {disabled:?}");
             event
                 .room
                 .send(RoomMessageEventContent::text_plain(message))
@@ -1542,7 +1533,7 @@ pub async fn mod_manager(event: ConsumerEvent, config: Config) -> anyhow::Result
         }
         "fenced" => {
             let fenced = config.modules_fenced();
-            let message = format!("fenced modules: {:?}", fenced);
+            let message = format!("fenced modules: {fenced:?}");
             event
                 .room
                 .send(RoomMessageEventContent::text_plain(message))

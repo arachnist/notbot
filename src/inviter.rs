@@ -84,6 +84,11 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
 
 /// Listens for invite requests from new hackerspace members, and attempts to invite them to
 /// configured rooms and spaces, and starts the [`reaction_listener`] as needed.
+///
+/// # Errors
+/// Will return `Err` if any of the following fails:
+/// * checking when the user will be allowed to attempt an invite
+/// *
 pub async fn invite_request(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
     info!("invitation request from: {}", event.sender);
     let prefixed_sender = "inviter:".to_owned() + event.sender.as_str();
@@ -94,14 +99,7 @@ pub async fn invite_request(event: ConsumerEvent, config: ModuleConfig) -> anyho
         Err(e) => {
             bail!("error fetching next allowed attempt time: {e}");
         }
-        Ok(maybe_result) => {
-            let next_attempt: NotBotTime = match maybe_result {
-                Some(req_time_bytes) => req_time_bytes.into(),
-                None => NOTBOT_EPOCH,
-            };
-
-            next_attempt
-        }
+        Ok(maybe_result) => maybe_result.map_or(NOTBOT_EPOCH, std::convert::Into::into),
     };
 
     if NotBotTime::now() > next_allowed_attempt {
@@ -127,8 +125,7 @@ pub async fn invite_request(event: ConsumerEvent, config: ModuleConfig) -> anyho
     Ok(())
 }
 
-/// One of the rare native [`matrix_sdk::event_handler`] event handlers. Listens for `👍` emoji reactions from approved trusted users
-/// on the invitation request message, and attempts to invite the user to configured channels.
+/// Listens for `👍` emoji reactions from approved trusted users on the invitation request message, and attempts to invite the user to configured channels.
 pub async fn reaction_listener(
     ev: OriginalSyncReactionEvent,
     room: Room,
@@ -161,15 +158,15 @@ pub async fn reaction_listener(
     };
 
     let requester_display_name: String = match room.get_member(&orig_ev_sender).await {
-        Ok(Some(rm)) => match rm.display_name() {
-            Some(d) => d.to_owned(),
-            None => orig_ev_sender.to_string(),
-        },
+        Ok(Some(rm)) => rm.display_name().map_or_else(
+            || orig_ev_sender.to_string(),
+            std::borrow::ToOwned::to_owned,
+        ),
         _ => orig_ev_sender.to_string(),
     };
 
     let plain_message =
-        format!(r#"{requester_display_name}: your invitation request has been approved{note}"#,);
+        format!(r"{requester_display_name}: your invitation request has been approved{note}",);
 
     let html_message = format!(
         r#"<a href="{uri}">{requester_display_name}</a>: your invitation request has been approved{note}"#,
@@ -189,22 +186,20 @@ async fn inviter(client: Client, invitee: OwnedUserId, rooms: Vec<String>) -> an
     trace!("rooms to invite to: {:#?}", rooms);
     for maybe_room in rooms {
         trace!("inviting to {}", maybe_room.clone());
-        let room_id: OwnedRoomId = match maybe_room.clone().try_into() {
-            Ok(r) => r,
-            Err(_) => {
-                let alias_id = OwnedRoomAliasId::try_from(maybe_room.clone())?;
+        let room_id: OwnedRoomId = if let Ok(r) = maybe_room.clone().try_into() {
+            r
+        } else {
+            let alias_id = OwnedRoomAliasId::try_from(maybe_room.clone())?;
 
-                client.resolve_room_alias(&alias_id).await?.room_id
-            }
+            client.resolve_room_alias(&alias_id).await?.room_id
         };
 
-        let room = match client.get_room(&room_id) {
-            Some(r) => r,
-            None => continue,
+        let Some(room) = client.get_room(&room_id) else {
+            continue;
         };
 
         match room.invite_user_by_id(&invitee).await {
-            Ok(_) => trace!("invitation ok: {maybe_room}"),
+            Ok(()) => trace!("invitation ok: {maybe_room}"),
             Err(e) => error!("some error occured while inviting to {maybe_room}: {e}"),
         };
     }
@@ -212,6 +207,9 @@ async fn inviter(client: Client, invitee: OwnedUserId, rooms: Vec<String>) -> an
 }
 
 /// Endpoint for processing invites from the web interface.
+///
+/// # Errors
+/// Will return `Err` if sso returns missing or invalid matrix user id.
 pub async fn web_inviter(
     State(app_state): State<WebAppState>,
     OidcClaims(claims): OidcClaims<HswawAdditionalClaims>,
@@ -219,11 +217,13 @@ pub async fn web_inviter(
     async {
         let module_config: ModuleConfig = app_state.config.typed_module_config(module_path!())?;
 
-        let user_id: OwnedUserId = UserId::parse(format!(
-            "@{username}:{homeserver}",
-            username = claims.subject().as_str(),
-            homeserver = module_config.homeserver_selfservice_allow
-        ))?;
+        let user_id: OwnedUserId = UserId::parse(
+            claims
+                .additional_claims()
+                .matrix_user
+                .clone()
+                .ok_or_else(|| anyhow!("matrix user missing in claim"))?,
+        )?;
 
         tokio::spawn(inviter(app_state.mx, user_id, module_config.invite_to));
         Ok(())

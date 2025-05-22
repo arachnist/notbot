@@ -1,4 +1,4 @@
-//! Query SpaceAPI endpoints and observe membership changes.
+//! Query `SpaceAPI` endpoints and observe membership changes.
 //!
 //! Retrieves and monitors members presence at the hackerspace using a compatible [SpaceAPI](https://spaceapi.io/)
 //!
@@ -27,7 +27,8 @@
 //! # Usage
 //!
 //! Keywords:
-//! * `at` - [`at_processor`] - return the list of names listed as present by SpaceAPI endpoint set for current room.
+//! * `at` - [`at_processor`] - return the list of names listed as present by `SpaceAPI` endpoint set for current room.
+//! * `hm`, `heatmap` - [`heatmap`] - render a heatmap of activity based on the data returned by spaceapi endpoints.
 //!
 //! Passive presence updates: [`presence_observer`]
 //! ```chat logs
@@ -46,12 +47,12 @@ use tempfile::Builder;
 use tokio::time::{Duration, interval};
 use tokio_postgres::types::Type as dbtype;
 
-/// SpaceAPI module configuration
+/// `SpaceAPI` module configuration
 #[derive(Clone, Deserialize)]
 pub struct ModuleConfig {
-    /// Room to SpaceAPI endpoint map. special value "default" will be used when a room specific endpoint.
+    /// Room to `SpaceAPI` endpoint map. special value "default" will be used when a room specific endpoint.
     pub room_map: HashMap<String, String>,
-    /// Map of SpaceAPI endpoints to a list of rooms.
+    /// Map of `SpaceAPI` endpoints to a list of rooms.
     pub presence_map: HashMap<String, Vec<String>>,
     /// How often should the presence observer check for presence changes, in seconds. Default is 30.
     #[serde(default = "presence_interval")]
@@ -75,7 +76,7 @@ pub struct ModuleConfig {
     pub heatmap_tmp_dir: String,
 }
 
-fn presence_interval() -> u64 {
+const fn presence_interval() -> u64 {
     30
 }
 
@@ -127,18 +128,23 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
     Ok(vec![at, heatmap])
 }
 
-/// query SpaceAPI for present state.
+/// Query configured `SpaceAPI` for presence state.
+///
+/// # Errors
+/// Will return `Err` if:
+/// * there is no configured `SpaceAPI` url, and no fallbacks..
+/// * retrieving or deserializing API response fails.
+/// * sending room response fails.
 pub async fn at_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
     let name = room_name(&event.room);
 
-    let url = match config.room_map.get(&name) {
-        Some(url) => url,
-        None => {
-            debug!("no spaceapi url found, using default");
-            match config.room_map.get("default") {
-                None => bail!("no spaceapi url found"),
-                Some(u) => u,
-            }
+    let url = if let Some(url) = config.room_map.get(&name) {
+        url
+    } else {
+        debug!("no spaceapi url found, using default");
+        match config.room_map.get("default") {
+            None => bail!("no spaceapi url found"),
+            Some(u) => u,
         }
     };
 
@@ -161,14 +167,20 @@ pub async fn at_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow:
 /// Present a heatmap of people activity at the Hackerspace
 ///
 /// Currently fetches external data, but once we gather enough of our own, we should switch to that
+/// # Errors
+/// Will return `Err` if any of the following fails:
+/// * retrieving or deserializing data.
+/// * preparing temporary file
+/// * drawing rendering the heatmap
+/// * sending message to the room
+/// * removing temporary file
 pub async fn heatmap(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
     let name = room_name(&event.room);
 
     let period: HeatmapPeriod = event.args.try_into()?;
 
-    let base_url = match config.heatmap_map.get(&name) {
-        Some(url) => url,
-        None => bail!("no heatmap source defined for this channel"),
+    let Some(base_url) = config.heatmap_map.get(&name) else {
+        bail!("no heatmap source defined for this channel")
     };
 
     let url = format!("{base_url}&period={}", Into::<String>::into(period.clone()));
@@ -194,10 +206,10 @@ pub async fn heatmap(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Resu
     let name = named_tempfile
         .path()
         .to_str()
-        .ok_or(anyhow::anyhow!("tempfile error"))?;
+        .ok_or_else(|| anyhow::anyhow!("tempfile error"))?;
 
     trace!("heatmap tmpfile: {name}");
-    heatmap_api::draw(name, data.data)?;
+    heatmap_api::draw(name, &data.data)?;
 
     let image = fs::read(name)?;
 
@@ -235,8 +247,8 @@ enum HeatmapPeriod {
 impl TryFrom<Option<String>> for HeatmapPeriod {
     type Error = anyhow::Error;
 
-    fn try_from(s: Option<String>) -> anyhow::Result<HeatmapPeriod> {
-        use HeatmapPeriod::*;
+    fn try_from(s: Option<String>) -> anyhow::Result<Self> {
+        use HeatmapPeriod::{All, Month, Week, Year};
 
         match s {
             None => Ok(Week),
@@ -253,7 +265,7 @@ impl TryFrom<Option<String>> for HeatmapPeriod {
 
 impl From<HeatmapPeriod> for String {
     fn from(val: HeatmapPeriod) -> Self {
-        use HeatmapPeriod::*;
+        use HeatmapPeriod::{All, Month, Week, Year};
         match val {
             Week => "week".s(),
             Month => "month".s(),
@@ -272,7 +284,7 @@ pub(crate) fn workers(mx: &Client, config: &Config) -> anyhow::Result<Vec<Worker
         mx.clone(),
         module_config,
         presence_observer,
-    )?])
+    )])
 }
 
 #[derive(Clone, Debug)]
@@ -281,8 +293,8 @@ struct PresenceData {
 }
 
 impl PresenceData {
-    const INSERT_DATAPOINT: &str = r#"INSERT INTO presence (ts, url, count)
-    VALUES ( now(), $1, $2 )"#;
+    const INSERT_DATAPOINT: &str = r"INSERT INTO presence (ts, url, count)
+    VALUES ( now(), $1, $2 )";
     async fn insert(self, url: String, count: i64) -> anyhow::Result<()> {
         let client = DBPools::get_client(self.handle.as_str()).await?;
         let statement = client
@@ -293,11 +305,13 @@ impl PresenceData {
     }
 }
 
-/// Worker observing SpaceAPI endpoints for changes and providing updates to configured rooms.
+/// Worker observing `SpaceAPI` endpoints for changes and providing updates to configured rooms.
+/// # Errors
+/// Should not return errors. `Result` is required by caller.
 pub async fn presence_observer(client: Client, module_config: ModuleConfig) -> anyhow::Result<()> {
     let mut interval = interval(Duration::from_secs(module_config.presence_interval));
-    let mut present: HashMap<String, Vec<String>> = Default::default();
-    let mut first_loop: HashMap<String, bool> = Default::default();
+    let mut present: HashMap<String, Vec<String>> = HashMap::default();
+    let mut first_loop: HashMap<String, bool> = HashMap::default();
 
     for url in module_config.presence_map.keys() {
         present.insert(url.clone(), vec![]);
@@ -326,6 +340,10 @@ pub async fn presence_observer(client: Client, module_config: ModuleConfig) -> a
 
             let current: Vec<String> = names_dehighlighted(data.sensors.people_now_present);
 
+            #[allow(
+                clippy::cast_possible_wrap,
+                reason = "vector length limited by presence at a physical location"
+            )]
             if let Err(e) = presence.insert(url.clone(), current.len() as i64).await {
                 error!("error storing spaceapi persistence data: {e}");
             };
@@ -368,7 +386,7 @@ pub async fn presence_observer(client: Client, module_config: ModuleConfig) -> a
             if !also_there.is_empty() {
                 // When people have both left and arrived, using the "also" form makes more
                 // grammatical sense, hence the priority decoding below.
-                let qualifier = if !arrived.is_empty() { "also" } else { "still" };
+                let qualifier = if arrived.is_empty() { "still" } else { "also" };
                 response_parts.push([qualifier, " there: ", &also_there.join(", ")].concat());
             };
 
@@ -378,30 +396,25 @@ pub async fn presence_observer(client: Client, module_config: ModuleConfig) -> a
 
             let response = RoomMessageEventContent::notice_plain(response_parts.join(", "));
             for maybe_room in rooms {
-                let room_id: OwnedRoomId = match maybe_room.clone().try_into() {
-                    Ok(r) => r,
-                    Err(_) => {
-                        let alias_id = match OwnedRoomAliasId::try_from(maybe_room.clone()) {
-                            Ok(a) => a,
-                            Err(_) => {
-                                error!("couldn't parse room name: {}", maybe_room);
-                                continue;
-                            }
-                        };
+                let room_id: OwnedRoomId = if let Ok(r) = maybe_room.clone().try_into() {
+                    r
+                } else {
+                    let Ok(alias_id) = OwnedRoomAliasId::try_from(maybe_room.clone()) else {
+                        error!("couldn't parse room name: {}", maybe_room);
+                        continue;
+                    };
 
-                        match client.resolve_room_alias(&alias_id).await {
-                            Err(e) => {
-                                error!("couldn't resolve room alias: {e}");
-                                continue;
-                            }
-                            Ok(r) => r.room_id,
+                    match client.resolve_room_alias(&alias_id).await {
+                        Err(e) => {
+                            error!("couldn't resolve room alias: {e}");
+                            continue;
                         }
+                        Ok(r) => r.room_id,
                     }
                 };
 
-                let room = match client.get_room(&room_id) {
-                    Some(r) => r,
-                    None => continue,
+                let Some(room) = client.get_room(&room_id) else {
+                    continue;
                 };
 
                 if let Err(e) = room.send(response.clone()).await {
@@ -420,16 +433,16 @@ pub async fn presence_observer(client: Client, module_config: ModuleConfig) -> a
 /// in particular, old Element versions for apple mobile devices, did render this as `&zwsp` in
 /// the middle of names, making the notifications less readable for them, so it can be a trade-off
 /// in certain situations.
+#[must_use]
 pub fn names_dehighlighted(present: Vec<space_api::PeopleNowPresent>) -> Vec<String> {
     let mut dehighlighted: Vec<String> = vec![];
 
     for sensor in present {
         for name in sensor.names {
             let mut chars = name.chars();
-            dehighlighted.push(match chars.next() {
-                None => String::new(),
-                Some(first) => first.to_string() + "\u{200B}" + chars.as_str(),
-            });
+            dehighlighted.push(chars.next().map_or_else(String::new, |first| {
+                first.to_string() + "\u{200B}" + chars.as_str()
+            }));
         }
     }
 
@@ -437,7 +450,7 @@ pub fn names_dehighlighted(present: Vec<space_api::PeopleNowPresent>) -> Vec<Str
 }
 
 pub mod space_api {
-    //! Structure for data retrieved from SpaceAPI endpoints.
+    //! Structure for data retrieved from `SpaceAPI` endpoints.
     //!
     //! Generated from the published json schema, and modified slightly.
 
@@ -595,7 +608,10 @@ pub mod heatmap_api {
     }
 
     /// Renders the provided [`Data`] into a file. Formatting options are, for now, hardcoded.
-    pub fn draw(out_file: &str, data: Data) -> anyhow::Result<()> {
+    /// # Errors
+    /// Will return `Err` if any operations on the produced bitmap fail
+    pub fn draw(out_file: &str, data: &Data) -> anyhow::Result<()> {
+        const GAMMA: f64 = 2.2;
         let colormap: Box<dyn ColorMap<RGBAColor>> = Box::new(ViridisRGBA {});
 
         // 24*7 * 40×40 + legend + 5/5/5/5 margins
@@ -608,15 +624,15 @@ pub mod heatmap_api {
 
         let hour_areas = root.margin(0, 970, 40, 0).split_evenly((1, 24));
         for (i, area) in hour_areas.iter().enumerate() {
-            let text_zero = format!("{:0>2}", i);
-            let text = format!("{:>3}", text_zero);
+            let text_zero = format!("{i:0>2}");
+            let text = format!("{text_zero:>3}");
             area.draw_text(&text, &text_style.color(&PURPLE_A400), (5, 13))?;
         }
 
         let day_areas = root.margin(40, 0, 0, 270).split_evenly((7, 1));
         for (i, area) in day_areas.iter().enumerate() {
             let day: Weekday = i.into();
-            let text = format!("{:?}", day);
+            let text = format!("{day:?}");
             area.draw_text(&text, &text_style.color(&PURPLE_A400), (5, 13))?;
         }
 
@@ -632,8 +648,14 @@ pub mod heatmap_api {
             .chain(skip_last(data.n7.iter()))
             .chain(skip_last(data.n1.iter()))
         {
-            let area = areas.next().ok_or(anyhow::anyhow!("not enough areas?"))?;
+            let area = areas
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("not enough areas?"))?;
             let value = format!("{:>3}", (datapoint * 100.0).round());
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "values returned from API are in 0.0..1.0 range only"
+            )]
             let bg_color = colormap.get_color(datapoint.to_owned() as f32);
 
             // https://gamedev.stackexchange.com/a/38561
@@ -641,10 +663,10 @@ pub mod heatmap_api {
             let c_red: f64 = Into::<f64>::into(c_red) / 255.0;
             let c_green: f64 = Into::<f64>::into(c_green) / 255.0;
             let c_blue: f64 = Into::<f64>::into(c_blue) / 255.0;
-            const GAMMA: f64 = 2.2;
-            let l: f64 = 0.2126 * c_red.powf(GAMMA)
-                + 0.7152 * c_green.powf(GAMMA)
-                + 0.0722 * c_blue.powf(GAMMA);
+            let l: f64 = 0.0722f64.mul_add(
+                c_blue.powf(GAMMA),
+                0.2126f64.mul_add(c_red.powf(GAMMA), 0.7152 * c_green.powf(GAMMA)),
+            );
 
             let text_color = if l > 0.5_f64.powf(GAMMA) {
                 &BLACK
@@ -671,9 +693,8 @@ pub mod heatmap_api {
 
     impl From<usize> for Weekday {
         fn from(value: usize) -> Self {
-            use Weekday::*;
+            use Weekday::{Fri, Mon, Sat, Sun, Thu, Tue, Wed};
             match value {
-                0 => Mon,
                 1 => Tue,
                 2 => Wed,
                 3 => Thu,

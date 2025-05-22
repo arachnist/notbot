@@ -35,7 +35,7 @@ This was done for several reasons:
 
 # Contributing
 
-Accepting PRs at [hswaw forgejo](https://code.hackerspace.pl/ar/notbot), [github](https://github.com/arachnist/notbot), patches
+Accepting PRs at [hswaw forgejo](https://code.hackerspace.pl/ar/notbot), [codeberg](https://codeberg.org/arachnist/notbot), patches
 hurled my way over [Matrix](https://matrix.to/#/@ar:is-a.cat) or [Fedi](https://is-a.cat/@ar) (bait your instance admin to change post
 length limit to 20000 😸), or whatever else we figure out and works.
 

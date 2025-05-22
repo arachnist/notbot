@@ -1,4 +1,4 @@
-//! Calculate things using WolframAlpha API
+//! Calculate things using [WolframAlpha](https://www.wolframalpha.com/) API
 //!
 //! Retrieves information using the simple API: <https://products.wolframalpha.com/simple-api/documentation>
 //!
@@ -15,7 +15,7 @@
 //! # Usage
 //!
 //! Keywords:
-//! * `c`, `wolfram` - [`processor`] - query WolframAlpha.
+//! * `c`, `wolfram` - [`processor`] - query [WolframAlpha](https://www.wolframalpha.com/).
 
 use crate::prelude::*;
 
@@ -53,9 +53,12 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
     Ok(vec![wolfram])
 }
 
-/// Event processor for WolframAlpha
+/// Event processor for wolfram module
 ///
 /// Constructs url by encoding event arguments using urlencode, and then tries to extract a short response from the data returned.
+///
+/// # Errors
+/// Will return `Err` if response from wolfram api is malformed, or sending response to the room fails.
 pub async fn processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
     let Some(text_query) = event.args else {
         event
@@ -104,7 +107,7 @@ pub async fn processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Re
 }
 
 pub mod wolfram_alpha {
-    //! Structure for data retrieved from WolframAlpha
+    //! Structure for data retrieved from [WolframAlpha](https://www.wolframalpha.com/)
     //!
     //! Ever so slightly tweaked from what an online [json to serde](https://transform.tools/json-to-rust-serde) converter returned.
 

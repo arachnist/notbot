@@ -47,10 +47,7 @@ async fn lua_generic_dispatcher(
 ) -> anyhow::Result<()> {
     let event = ev.into_full_event(room.room_id().into());
 
-    let target = match room.canonical_alias() {
-        Some(a) => a.to_string(),
-        None => room.room_id().to_string(),
-    };
+    let target = room_name(&room);
 
     let Some(ev_ts) = event.origin_server_ts().to_system_time() else {
         error!("event timestamp couldn't get parsed to system time");
@@ -125,7 +122,7 @@ pub(crate) fn module_starter(client: &Client, config: &Config) -> anyhow::Result
     let (tx, rx) = channel::<NotMunAction>(1);
     let lua_matrix: Table = lua.create_table()?;
 
-    let proxy_tx = tx.clone();
+    let proxy_tx = tx;
 
     lua_matrix.set(
         "Proxy",
@@ -158,7 +155,7 @@ pub(crate) fn module_starter(client: &Client, config: &Config) -> anyhow::Result
         lua.load(chunk! {
             irc:Join($name)
         })
-        .exec()?
+        .exec()?;
     }
 
     client.add_event_handler_context(lua);
@@ -166,6 +163,7 @@ pub(crate) fn module_starter(client: &Client, config: &Config) -> anyhow::Result
     Ok(()) // Ok(client.add_event_handler(lua_dispatcher))
 }
 
+#[allow(clippy::unnecessary_wraps, reason = "required by caller")]
 pub(crate) fn passthrough(mx: &Client, _: &Config) -> anyhow::Result<Vec<PassThroughModuleInfo>> {
     info!("registering modules");
     let lua_handler_handle = mx.add_event_handler(lua_generic_dispatcher);
@@ -190,14 +188,11 @@ async fn join_consumer(
     lua_handler_handle: EventHandlerHandle,
 ) -> anyhow::Result<()> {
     loop {
-        let event = match rx.recv().await {
-            Some(e) => e,
-            None => {
-                warn!("channel closed");
-                info!("stopping mun handler");
-                mx.remove_event_handler(lua_handler_handle);
-                bail!("channel closed");
-            }
+        let Some(event) = rx.recv().await else {
+            warn!("channel closed");
+            info!("stopping mun handler");
+            mx.remove_event_handler(lua_handler_handle);
+            bail!("channel closed");
         };
         if let Err(e) = processor(event).await {
             error!("couldn't join the room: {e}");
@@ -226,9 +221,8 @@ async fn processor(event: ConsumerEvent) -> anyhow::Result<()> {
 
 async fn consumer(client: Client, mut rx: Receiver<NotMunAction>) -> anyhow::Result<()> {
     loop {
-        let action = match rx.recv().await {
-            Some(a) => a,
-            None => return Err(NotMunError::ChannelClosed.into()),
+        let Some(action) = rx.recv().await else {
+            return Err(NotMunError::ChannelClosed.into());
         };
 
         if let Err(e) = consume(&client, &action).await {
@@ -275,8 +269,8 @@ async fn consume(client: &Client, action: &NotMunAction) -> anyhow::Result<()> {
             // need to send an m.room.member event with `content.displayname: whatever` set
             return Err(NotMunError::UnhandledAction(action.clone()).into());
         }
-        e => {
-            return Err(NotMunError::UnhandledAction(e.clone()).into());
+        NotMunAction::Invite(_, _) => {
+            return Err(NotMunError::UnhandledAction(action.clone()).into());
         }
     };
 
@@ -297,7 +291,7 @@ fn initialize_lua_env(lua: &Lua, global: &Table, config: &ModuleConfig) -> anyho
         lua.create_async_function(|lua, uri: String| async move {
             let resp = reqwest::get(&uri)
                 .await
-                .and_then(|resp| resp.error_for_status())
+                .and_then(reqwest::Response::error_for_status)
                 .into_lua_err()?;
             let json = resp.json::<serde_json::Value>().await.into_lua_err()?;
             lua.to_value(&json)
@@ -356,7 +350,7 @@ fn initialize_lua_env(lua: &Lua, global: &Table, config: &ModuleConfig) -> anyho
     )?;
     global.set(
         "r_format",
-        lua.create_function(|_, value: Value| Ok(format!("{value:#?}").to_string()))?,
+        lua.create_function(|_, value: Value| Ok(format!("{value:#?}")))?,
     )?;
 
     Ok(())
@@ -420,7 +414,7 @@ fn lua_db_row_to_table(lua: &Lua, row: &Row) -> LuaResult<Table> {
 async fn async_fetch_http(lua: Lua, uri: String) -> anyhow::Result<(String, u16, Table)> {
     let resp = reqwest::get(&uri)
         .await
-        .and_then(|resp| resp.error_for_status())
+        .and_then(reqwest::Response::error_for_status)
         .into_lua_err()?;
 
     let code = resp.status().as_u16();
@@ -430,10 +424,7 @@ async fn async_fetch_http(lua: Lua, uri: String) -> anyhow::Result<(String, u16,
         headers.set(k.as_str(), raw_v.to_str().into_lua_err()?)?;
     }
 
-    let body = match resp.text().await {
-        Ok(r) => r,
-        Err(_) => "".to_string(),
-    };
+    let body = (resp.text().await).unwrap_or_default();
 
     let rval = (body, code, headers);
     Ok(rval)
@@ -453,40 +444,38 @@ pub(crate) enum NotMunAction {
 impl NotMunAction {
     async fn get_room(&self, c: &Client) -> anyhow::Result<Room> {
         match self {
-            NotMunAction::Say(room, _)
-            | NotMunAction::Html(room, _, _)
-            | NotMunAction::Notice(room, _)
-            | NotMunAction::Invite(room, _)
-            | NotMunAction::Kick(room, _, _)
-            | NotMunAction::Ban(room, _, _)
-            | NotMunAction::SetNick(room, _) => Ok(maybe_get_room(c, room).await?),
+            Self::Say(room, _)
+            | Self::Html(room, _, _)
+            | Self::Notice(room, _)
+            | Self::Invite(room, _)
+            | Self::Kick(room, _, _)
+            | Self::Ban(room, _, _)
+            | Self::SetNick(room, _) => Ok(maybe_get_room(c, room).await?),
         }
     }
 
     fn get_target(&self) -> Option<OwnedUserId> {
         match self {
-            NotMunAction::Invite(_, target)
-            | NotMunAction::Kick(_, target, _)
-            | NotMunAction::Ban(_, target, _) => UserId::parse(target).ok(),
+            Self::Invite(_, target) | Self::Kick(_, target, _) | Self::Ban(_, target, _) => {
+                UserId::parse(target).ok()
+            }
             _ => None,
         }
     }
 
     fn get_reason(&self) -> Option<&str> {
         match self {
-            NotMunAction::Kick(_, _, reason) | NotMunAction::Ban(_, _, reason) => reason.as_deref(),
+            Self::Kick(_, _, reason) | Self::Ban(_, _, reason) => reason.as_deref(),
             _ => None,
         }
     }
 
     fn get_message(&self) -> anyhow::Result<RoomMessageEventContent> {
         match self {
-            NotMunAction::Say(_, message) | NotMunAction::Notice(_, message) => {
+            Self::Say(_, message) | Self::Notice(_, message) => {
                 Ok(RoomMessageEventContent::text_plain(message))
             }
-            NotMunAction::Html(_, plain, html) => {
-                Ok(RoomMessageEventContent::text_html(plain, html))
-            }
+            Self::Html(_, plain, html) => Ok(RoomMessageEventContent::text_html(plain, html)),
             _ => Err(NotMunError::UnhandledAction(self.clone()).into()),
         }
     }
@@ -495,20 +484,20 @@ impl NotMunAction {
 impl fmt::Display for NotMunAction {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            NotMunAction::Say(room, message) => write!(fmt, "Say: {room} <- {message}"),
+            Self::Say(room, message) => write!(fmt, "Say: {room} <- {message}"),
             // maybe we could detect somehow figure out how different plain/html versions are, and maybe display both if the difference is non-trivial?
-            NotMunAction::Html(room, message, _) => write!(fmt, "Html: {room} <- {message}"),
-            NotMunAction::Notice(room, message) => write!(fmt, "Notice: {room} <- {message}"),
-            NotMunAction::Invite(room, target) => {
+            Self::Html(room, message, _) => write!(fmt, "Html: {room} <- {message}"),
+            Self::Notice(room, message) => write!(fmt, "Notice: {room} <- {message}"),
+            Self::Invite(room, target) => {
                 write!(fmt, "Invite: {room} <- {target}")
             }
-            NotMunAction::Kick(room, target, reason) => {
+            Self::Kick(room, target, reason) => {
                 write!(fmt, "Kick: {room} -> {target}: {reason:?}")
             }
-            NotMunAction::Ban(room, target, reason) => {
+            Self::Ban(room, target, reason) => {
                 write!(fmt, "Ban: {room} !> {target}: {reason:?}")
             }
-            NotMunAction::SetNick(room, display_name) => {
+            Self::SetNick(room, display_name) => {
                 write!(fmt, "Present as: {room} -> {display_name}")
             }
         }
@@ -518,26 +507,26 @@ impl fmt::Display for NotMunAction {
 impl TryFrom<Vec<String>> for NotMunAction {
     type Error = NotMunError;
 
-    fn try_from(msg: Vec<String>) -> Result<NotMunAction, NotMunError> {
+    fn try_from(msg: Vec<String>) -> Result<Self, NotMunError> {
         let first = msg[0].clone();
         let room = msg[1].clone();
         match first.as_str() {
             "Say" => {
                 let message: String = msg[2].clone();
-                Ok(NotMunAction::Say(room, message))
+                Ok(Self::Say(room, message))
             }
             "Html" => {
                 let plain: String = msg[2].clone();
                 let html: String = msg[3].clone();
-                Ok(NotMunAction::Html(room, plain, html))
+                Ok(Self::Html(room, plain, html))
             }
             "Notice" => {
                 let message: String = msg[2].clone();
-                Ok(NotMunAction::Notice(room, message))
+                Ok(Self::Notice(room, message))
             }
             "Invite" => {
                 let target: String = msg[2].clone();
-                Ok(NotMunAction::Invite(room, target))
+                Ok(Self::Invite(room, target))
             }
             "Kick" => {
                 let target: String = msg[2].clone();
@@ -546,7 +535,7 @@ impl TryFrom<Vec<String>> for NotMunAction {
                 } else {
                     None
                 };
-                Ok(NotMunAction::Kick(room, target, message))
+                Ok(Self::Kick(room, target, message))
             }
             "Ban" => {
                 let target: String = msg[2].clone();
@@ -555,11 +544,11 @@ impl TryFrom<Vec<String>> for NotMunAction {
                 } else {
                     None
                 };
-                Ok(NotMunAction::Ban(room, target, message))
+                Ok(Self::Ban(room, target, message))
             }
             "SetNick" => {
                 let display_name: String = msg[2].clone();
-                Ok(NotMunAction::SetNick(room, display_name))
+                Ok(Self::SetNick(room, display_name))
             }
             &_ => Err(NotMunError::UnknownAction),
         }
@@ -580,10 +569,10 @@ impl StdError for NotMunError {}
 impl fmt::Display for NotMunError {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            NotMunError::NoSuchRoom(e) => write!(fmt, "Couldn't get room from: {e}"),
-            NotMunError::UnknownAction => write!(fmt, "Unknown action"),
-            NotMunError::UnhandledAction(e) => write!(fmt, "Unhandled action: {e}"),
-            NotMunError::ChannelClosed => write!(fmt, "Action consumer channel is closed"),
+            Self::NoSuchRoom(e) => write!(fmt, "Couldn't get room from: {e}"),
+            Self::UnknownAction => write!(fmt, "Unknown action"),
+            Self::UnhandledAction(e) => write!(fmt, "Unhandled action: {e}"),
+            Self::ChannelClosed => write!(fmt, "Action consumer channel is closed"),
         }
     }
 }

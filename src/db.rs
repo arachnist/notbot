@@ -4,7 +4,7 @@
 //!
 //! # Configuration
 //!
-//! The configuration is defined as HashMap<name: Strin, [`deadpool_postgres::Config`]>, which is why there is no "main" configuration for the module.
+//! The configuration is defined as `HashMap`<name: Strin, [`deadpool_postgres::Config`]>, which is why there is no "main" configuration for the module.
 //!
 //! Configuration fields available in that module are passed verbatim to the database pool initialization functions.
 //!
@@ -61,11 +61,10 @@ pub type DBConfig = HashMap<String, PGConfig>;
 pub struct DBPools(Arc<Mutex<HashMap<String, Pool>>>);
 
 impl DBPools {
-    pub(crate) async fn get_pool(handle: &str) -> Result<Pool, DBError> {
+    pub(crate) fn get_pool(handle: &str) -> Result<Pool, DBError> {
         trace!("acquiring lock");
-        let dbc = match DB_CONNECTIONS.0.lock() {
-            Ok(d) => d,
-            Err(_) => return Err(DBError::CollectionLock),
+        let Ok(dbc) = DB_CONNECTIONS.0.lock() else {
+            return Err(DBError::CollectionLock);
         };
 
         trace!("acquiring pool");
@@ -76,12 +75,17 @@ impl DBPools {
     }
 
     /// Acquire a client for a database by name.
+    ///
+    /// # Errors
+    /// Will return `Err` if:
+    /// * acquiring pool collection lock fails
+    /// * requested handle is unknown
+    /// * acquiring client from pool fails.
     pub async fn get_client(handle: &str) -> Result<DBClient, DBError> {
         let pool = {
             trace!("acquiring lock");
-            let dbc = match DB_CONNECTIONS.0.lock() {
-                Ok(d) => d,
-                Err(_) => return Err(DBError::CollectionLock),
+            let Ok(dbc) = DB_CONNECTIONS.0.lock() else {
+                return Err(DBError::CollectionLock);
             };
 
             trace!("acquiring pool");
@@ -92,19 +96,11 @@ impl DBPools {
         };
 
         trace!("acquiring client");
-        match pool.get().await {
-            Ok(client) => {
-                trace!("client acquired");
-                Ok(client)
-            }
-            Err(_) => {
-                trace!("acquiring failed");
-                Err(DBError::GetClient)
-            }
-        }
+        pool.get().await.map_err(|_| DBError::GetClient)
     }
 }
 
+#[allow(clippy::cognitive_complexity)]
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
     info!("registering modules");
     let mut module_config: DBConfig = config.typed_module_config(module_path!())?;
@@ -121,16 +117,14 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
             recycling_method: RecyclingMethod::Verified,
         });
 
-        let pool = match dbcfg.create_pool(Some(Runtime::Tokio1), NoTls) {
-            Ok(p) => p,
-            Err(_) => {
-                error!("couldn't create database pool for {name}");
-                continue;
-            }
+        let Ok(pool) = dbcfg.create_pool(Some(Runtime::Tokio1), NoTls) else {
+            error!("couldn't create database pool for {name}");
+            continue;
         };
 
         dbc.insert(name.to_owned(), pool);
     }
+    drop(dbc);
 
     let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
     let db = ModuleInfo {
@@ -147,13 +141,16 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
 }
 
 /// Check status of database connections in the chat room.
+///
+/// # Errors
+/// Will return `Err` if acquiring a connection pool, or sending response, fails.
 pub async fn dbstatus(event: ConsumerEvent, config: DBConfig) -> anyhow::Result<()> {
     let mut wip_response: String = "database status:".to_string();
 
     trace!("attempting to grab dbc lock");
     for name in config.keys() {
         trace!("checking connection: {name}");
-        let dbpool = DBPools::get_pool(name).await?;
+        let dbpool = DBPools::get_pool(name)?;
 
         if dbpool.is_closed() {
             wip_response.push_str(format!(" {name}: closed;").as_str());
@@ -194,9 +191,9 @@ impl StdError for DBError {}
 impl fmt::Display for DBError {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            DBError::CollectionLock => write!(fmt, "Couldn't acquire connection collection lock"),
-            DBError::HandleNotFound => write!(fmt, "Handle not found in connections"),
-            DBError::GetClient => write!(fmt, "Couldn't get client from pool"),
+            Self::CollectionLock => write!(fmt, "Couldn't acquire connection collection lock"),
+            Self::HandleNotFound => write!(fmt, "Handle not found in connections"),
+            Self::GetClient => write!(fmt, "Couldn't get client from pool"),
         }
     }
 }

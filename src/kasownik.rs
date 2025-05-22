@@ -23,7 +23,7 @@
 //!
 //! Keywords:
 //! * `due <member>` - [`due_processor`] - check membership fees for others
-//! * `due-me` - [`due_me_processor`] - check membership fees for yourself
+//! * `due-me` - [`due_me_processor`] - check membership fees status for yourself
 //!
 //! Catch-all:
 //! * [`nag_processor`] - events not consumed by other modules will trigger a check for fees status, and nag the user if they're late.
@@ -83,24 +83,27 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         channel: due_metx,
         error_prefix: Some("error checking membership fees".s()),
     };
-    due_me.spawn(due_merx, module_config.clone(), due_me_processor);
+    due_me.spawn(due_merx, module_config, due_me_processor);
 
     Ok(vec![due, due_me])
 }
 
-/// Processes checks for other user membership fees status. If a message explicitly mentions someone,
-/// [`matrix_sdk::ruma::events::Mentions`], try using the first mentioned user. Otherwise, make a best-effort attempt
+/// Processes checks for other user membership fees status.
+///
+/// If a message explicitly mentions someone, see [`matrix_sdk::ruma::events::Mentions`],
+/// try using the first mentioned user. Otherwise, make a best-effort attempt
 /// at parsing provided plaintext argument.
+///
+/// # Errors
+/// Will return `Err` if:
+/// * can't parse `due` target.
+/// * checking membership status.
+/// * sending response fails.
 pub async fn due_processor(event: ConsumerEvent, c: ModuleConfig) -> anyhow::Result<()> {
-    use MembershipStatus::*;
+    use MembershipStatus::{Active, Inactive, NotAMember, Stoned};
 
-    if event.args.is_none() {
-        event
-            .room
-            .send(RoomMessageEventContent::text_plain(
-                "missing argument: member".s(),
-            ))
-            .await?;
+    let Some(arguments) = event.args else {
+        bail!("missing argument: member");
     };
 
     let target = {
@@ -108,33 +111,23 @@ pub async fn due_processor(event: ConsumerEvent, c: ModuleConfig) -> anyhow::Res
         if let Some(mut mentions_set) = event.ev.content.mentions {
             trace!("mentions: {mentions_set:#?}");
             if let Some(userid) = mentions_set.user_ids.pop_first() {
-                let localpart = userid.localpart().to_lowercase();
-                let maybe_mxid = format!("@{localpart}:hackerspace.pl");
-                candidate = UserId::parse(maybe_mxid).ok();
+                candidate = Some(userid);
             }
         }
 
         if candidate.is_none() {
-            let remainder = event.args.unwrap();
-            let mut args = remainder.split_whitespace();
+            let mut args = arguments.split_whitespace();
             if let Some(plain_target) = args.next() {
                 let maybe_mxid = format!("@{plain_target}:hackerspace.pl");
                 candidate = UserId::parse(maybe_mxid).ok();
             };
         };
 
-        // we tried our best
-        if candidate.is_none() {
-            event
-                .room
-                .send(RoomMessageEventContent::text_plain(
-                    "member argument missing or couldn't parse".s(),
-                ))
-                .await?;
-            return Ok(());
+        let Some(found) = candidate else {
+            bail!("member argument missing or we couldn't parse it");
         };
 
-        candidate.unwrap()
+        found
     };
 
     let member = target.localpart();
@@ -159,8 +152,11 @@ pub async fn due_processor(event: ConsumerEvent, c: ModuleConfig) -> anyhow::Res
 }
 
 /// Processes checks for membership status of the user sending the event.
+///
+/// # Errors
+/// Will return error if checking membership status, or sending response fails.
 pub async fn due_me_processor(event: ConsumerEvent, c: ModuleConfig) -> anyhow::Result<()> {
-    use MembershipStatus::*;
+    use MembershipStatus::{Active, Inactive, NotAMember, Stoned};
 
     let response = match membership_status(c.capacifier_token, event.sender).await? {
         NotAMember => "not a member".s(),
@@ -204,8 +200,11 @@ pub(crate) fn passthrough(
 }
 
 /// Nags members active in the chat about late membership fees, at most once every 24 hours.
+///
+/// # Errors
+/// Will return error if sending nagging notification fails
 pub async fn nag_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
-    use MembershipStatus::*;
+    use MembershipStatus::Active;
     let sender_str: &str = event.sender.as_str();
 
     trace!("getting client store");
@@ -259,19 +258,14 @@ pub async fn nag_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow
     };
 
     let member_display_name: String = match event.room.get_member(&event.sender).await {
-        Ok(Some(rm)) => match rm.display_name() {
-            Some(d) => d.to_owned(),
-            None => sender_str.to_owned(),
-        },
+        Ok(Some(rm)) => rm
+            .display_name()
+            .map_or_else(|| sender_str.to_owned(), std::borrow::ToOwned::to_owned),
         _ => sender_str.to_owned(),
     };
 
     let msg_text = format!("pay your membership fees! you are {months} {period} behind!");
-    let plain_message = format!(
-        r#"{display_name}: {text}"#,
-        display_name = member_display_name,
-        text = msg_text
-    );
+    let plain_message = format!(r"{member_display_name}: {msg_text}");
 
     let html_message = format!(
         r#"<a href="{uri}">{display_name}</a>: {text}"#,

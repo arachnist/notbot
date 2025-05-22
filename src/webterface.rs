@@ -30,7 +30,8 @@
 //!
 //! ```text
 //! ❯ curl https://notbot.is-a.cat
-//! Hello anon!
+//! <!DOCTYPE html>
+//! <html>
 //! ```
 //!
 //! # Future
@@ -91,6 +92,7 @@ fn issuer() -> String {
     "https://sso.hackerspace.pl".s()
 }
 
+#[allow(clippy::unnecessary_wraps, reason = "required by caller")]
 pub(crate) fn workers(mx: &Client, config: &Config) -> anyhow::Result<Vec<WorkerInfo>> {
     Ok(vec![WorkerInfo::new(
         "webterface",
@@ -99,10 +101,14 @@ pub(crate) fn workers(mx: &Client, config: &Config) -> anyhow::Result<Vec<Worker
         mx.clone(),
         config.clone(),
         webterface,
-    )?])
+    )])
 }
 
 /// Sets up an OIDC client, auth and login layers, session store, some - for the time being - hardcoded routes, listens on the configured socket, and starts serving requests.
+/// # Errors
+/// Will return `Err` if:
+/// * configuration is malformed
+/// * building oidc client fails
 pub async fn webterface(mx: Client, bot_config: Config) -> anyhow::Result<()> {
     let module_config: ModuleConfig = bot_config.typed_module_config(module_path!())?;
 
@@ -182,6 +188,8 @@ pub async fn webterface(mx: Client, bot_config: Config) -> anyhow::Result<()> {
 }
 
 /// Temporary main response for the web interface. Responds with different strings, depending on whether or not the user is authenthicated.
+/// # Errors
+/// Will return `Err` if rendering the templates fails. Shouldn't happen, unless OIDC provider responds with malformed userinfo.
 #[axum::debug_handler]
 pub async fn maybe_authenticated(
     claims: Result<OidcClaims<HswawAdditionalClaims>, axum_oidc::error::ExtractorError>,
@@ -196,11 +204,13 @@ pub async fn maybe_authenticated(
 }
 
 /// Dummy handler for `/login` endpoint, to make unauthenthicated users go through OIDC flow.
-pub async fn login() -> Result<impl IntoResponse, (StatusCode, &'static str)> {
-    Ok(response::Redirect::to("/"))
+pub async fn login() -> impl IntoResponse {
+    response::Redirect::to("/")
 }
 
 /// Handler for the `/logout` endpoint. Removes local app/user specific session information.
+/// # Errors
+/// Will return error if deleting session in the local session store fails.
 pub async fn logout(
     State(app_state): State<WebAppState>,
     session: Session,
@@ -232,14 +242,14 @@ pub struct WebAppState {
 
 /// Additional user information retrieved from oauth userinfo endpoint.
 ///
-/// In addition to claims defined here, some of the data returned from hswaw sso userinfo_endpoint
+/// In addition to claims defined here, some of the data returned from hswaw sso [userinfo endpoint](https://sso.hackerspace.pl/api/1/userinfo)
 /// gets mapped to standard claims.
-/// These include: sub, name, nickname, preferred_username, email
+/// These include: sub, name, nickname, preferred username, email
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HswawAdditionalClaims {
     /// Groups the user belongs to
     pub groups: Option<Vec<String>>,
-    /// Primary Matrix UserID of the user
+    /// Primary Matrix User ID of the user
     pub matrix_user: Option<String>,
 }
 
@@ -270,7 +280,7 @@ impl AuthBearer {
         Self(contents.to_string())
     }
 
-    fn decode_request_parts(req: &mut Parts) -> Result<Self, (StatusCode, &'static str)> {
+    fn decode_request_parts(req: &Parts) -> Result<Self, (StatusCode, &'static str)> {
         // Get authorization header
         let authorization = req
             .headers
@@ -301,8 +311,8 @@ pub enum WebError {
 impl IntoResponse for WebError {
     fn into_response(self) -> Response {
         match &self {
-            WebError::NotFound => (StatusCode::NOT_FOUND, "content not found").into_response(),
-            WebError::Render(_) => {
+            Self::NotFound => (StatusCode::NOT_FOUND, "content not found").into_response(),
+            Self::Render(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "something went wrong").into_response()
             }
         }

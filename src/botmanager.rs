@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use crate::config::Config;
+use crate::tools::room_name;
 
 use matrix_sdk::{
     Client, Error as MatrixError, LoopCtrl, Room,
@@ -52,19 +53,14 @@ pub struct BotManagerInner {
 pub enum ReloadError {
     /// Configuration file failed to parse. Bot will continue running with the old configuration.
     ConfigParseError(anyhow::Error),
-    /// Core functionality failed to start. This means the bot would be unable to reload configuration again, and
-    /// remained in unusable state. Bot process will exit with an error, and can be then restarted by a service manager.
-    CoreModulesFailure(anyhow::Error),
 }
 
 impl StdError for ReloadError {}
 
 impl fmt::Display for ReloadError {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        use ReloadError::*;
         match self {
-            CoreModulesFailure(e) => write!(fmt, "core modules failed to initialize: {e}"),
-            ConfigParseError(e) => write!(fmt, "configuration error: {e}"),
+            Self::ConfigParseError(e) => write!(fmt, "configuration error: {e}"),
         }
     }
 }
@@ -74,8 +70,11 @@ impl BotManagerInner {
     ///
     /// Attempts to reload configuration file, stop the old event dispatcher, and start [`crate::module::init_modules`]
     /// to handle the rest of the reload process.
+    ///
+    /// # Errors
+    /// Will return `Err` if configuration fails to parse.
     pub fn reload(&mut self) -> Result<(), ReloadError> {
-        use ReloadError::*;
+        use ReloadError::ConfigParseError;
 
         let fenced = self.config.modules_fenced();
         let disabled = self.config.modules_disabled();
@@ -98,19 +97,10 @@ impl BotManagerInner {
 
         self.client
             .remove_event_handler(self.dispatcher_handle.clone());
-        let dispatcher_handle = match crate::module::init_modules(
-            &self.client,
-            &self.config,
-            self.reload_ev_tx.clone(),
-        ) {
-            Ok(h) => {
-                info!("initialized modules");
-                h
-            }
-            Err(e) => {
-                return Err(CoreModulesFailure(e));
-            }
-        };
+        let dispatcher_handle =
+            crate::module::init_modules(&self.client, &self.config, self.reload_ev_tx.clone());
+
+        info!("initialized modules");
         self.dispatcher_handle = dispatcher_handle;
 
         Ok(())
@@ -128,7 +118,10 @@ impl BotManager {
     /// Bot initialization entrypoint.
     ///
     /// Prepares Matrix [`matrix_sdk::Client`], runs the initialization function for all the modules and workers, initializes default prometheus metrics registry,
-    /// and returns to the caller with BotManager object started.
+    /// and returns to the caller with `BotManager` object started.
+    ///
+    /// # Errors
+    /// Will return `Err` on configuration or matrix client initialization errors.
     pub async fn new(config_path: String, reload_ev_tx: Sender<Room>) -> anyhow::Result<Self> {
         let config = Config::new(config_path.clone())?;
         let data_dir_str = config.data_dir();
@@ -153,27 +146,15 @@ impl BotManager {
         debug!("performing initial sync");
         client.sync_once(sync_settings.clone()).await?;
 
-        prometheus::default_registry()
-            .register(Box::new(
-                tokio_metrics_collector::default_runtime_collector(),
-            ))
-            .unwrap();
+        prometheus::default_registry().register(Box::new(
+            tokio_metrics_collector::default_runtime_collector(),
+        ))?;
 
-        let dispatcher_handle =
-            match crate::module::init_modules(&client, &config, reload_ev_tx.clone()) {
-                Ok(h) => {
-                    info!("initialized modules");
-                    h
-                }
-                Err(e) => {
-                    error!("core modules failed to initialize: {e}");
-                    std::process::exit(1)
-                }
-            };
+        let dispatcher_handle = crate::module::init_modules(&client, &config, reload_ev_tx.clone());
 
         info!("finished initializing");
 
-        Ok(BotManager {
+        Ok(Self {
             inner: Arc::new(Mutex::new(BotManagerInner {
                 config,
                 client,
@@ -189,6 +170,9 @@ impl BotManager {
     /// Starts the event loop provided by [`matrix_sdk::Client::sync_with_result_callback`]
     ///
     /// Must be started along with the [`Self::reload`] task for reloads to work.
+    ///
+    /// # Errors
+    /// Will return `Err` if matrix client event loop fails catastrophically.
     pub async fn run(&self) -> anyhow::Result<()> {
         let (sync_settings, session_file, client) = {
             debug!("run: attempting lock");
@@ -215,7 +199,6 @@ impl BotManager {
                     };
 
                     Self::persist_sync_token(&sfc, response.next_batch)
-                        .await
                         .map_err(|err| MatrixError::UnknownError(err.into()))?;
                     Ok(LoopCtrl::Continue)
                 }
@@ -280,7 +263,7 @@ impl BotManager {
         Ok(client)
     }
 
-    async fn persist_sync_token(session_file: &Path, sync_token: String) -> anyhow::Result<()> {
+    fn persist_sync_token(session_file: &Path, sync_token: String) -> anyhow::Result<()> {
         let serialized_session = fs::read_to_string(session_file)?;
         let mut session: BotSession = serde_json::from_str(&serialized_session)?;
 
@@ -293,6 +276,7 @@ impl BotManager {
 
     /// Logs to stdout text form of the text messages received. Will discard events with invalid
     /// timestamp from the original homeserver, or messages older than 3 seconds.
+    #[allow(clippy::unused_async)]
     pub async fn message_logger(event: OriginalSyncRoomMessageEvent, room: Room) {
         let Some(ev_ts) = event.origin_server_ts.to_system_time() else {
             error!("event timestamp couldn't get parsed to system time");
@@ -308,18 +292,19 @@ impl BotManager {
             return;
         };
 
-        let room_name = match room.canonical_alias() {
-            Some(a) => a.to_string(),
-            None => room.room_id().to_string(),
-        };
+        let room_name = room_name(&room);
 
-        info!("[{room_name}] {}: {}", event.sender, text_content.body)
+        info!("[{room_name}] {}: {}", event.sender, text_content.body);
     }
 
     /// Main bot entrypoint. Takes config path, and starts everything accordingly.
+    ///
+    /// # Errors
+    /// Will return `Err` if bot encounters an unrecoverable runtime error that didn't
+    /// result in process exiting. Unlikely to happen.
     pub async fn serve(config_path: String) -> anyhow::Result<((), ())> {
         let (tx, rx) = mpsc::channel::<matrix_sdk::Room>(1);
-        let notbot = &BotManager::new(config_path, tx).await?;
+        let notbot = &Self::new(config_path, tx).await?;
 
         let pair = try_join(notbot.reload(rx), notbot.run());
 
@@ -331,14 +316,14 @@ impl BotManager {
     /// Must be started along with the [`Self::run`] task for reloads to work. When
     /// reload is complete, short information about completion of the task is sent to
     /// the channel from which configuration reload was requested.
+    ///
+    /// # Errors
+    /// Should only return `Err` when event channel is closed
     pub async fn reload(&self, mut rx: Receiver<Room>) -> anyhow::Result<()> {
         loop {
-            let room = match rx.recv().await {
-                Some(e) => e,
-                None => {
-                    error!("channel closed, goodbye! :(");
-                    bail!("channel closed");
-                }
+            let Some(room) = rx.recv().await else {
+                error!("channel closed, goodbye! :(");
+                bail!("channel closed");
             };
 
             debug!("reload: attempting lock");
@@ -346,21 +331,10 @@ impl BotManager {
             debug!("reload: grabbed lock");
 
             let response = match inner.reload() {
-                Ok(_) => "configuration reloaded",
+                Ok(()) => "configuration reloaded",
                 Err(e) => {
                     error!("reload error: {e}");
-                    match e {
-                        ReloadError::CoreModulesFailure(e) => {
-                            room.send(RoomMessageEventContent::text_plain(format!(
-                                "fatal failure: {e}"
-                            )))
-                            .await?;
-                            std::process::exit(1);
-                        }
-                        ReloadError::ConfigParseError(_) => {
-                            "configuration parsing error, check logs"
-                        }
-                    }
+                    "configuration parsing error, check logs"
                 }
             };
 

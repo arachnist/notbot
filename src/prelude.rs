@@ -1,3 +1,4 @@
+#![allow(clippy::pub_use)]
 //! Re-export of functions/macros/modules commonly used for module development
 
 pub use crate::config::Config;

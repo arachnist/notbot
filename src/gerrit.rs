@@ -54,7 +54,7 @@ fn query() -> Vec<(String, String)> {
         .collect()
 }
 
-fn limit() -> u64 {
+const fn limit() -> u64 {
     5
 }
 
@@ -69,7 +69,8 @@ pub struct GerritConfig {
 }
 
 /// Default value for feed checking interval: 5 minutes
-pub fn feed_interval() -> u64 {
+#[must_use]
+pub const fn feed_interval() -> u64 {
     5
 }
 
@@ -83,16 +84,19 @@ pub(crate) fn workers(mx: &Client, config: &Config) -> anyhow::Result<Vec<Worker
         mx.clone(),
         gerrit_config,
         gerrit_feeds,
-    )?])
+    )])
 }
 
 /// Process list of changes returned by queries at specified intervals, and
 /// post information about new changes to rooms.
+///
+/// # Errors
+/// Will return `Err` if rendering messages fails.
 pub async fn gerrit_feeds(mx: Client, module_config: GerritConfig) -> anyhow::Result<()> {
     let mut interval = interval(Duration::from_secs(60 * module_config.feed_interval));
-    let mut first_loop: HashMap<String, bool> = Default::default();
-    let mut change_ids: HashMap<String, Vec<String>> = Default::default();
-    let mut known_users: HashMap<(String, u64), String> = Default::default();
+    let mut first_loop: HashMap<String, bool> = HashMap::default();
+    let mut change_ids: HashMap<String, Vec<String>> = HashMap::default();
+    let mut known_users: HashMap<(String, u64), String> = HashMap::default();
 
     for name in module_config.instances.keys() {
         first_loop.insert(name.to_owned(), true);
@@ -103,7 +107,7 @@ pub async fn gerrit_feeds(mx: Client, module_config: GerritConfig) -> anyhow::Re
         interval.tick().await;
         for (name, instance) in &module_config.instances {
             let changes_url = format!(
-                r#"{base_url}/changes/?q={query}&limit={limit}"#,
+                r"{base_url}/changes/?q={query}&limit={limit}",
                 base_url = instance.instance_url,
                 limit = instance.limit,
                 query = instance
@@ -114,7 +118,7 @@ pub async fn gerrit_feeds(mx: Client, module_config: GerritConfig) -> anyhow::Re
                     .join("+")
             );
 
-            let data: Vec<ChangeInfo> = match gerrit_fetch(changes_url).await {
+            let data: Vec<ChangeInfo> = match gerrit_fetch(&changes_url).await {
                 Ok(v) => v,
                 Err(e) => {
                     error!("fetching/decoding changes failed: {e}");
@@ -122,14 +126,20 @@ pub async fn gerrit_feeds(mx: Client, module_config: GerritConfig) -> anyhow::Re
                 }
             };
 
-            if first_loop.get(name).unwrap().to_owned() {
+            if first_loop
+                .get(name)
+                .ok_or_else(|| anyhow!("wtf? iterating over previously unknown instance?"))?
+                .to_owned()
+            {
                 let current_ids: Vec<String> = data.iter().map(|d| d.id.clone()).collect();
                 change_ids.insert(name.clone(), current_ids);
                 first_loop.insert(name.to_owned(), false);
                 continue;
             }
 
-            let known_ids = change_ids.get_mut(name).unwrap();
+            let known_ids = change_ids
+                .get_mut(name)
+                .ok_or_else(|| anyhow!("wtf? iterating over previously unknown instance?"))?;
             let mut post_changes = vec![];
 
             for change in data.clone() {
@@ -141,7 +151,7 @@ pub async fn gerrit_feeds(mx: Client, module_config: GerritConfig) -> anyhow::Re
                     );
 
                     trace!("user url: {user_url}");
-                    let username: String = match gerrit_fetch(user_url).await {
+                    let username: String = match gerrit_fetch(&user_url).await {
                         Ok(v) => v,
                         Err(e) => {
                             error!("fetching/decoding username failed: {e}");
@@ -156,10 +166,10 @@ pub async fn gerrit_feeds(mx: Client, module_config: GerritConfig) -> anyhow::Re
 
                 if known_ids.contains(&change.id) {
                     continue;
-                } else {
-                    known_ids.push(change.id.clone());
-                    post_changes.push(change);
                 };
+
+                known_ids.push(change.id.clone());
+                post_changes.push(change);
             }
 
             if post_changes.is_empty() {
@@ -179,9 +189,8 @@ pub async fn gerrit_feeds(mx: Client, module_config: GerritConfig) -> anyhow::Re
             );
 
             for room_name in &instance.feed_rooms {
-                let room = match maybe_get_room(&mx, room_name).await {
-                    Ok(r) => r,
-                    Err(_) => continue,
+                let Ok(room) = maybe_get_room(&mx, room_name).await else {
+                    continue;
                 };
 
                 if let Err(e) = room.send(message.clone()).await {
@@ -214,28 +223,39 @@ pub mod gerrit_api {
     use std::collections::HashMap;
 
     /// Strips the `)]}'` prefix from provided text before attempting to deserialize it.
-    pub fn gerrit_decode_json<D: de::DeserializeOwned>(text: String) -> anyhow::Result<D> {
+    ///
+    /// # Errors
+    /// Will return `Err` if:
+    /// * data does not start with the expected gerrit prefix.
+    /// * deserializing data fails.
+    pub fn gerrit_decode_json<D: de::DeserializeOwned>(text: &str) -> anyhow::Result<D> {
         match text.strip_prefix(")]}'") {
             None => bail!("this does not look like a gerrit response"),
             Some(data) => Ok(serde_json::from_str(data)?),
         }
     }
 
-    /// Fetches contents of the provided url, and
-    pub async fn gerrit_fetch<D: de::DeserializeOwned>(url: String) -> anyhow::Result<D> {
+    /// Fetches contents of the provided url, and attempts to decode them as a Gerrit response
+    ///
+    /// # Errors
+    /// Will return `Err` if:
+    /// * fetching data fails.
+    /// * decoding by [`gerrit_decode_json`] fails
+    pub async fn gerrit_fetch<D: de::DeserializeOwned>(url: &str) -> anyhow::Result<D> {
         let client = ClientBuilder::new()
             .redirect(reqwest::redirect::Policy::none())
             .build()?;
 
         let text = client.get(url).send().await?.text().await?;
-        gerrit_decode_json(text)
+        gerrit_decode_json(text.as_str())
     }
 
     impl ChangeInfo {
         /// Calculate "size class" of a change
         ///
         /// Original implementation: <https://github.com/GerritCodeReview/gerrit/blob/287467f353b37ff68588adef0d1315a49845b09b/polygerrit-ui/app/elements/change-list/gr-change-list-item/gr-change-list-item.ts#L48-L53>
-        pub fn change_size(&self) -> &str {
+        #[must_use]
+        pub const fn change_size(&self) -> &str {
             match self.insertions + self.deletions {
                 ..10 => "[XS]",
                 10..50 => "[S]",
@@ -254,7 +274,7 @@ pub mod gerrit_api {
     /// Some fields that are documented in the documentation above as required, were missing in the
     /// gerrit instance this module was developed for.
     #[allow(missing_docs)]
-    #[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+    #[derive(Default, Debug, Clone, PartialEq, Eq, Deserialize)]
     pub struct ChangeInfo {
         pub id: String,
         // missing for us
@@ -325,7 +345,7 @@ pub mod gerrit_api {
     }
 
     #[allow(missing_docs)]
-    #[derive(Debug, Clone, PartialEq, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
     pub struct ProblemInfo {
         pub message: String,
         pub status: Option<ProblemInfoStatus>,
@@ -341,14 +361,14 @@ pub mod gerrit_api {
     }
 
     #[allow(missing_docs)]
-    #[derive(Debug, Clone, PartialEq, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
     pub struct TrackingIdInfo {
         pub system: String,
         pub id: String,
     }
 
     #[allow(missing_docs)]
-    #[derive(Debug, Clone, PartialEq, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
     pub struct ChangeMessageInfo {
         pub id: String,
         pub author: Option<AccountInfo>,
@@ -363,7 +383,7 @@ pub mod gerrit_api {
     }
 
     #[allow(missing_docs)]
-    #[derive(Debug, Clone, PartialEq, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
     pub struct ReviewerUpdateInfo {
         pub updated: String,
         pub updated_by: AccountInfo,
@@ -381,7 +401,7 @@ pub mod gerrit_api {
     }
 
     #[allow(missing_docs)]
-    #[derive(Debug, Clone, PartialEq, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
     pub struct SubmitRequirementResultInfo {
         pub name: String,
         pub description: Option<String>,
@@ -393,7 +413,7 @@ pub mod gerrit_api {
     }
 
     #[allow(missing_docs)]
-    #[derive(Debug, Clone, PartialEq, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
     pub struct SubmitRequirementExpressionInfo {
         pub expression: Option<String>,
         pub fulfilled: bool,
@@ -405,7 +425,7 @@ pub mod gerrit_api {
     }
 
     #[allow(missing_docs)]
-    #[derive(Debug, Clone, PartialEq, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
     #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
     pub enum SubmitRequirementExpressionInfoStatus {
         Pass,
@@ -415,7 +435,7 @@ pub mod gerrit_api {
     }
 
     #[allow(missing_docs)]
-    #[derive(Debug, Clone, PartialEq, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
     #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
     pub enum SubmitRequirementStatus {
         Satisfied,
@@ -427,7 +447,7 @@ pub mod gerrit_api {
     }
 
     #[allow(missing_docs)]
-    #[derive(Debug, Clone, PartialEq, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
     pub struct Requirement {
         pub status: RequirementStatus,
         pub fallback_text: String,
@@ -436,7 +456,7 @@ pub mod gerrit_api {
     }
 
     #[allow(missing_docs)]
-    #[derive(Debug, Clone, PartialEq, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
     #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
     pub enum RequirementStatus {
         Ok,
@@ -445,7 +465,7 @@ pub mod gerrit_api {
     }
 
     #[allow(missing_docs)]
-    #[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+    #[derive(Default, Debug, Clone, PartialEq, Eq, Deserialize)]
     pub struct AttentionSetInfo {
         pub account: AccountInfo,
         pub last_update: String,
@@ -453,14 +473,14 @@ pub mod gerrit_api {
     }
 
     #[allow(missing_docs)]
-    #[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+    #[derive(Default, Debug, Clone, PartialEq, Eq, Deserialize)]
     pub struct AccountInfo {
         #[serde(rename = "_account_id")]
         pub account_id: u64,
     }
 
     #[allow(missing_docs)]
-    #[derive(Default, Debug, Clone, PartialEq, Deserialize)]
+    #[derive(Default, Debug, Clone, PartialEq, Eq, Deserialize)]
     pub struct ActionInfo {
         pub method: Option<String>,
         pub label: Option<String>,

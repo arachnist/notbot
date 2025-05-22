@@ -76,8 +76,13 @@ pub struct ForgejoInstance {
 }
 
 /// Default event types to post notifications for
+#[must_use]
 pub fn forgejo_events_default() -> Vec<ActivityOpType> {
-    use ActivityOpType::*;
+    use ActivityOpType::{
+        ApprovePullRequest, CloseIssue, ClosePullRequest, CreateIssue, CreatePullRequest,
+        CreateRepo, MergePullRequest, PullRequestReadyForReview, RejectPullRequest, ReopenIssue,
+        ReopenPullRequest,
+    };
     vec![
         CreatePullRequest,
         MergePullRequest,
@@ -121,26 +126,31 @@ pub struct ForgejoConfig {
 }
 
 /// Default value for feed checking interval: 5 minutes
-pub fn feed_interval() -> u64 {
+#[must_use]
+pub const fn feed_interval() -> u64 {
     5
 }
 
 /// Default value for returned objects count: 3
-pub fn objects_count() -> u16 {
+#[must_use]
+pub const fn objects_count() -> u16 {
     3
 }
 
 /// Default keywords for displaying list of latest open pull requests: pr-new, prnew, pr, p
+#[must_use]
 pub fn keywords_pr_new() -> Vec<String> {
     vec!["pr-new".s(), "prnew".s(), "prs".s(), "pr".s()]
 }
 
 /// Default keywords for displaying list of oldest open pull requests: pr-old, prold
+#[must_use]
 pub fn keywords_pr_old() -> Vec<String> {
     vec!["pr-old".s(), "prold".s()]
 }
 
 /// Default keywords for displaying list of latest open issues: issue-new, issuenew, issue, i
+#[must_use]
 pub fn keywords_issue_new() -> Vec<String> {
     vec![
         "issue-new".s(),
@@ -152,6 +162,7 @@ pub fn keywords_issue_new() -> Vec<String> {
 }
 
 /// Default keywords for displaying list of oldest open issues: issue-old, issueold
+#[must_use]
 pub fn keywords_issue_old() -> Vec<String> {
     vec!["issue-old".s(), "issues-old".s(), "issueold".s()]
 }
@@ -173,7 +184,7 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         vec![],
         TriggerType::Keyword(keywords),
         None,
-        forgejo_config.clone(),
+        forgejo_config,
         forgejo_query,
     )])
 }
@@ -192,7 +203,7 @@ async fn early_fail(
     event: ConsumerEvent,
     config: &ForgejoConfig,
 ) -> anyhow::Result<(String, Forgejo)> {
-    use EarlyFailCheck::*;
+    use EarlyFailCheck::{NoInstancesConfigured, NotProvidedMany, ProvidedNotFound};
 
     let instance = if config.instances.keys().len() == 0 {
         event
@@ -204,7 +215,12 @@ async fn early_fail(
         return Err(NoInstancesConfigured.into());
     } else if event.args.is_none() {
         if config.instances.keys().len() == 1 {
-            config.instances.values().last().unwrap().to_owned()
+            config
+                .instances
+                .values()
+                .last()
+                .ok_or_else(|| anyhow!("wtf? empty instances list"))?
+                .to_owned()
         } else {
             event
                 .room
@@ -214,14 +230,20 @@ async fn early_fail(
                 .await?;
             return Err(NotProvidedMany.into());
         }
-    } else if config
-        .instances
-        .contains_key(&event.args.clone().ok_or(anyhow!("wtf?"))?)
-    {
+    } else if config.instances.contains_key(
+        &event
+            .args
+            .clone()
+            .ok_or_else(|| anyhow!("wtf? empty args should've been cought earlier"))?,
+    ) {
         config
             .instances
-            .get(&event.args.unwrap())
-            .unwrap()
+            .get(
+                &event
+                    .args
+                    .ok_or_else(|| anyhow!("wtf? empty args should've been cought earlier"))?,
+            )
+            .ok_or_else(|| anyhow!("wtf? empty instances should've been cought earlier"))?
             .to_owned()
     } else {
         event
@@ -234,14 +256,20 @@ async fn early_fail(
     };
 
     let auth = Auth::Token(&instance.token_secret);
-    let forgejo = Forgejo::new(auth, instance.instance_url.parse().unwrap())?;
+    let forgejo = Forgejo::new(auth, instance.instance_url.parse()?)?;
 
     Ok((instance.organization, forgejo))
 }
 
 /// Display list of open issues or pull requests
+///
+/// # Errors
+/// Will return `Err` or malformed Forgejo API responses
 pub async fn forgejo_query(event: ConsumerEvent, config: ForgejoConfig) -> anyhow::Result<()> {
-    use forgejo_api::structs::*;
+    use forgejo_api::structs::{
+        Issue, IssueListIssuesQuery, IssueListIssuesQueryState, IssueListIssuesQueryType,
+        OrgListReposQuery,
+    };
     let (organization, forgejo) = early_fail(event.clone(), &config).await?;
     let repo_query = OrgListReposQuery {
         page: Some(1),
@@ -278,27 +306,33 @@ pub async fn forgejo_query(event: ConsumerEvent, config: ForgejoConfig) -> anyho
     for repo in repos {
         if repo.has_issues.is_some_and(|i| i) {
             let (_, repo_issues) = forgejo
-                .issue_list_issues(&organization, &repo.name.unwrap(), issue_query.clone())
+                .issue_list_issues(
+                    &organization,
+                    &repo
+                        .name
+                        .ok_or_else(|| anyhow!("wtf? empty repository name response from API"))?,
+                    issue_query.clone(),
+                )
                 .await?;
             items.extend(repo_issues);
         }
     }
 
-    items.sort_by_key(|i| i.updated_at.unwrap());
+    items.sort_by_key(|i| i.updated_at.unwrap_or(time::OffsetDateTime::UNIX_EPOCH));
     let shortlist: Vec<Issue> = if config.keywords_issue_old.contains(&event.keyword)
         || config.keywords_pr_old.contains(&event.keyword)
     {
         items
             .iter()
             .take(config.objects_count.into())
-            .map(|x| x.to_owned())
+            .map(std::borrow::ToOwned::to_owned)
             .collect()
     } else {
         items
             .iter()
             .rev()
             .take(config.objects_count.into())
-            .map(|x| x.to_owned())
+            .map(std::borrow::ToOwned::to_owned)
             .collect()
     };
 
@@ -332,23 +366,29 @@ pub(crate) fn workers(mx: &Client, config: &Config) -> anyhow::Result<Vec<Worker
         mx.clone(),
         forgejo_config,
         forgejo_feeds,
-    )?])
+    )])
 }
 
 /// Worker spawning forgejo feeds processor in configured intervals.
+///
+/// # Errors
+/// Will return `Err` if:
+/// * module is misconfigured
+/// * configuration behaves weirdly at runtime
+/// *
 pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::Result<()> {
     let mut interval = interval(Duration::from_secs(60 * module_config.feed_interval));
     // (instance name, org)
-    let mut first_loop: HashMap<String, bool> = Default::default();
+    let mut first_loop: HashMap<String, bool> = HashMap::default();
     // (name, instance)
-    let mut instances: HashMap<String, Forgejo> = Default::default();
+    let mut instances: HashMap<String, Forgejo> = HashMap::default();
     // (instance name, org)
     let mut activities: HashMap<(String, String), Vec<forgejo_api::structs::Activity>> =
-        Default::default();
+        HashMap::default();
 
     for (name, config) in module_config.instances.clone() {
         let auth = Auth::Token(&config.token_secret);
-        let forgejo = match Forgejo::new(auth, config.instance_url.parse().unwrap()) {
+        let forgejo = match Forgejo::new(auth, config.instance_url.parse()?) {
             Ok(f) => f,
             Err(e) => {
                 error!("invalid forgejo configuration: {e}");
@@ -356,17 +396,19 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
             }
         };
         instances.insert(name.clone(), forgejo);
-        first_loop.insert(name.to_owned(), true);
+        first_loop.insert(name.clone(), true);
     }
 
     loop {
         interval.tick().await;
 
-        for (name, forgejo) in instances.iter() {
+        for (name, forgejo) in &instances {
             trace!("processing feeds for instance: {name}");
 
-            // can .unwrap(): instances hash is created based on module_config
-            let config = module_config.instances.get(name).unwrap();
+            let config = module_config
+                .instances
+                .get(name)
+                .ok_or_else(|| anyhow!("wtf? weird misconfiguration?"))?;
             let mut potentially_pushed_activities = vec![];
 
             let org = &config.organization;
@@ -389,7 +431,7 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
 
             if let Some(known_act) = activities.get(&(name.to_owned(), org.to_owned())) {
                 // can .unwrap(): activites get added to known list only if id.is_some()
-                known_act_ids = known_act.iter().map(|a| a.id.unwrap()).collect();
+                known_act_ids = known_act.iter().map(|a| a.id.unwrap_or_default()).collect();
             } else {
                 activities.insert((name.to_owned(), org.to_owned()), vec![]);
                 known_act_ids = vec![];
@@ -410,7 +452,11 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
 
             activities.insert((name.to_owned(), org.to_owned()), new_known_activities);
 
-            if first_loop.get(name).unwrap().to_owned() {
+            if first_loop
+                .get(name)
+                .ok_or_else(|| anyhow!("wtf? iterating over previously unknown instance?"))?
+                .to_owned()
+            {
                 first_loop.insert(name.to_owned(), false);
 
                 continue;
@@ -424,13 +470,12 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
                 items: potentially_pushed_activities,
             };
 
-            let plain = render_feed.as_plain().render().unwrap();
-            let html = render_feed.as_formatted().render().unwrap();
+            let plain = render_feed.as_plain().render()?;
+            let html = render_feed.as_formatted().render()?;
 
             for room_name in &config.feed_rooms {
-                let room = match maybe_get_room(&mx, room_name).await {
-                    Ok(r) => r,
-                    Err(_) => continue,
+                let Ok(room) = maybe_get_room(&mx, room_name).await else {
+                    continue;
                 };
 
                 if let Err(e) = room
@@ -468,19 +513,17 @@ pub mod activity_fmt {
     }
 
     /// Turns act.content into formatted response part. Applicable for PRs and Issues only
+    #[must_use]
+    #[allow(clippy::needless_pass_by_value)]
     pub fn act_content_part_html(repo_url: &Url, item: &str, content: String) -> Option<String> {
         let mut parts = content.splitn(3, '|');
         let item_nr = parts.next()?;
-        let item_title = if let Some(title) = parts.next() {
-            format!(" {}", truncate_str(title, 60))
-        } else {
-            "".s()
-        };
-        let item_emoji = if let Some(emoji) = parts.next() {
-            format!(" {}", emoji)
-        } else {
-            "".s()
-        };
+        let item_title = parts
+            .next()
+            .map_or_else(|| "".s(), |title| format!(" {}", truncate_str(title, 60)));
+        let item_emoji = parts
+            .next()
+            .map_or_else(|| "".s(), |emoji| format!(" {emoji}"));
 
         let item_url = format!("{repo_url}/{item}/{item_nr}");
         Some(format!(
@@ -489,22 +532,20 @@ pub mod activity_fmt {
     }
 
     /// Turns act.content into plain response part. Applicable for PRs and Issues only
+    #[must_use]
+    #[allow(clippy::needless_pass_by_value)]
     pub fn act_content_part_plain(repo_url: &Url, item: &str, content: String) -> Option<String> {
         let mut parts = content.splitn(3, '|');
         let item_nr = parts.next()?;
-        let item_title = if let Some(title) = parts.next() {
-            format!(" {}", truncate_str(title, 60))
-        } else {
-            "".s()
-        };
-        let item_emoji = if let Some(emoji) = parts.next() {
-            format!(" {}", emoji)
-        } else {
-            "".s()
-        };
+        let item_title = parts
+            .next()
+            .map_or_else(|| "".s(), |title| format!(" {}", truncate_str(title, 60)));
+        let item_emoji = parts
+            .next()
+            .map_or_else(|| "".s(), |emoji| format!(" {emoji}"));
 
         let item_url = format!("{repo_url}/{item}/{item_nr}");
-        Some(format!(r#"{item_url}{item_title}{item_emoji}"#,))
+        Some(format!(r"{item_url}{item_title}{item_emoji}",))
     }
 
     fn content_commits(s: &str) -> anyhow::Result<ContentCommits> {
