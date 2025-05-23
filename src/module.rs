@@ -220,7 +220,7 @@ use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 
 use askama::Template;
-use mlua::Lua;
+use mlua::{ExternalResult, Lua};
 
 /// Number of events consumed, grouped by module
 pub static MODULE_EVENTS: LazyLock<IntCounterVec> = LazyLock::new(|| {
@@ -471,14 +471,95 @@ impl ModuleInfo {
                 continue;
             }
 
-            let target = room_name(&event.room);
+            let (plain_tx, plain_rx) = mpsc::channel::<String>(1);
+            let (html_tx, html_rx) = mpsc::channel::<(String, String)>(1);
+            tokio::task::spawn(Self::mun_send_plain(
+                name.clone(),
+                event.room.clone(),
+                plain_rx,
+            ));
+            tokio::task::spawn(Self::mun_send_html(
+                name.clone(),
+                event.room.clone(),
+                html_rx,
+            ));
+            let Ok(mun_channel) = event.lua.create_table() else {
+                error!("{name}: createing mun channel failed");
+                continue;
+            };
+            let Ok(say) = event.lua.create_function({
+                move |_, (_, message): (mlua::Table, String)| {
+                    plain_tx.blocking_send(message).into_lua_err()
+                }
+            }) else {
+                error!("{name}: creating Say function failed");
+                continue;
+            };
+            let Ok(html) = event.lua.create_function({
+                move |_, (_, plain, html): (mlua::Table, String, String)| {
+                    html_tx.blocking_send((plain, html)).into_lua_err()
+                }
+            }) else {
+                error!("{name}: creating Html function failed");
+                continue;
+            };
+            mun_channel.set("Say", say)?;
+            mun_channel.set("Html", html)?;
 
             if let Err(e) = processor
-                .call_async::<()>((event.sender.as_str(), target.as_str(), lua_args.join(" ")))
+                .call_async::<()>((event.sender.as_str(), mun_channel, lua_args.join(" ")))
                 .await
             {
-                error!("mun {name} command failed: {e}");
+                error!("{name}: mun command failed: {e}");
             };
+        }
+    }
+
+    /// Short-lived plain message sender for Mun module call.
+    ///
+    /// # Errors
+    /// Will `Err` if all send channels get closed, which *should* happen as soon as consumer
+    /// completes loop iteration.
+    pub async fn mun_send_plain(
+        name: String,
+        room: Room,
+        mut rx: mpsc::Receiver<String>,
+    ) -> anyhow::Result<()> {
+        loop {
+            let Some(message) = rx.recv().await else {
+                bail!("channel closed");
+            };
+
+            if let Err(e) = room
+                .send(RoomMessageEventContent::text_plain(message))
+                .await
+            {
+                error!("{name}: error sending message: {e}");
+            }
+        }
+    }
+
+    /// Short-lived formatted message sender for Mun module call.
+    ///
+    /// # Errors
+    /// Will `Err` if all send channels get closed, which *should* happen as soon as consumer
+    /// completes loop iteration.
+    pub async fn mun_send_html(
+        name: String,
+        room: Room,
+        mut rx: mpsc::Receiver<(String, String)>,
+    ) -> anyhow::Result<()> {
+        loop {
+            let Some((plain, html)) = rx.recv().await else {
+                bail!("channel closed");
+            };
+
+            if let Err(e) = room
+                .send(RoomMessageEventContent::text_html(plain, html))
+                .await
+            {
+                error!("{name}: error sending message: {e}");
+            }
         }
     }
 }
