@@ -356,6 +356,75 @@ fn initialize_lua_env(lua: &Lua, global: &Table, config: &ModuleConfig) -> anyho
     Ok(())
 }
 
+/// Completes setting up plugin environment, and loads a Mun plugin.
+pub fn mun_load_plugin(
+    lua: &Lua,
+    config: &Config,
+    plugin_id: &str,
+) -> anyhow::Result<Vec<ModuleInfo>> {
+    let plugin_env = mun_plugin_env(lua)?;
+    let modules: Arc<Mutex<Vec<ModuleInfo>>> = Arc::new(Mutex::new(vec![]));
+    let mut retmodules: Vec<ModuleInfo> = vec![];
+
+    let config_get_unbound = lua.create_function({
+        let config = config.clone();
+        move |lua, (plugin, key): (String, String)| {
+            let config_section = format!("mun_plugin_{plugin}");
+            let plugin_config: HashMap<String, toml::Value> = config
+                .clone()
+                .typed_module_config(&config_section)
+                .into_lua_err()?;
+
+            match plugin_config.get(&key) {
+                Some(v) => LuaResult::Ok(Some(lua.to_value(v)?)),
+                None => LuaResult::Ok(None),
+            }
+        }
+    })?;
+    let config_get = config_get_unbound.bind(plugin_id.to_owned())?;
+    plugin_env.set("ConfigGet", config_get)?;
+
+    let add_command = lua.create_function({
+        let modules = modules.clone();
+        move |_,
+              (name, keyword, arity, callback, help, klacz_level): (
+            String,
+            String,
+            i64,
+            mlua::Function,
+            String,
+            i64,
+        )| {
+            let Ok(mut modules) = modules.lock() else {
+                return Err(mlua::Error::runtime("locking modules failed"));
+            };
+
+            modules.push(ModuleInfo::new_mun_command(
+                &name,
+                keyword,
+                arity,
+                callback,
+                &help,
+                klacz_level,
+            ));
+            drop(modules);
+
+            LuaResult::Ok(())
+        }
+    })?;
+    plugin_env.set("AddCommand", add_command)?;
+
+    let Ok(locked_modules) = modules.lock() else {
+        bail!("locking modules failed")
+    };
+
+    for module in locked_modules.iter() {
+        retmodules.push(module.clone());
+    }
+
+    Ok(retmodules)
+}
+
 /// Prepares environment (lua "upvalue") for Mun plugins.
 ///
 /// Mostly an analogue of `core.plugin.PrepareEnvironment` in Mun, with the following differences:
@@ -395,14 +464,13 @@ pub fn mun_plugin_env(lua: &Lua) -> anyhow::Result<mlua::Table> {
     // why is this nested like this? idk. the lua json library originally used in Mun did this
     let json = lua.create_table()?;
     let json_decode_table = lua.create_table()?;
-    let json_decode = lua.create_async_function(
-        async move |lua, payload: String| {
-            let json_val: Result<serde_json::Value, serde_json::Error> = serde_json::from_str(&payload);
+    let json_decode = lua.create_async_function(async move |lua, payload: String| {
+        let json_val: Result<serde_json::Value, serde_json::Error> = serde_json::from_str(&payload);
 
-            match json_val {
-                Ok(v) => Ok(lua.to_value(&v)?),
-                Err(e) => LuaResult::Err(e.into_lua_err()),
-            }
+        match json_val {
+            Ok(v) => Ok(lua.to_value(&v)?),
+            Err(e) => LuaResult::Err(e.into_lua_err()),
+        }
     })?;
     json_decode_table.set("decode", json_decode)?;
     json.set("decode", json_decode_table)?;
@@ -459,7 +527,10 @@ pub fn mun_plugin_env(lua: &Lua) -> anyhow::Result<mlua::Table> {
     plugin.set("DBOpen", db_open)?;
 
     // mun.core.plugin.API.CurrentTime
-    plugin.set("CurrentTime", lua.load(chunk! { os.time() }).into_function()?)?;
+    plugin.set(
+        "CurrentTime",
+        lua.load(chunk! { os.time() }).into_function()?,
+    )?;
 
     // values missing from env_table.plugin at this point vs Mun:
     // * `Register` - unused
