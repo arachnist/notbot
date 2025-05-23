@@ -357,12 +357,15 @@ fn initialize_lua_env(lua: &Lua, global: &Table, config: &ModuleConfig) -> anyho
 }
 
 /// Completes setting up plugin environment, and loads a Mun plugin.
+///
+/// # Errors
+/// Will return `Err` if manipulating lua tables fails, or locking of constructed modules list fails.
 pub fn mun_load_plugin(
     lua: &Lua,
     config: &Config,
     plugin_id: &str,
 ) -> anyhow::Result<Vec<ModuleInfo>> {
-    let plugin_env = mun_plugin_env(lua)?;
+    let plugin_env = &mun_plugin_env(lua)?;
     let modules: Arc<Mutex<Vec<ModuleInfo>>> = Arc::new(Mutex::new(vec![]));
     let mut retmodules: Vec<ModuleInfo> = vec![];
 
@@ -384,10 +387,11 @@ pub fn mun_load_plugin(
     let config_get = config_get_unbound.bind(plugin_id.to_owned())?;
     plugin_env.set("ConfigGet", config_get)?;
 
-    let add_command = lua.create_function({
+    let add_command_unbound = lua.create_function({
         let modules = modules.clone();
         move |_,
-              (name, keyword, arity, callback, help, klacz_level): (
+              (plugin_env, name, keyword, arity, callback, help, klacz_level): (
+            Table,
             String,
             String,
             i64,
@@ -396,7 +400,13 @@ pub fn mun_load_plugin(
             i64,
         )| {
             let Ok(mut modules) = modules.lock() else {
-                return Err(mlua::Error::runtime("locking modules failed"));
+                return Err(mlua::Error::runtime(format!("{name}: locking modules failed")));
+            };
+
+            if !callback.set_environment(plugin_env)? {
+                return Err(mlua::Error::runtime(
+                    format!("{name}: setting sandbox env for failed"),
+                ));
             };
 
             modules.push(ModuleInfo::new_mun_command(
@@ -412,6 +422,7 @@ pub fn mun_load_plugin(
             LuaResult::Ok(())
         }
     })?;
+    let add_command = add_command_unbound.bind(plugin_env)?;
     plugin_env.set("AddCommand", add_command)?;
 
     let Ok(locked_modules) = modules.lock() else {
@@ -421,6 +432,7 @@ pub fn mun_load_plugin(
     for module in locked_modules.iter() {
         retmodules.push(module.clone());
     }
+    drop(locked_modules);
 
     Ok(retmodules)
 }
