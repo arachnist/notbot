@@ -356,6 +356,128 @@ fn initialize_lua_env(lua: &Lua, global: &Table, config: &ModuleConfig) -> anyho
     Ok(())
 }
 
+/// Prepares environment (lua "upvalue") for Mun plugins.
+///
+/// Mostly an analogue of `core.plugin.PrepareEnvironment` in Mun, with the following differences:
+/// * doesn't perform per-plugin bindings (this is done at plugin load time
+///
+/// # Errors
+/// Will return `Err` if mlua calls to manipulate the prepared env table fail.
+pub fn mun_plugin_env(lua: &Lua) -> anyhow::Result<mlua::Table> {
+    let env_table = lua.create_table()?;
+
+    env_table.set(
+        "table",
+        lua.load(chunk! { require("table") })
+            .call::<mlua::Table>(())?,
+    )?;
+    env_table.set(
+        "string",
+        lua.load(chunk! { require("string") })
+            .call::<mlua::Table>(())?,
+    )?;
+    env_table.set(
+        "math",
+        lua.load(chunk! { require("math") })
+            .call::<mlua::Table>(())?,
+    )?;
+
+    let http = &lua.create_table()?;
+    http.set(
+        "request",
+        lua.create_async_function(|lua, uri| async move {
+            async_fetch_http(lua, uri).await.into_lua_err()
+        })?,
+    )?;
+    env_table.set("http", http)?;
+    env_table.set("https", http)?;
+
+    // why is this nested like this? idk. the lua json library originally used in Mun did this
+    let json = lua.create_table()?;
+    let json_decode_table = lua.create_table()?;
+    let json_decode = lua.create_async_function(
+        async move |lua, payload: String| {
+            let json_val: Result<serde_json::Value, serde_json::Error> = serde_json::from_str(&payload);
+
+            match json_val {
+                Ok(v) => Ok(lua.to_value(&v)?),
+                Err(e) => LuaResult::Err(e.into_lua_err()),
+            }
+    })?;
+    json_decode_table.set("decode", json_decode)?;
+    json.set("decode", json_decode_table)?;
+
+    env_table.set("print", lua.load(chunk! { print(...) }).into_function()?)?;
+    env_table.set("error", lua.load(chunk! { error(...) }).into_function()?)?;
+    env_table.set(
+        "tonumber",
+        lua.load(chunk! { tonumber(...) }).into_function()?,
+    )?;
+    env_table.set(
+        "tostring",
+        lua.load(chunk! { tostring(...) }).into_function()?,
+    )?;
+    env_table.set("pcall", lua.load(chunk! { pcall(...) }).into_function()?)?;
+    env_table.set("type", lua.load(chunk! { r#type(...) }).into_function()?)?;
+    env_table.set("pairs", lua.load(chunk! { pairs(...) }).into_function()?)?;
+
+    let os = &lua.create_table()?;
+    os.set("time", lua.load(chunk! { os.time(...) }).into_function()?)?;
+    env_table.set("os", os)?;
+
+    env_table.set(
+        "loadstring",
+        lua.load(chunk! {function(s)
+            if s:byte(1) == 27 then
+                return nil, "Refusing to load bytecode"
+            else
+                return loadstring(s)
+            end
+        end})
+            .into_function()?,
+    )?;
+
+    let plugin = lua.create_table()?;
+
+    // mun.core.plugin.API.DBOpen
+    let db_open = lua.create_async_function(|lua, handle: String| async move {
+        let conn = lua.create_table()?;
+
+        let query_unbound = lua.create_async_function(
+            async move |lua, (handle, statement, query_args): (String, String, Variadic<String>)| {
+                let res = lua_db_query(lua, &handle, &statement, query_args)
+                    .await
+                    .into_lua_err()?;
+                LuaResult::Ok(res)
+            }
+        )?;
+        let query = query_unbound.bind(handle)?;
+        conn.set("Query", query)?;
+
+        LuaResult::Ok(conn)
+    })?;
+    plugin.set("DBOpen", db_open)?;
+
+    // mun.core.plugin.API.CurrentTime
+    plugin.set("CurrentTime", lua.load(chunk! { os.time() }).into_function()?)?;
+
+    // values missing from env_table.plugin at this point vs Mun:
+    // * `Register` - unused
+    // * `Sleep` - unused
+    // Need to be set per-plugin:
+    // * `ConfigGet`, used only for paczkomate and ppsa, which require (also missing) redis
+    // * `AddCommand`
+    // * `AddHook`
+
+    env_table.set("plugin", plugin)?;
+    env_table.set("_G", &env_table)?;
+
+    // values missing from env_table vs Mun:
+    // * `setfenv` - only used for repl, will be replaced with [`mlua::Function::set_environment`]
+    // * `redis` - not (yet?) implemented
+    Ok(env_table)
+}
+
 async fn lua_db_query(
     lua: Lua,
     handle: &str,
