@@ -63,29 +63,26 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
     info!("registering modules");
     let module_config: ModuleConfig = config.typed_module_config(module_path!())?;
 
-    let (duetx, duerx) = mpsc::channel::<ConsumerEvent>(1);
-    let due = ModuleInfo {
-        name: "due".s(),
-        help: "checks how many membership fees a member is missing".s(),
-        acl: vec![Acl::Room(module_config.due_others_allowed.clone())],
-        trigger: TriggerType::Keyword(module_config.keywords_due.clone()),
-        channel: duetx,
-        error_prefix: Some("error checking membership fees".s()),
-    };
-    due.spawn(duerx, module_config.clone(), due_processor);
-
-    let (due_metx, due_merx) = mpsc::channel::<ConsumerEvent>(1);
-    let due_me = ModuleInfo {
-        name: "due-me".s(),
-        help: "checks how many membership fees you are missing".s(),
-        acl: vec![],
-        trigger: TriggerType::Keyword(module_config.keywords_due_me.clone()),
-        channel: due_metx,
-        error_prefix: Some("error checking membership fees".s()),
-    };
-    due_me.spawn(due_merx, module_config, due_me_processor);
-
-    Ok(vec![due, due_me])
+    Ok(vec![
+        ModuleInfo::new(
+            "due",
+            "checks how many membership fees a member is missing",
+            vec![Acl::Room(module_config.due_others_allowed.clone())],
+            TriggerType::Keyword(module_config.keywords_due.clone()),
+            Some("error checking membership fees"),
+            module_config.clone(),
+            due_processor,
+        ),
+        ModuleInfo::new(
+            "due-me",
+            "checks how many membership fees you are missing",
+            vec![],
+            TriggerType::Keyword(module_config.keywords_due_me.clone()),
+            Some("error checking membership fees"),
+            module_config,
+            due_me_processor,
+        ),
+    ])
 }
 
 /// Processes checks for other user membership fees status.
@@ -185,18 +182,15 @@ pub(crate) fn passthrough(
     info!("registering passthrough modules");
     let module_config: ModuleConfig = config.typed_module_config(module_path!())?;
 
-    let (nagtx, nagrx) = mpsc::channel::<ConsumerEvent>(1);
-    let nag = PassThroughModuleInfo(ModuleInfo {
-        name: "nag".s(),
-        help: "nags users about missing membership fees".s(),
-        acl: vec![Acl::Room(module_config.nag_channels.clone())],
-        trigger: TriggerType::Catchall(|_, _, _, _, _| Ok(Consumption::Inclusive)),
-        channel: nagtx,
-        error_prefix: None,
-    });
-    nag.0.spawn(nagrx, module_config, nag_processor);
-
-    Ok(vec![nag])
+    Ok(vec![PassThroughModuleInfo(ModuleInfo::new(
+        "nag",
+        "nags users about missing membership fees",
+        vec![Acl::Room(module_config.nag_channels.clone())],
+        TriggerType::Catchall(|_, _, _, _, _| Ok(Consumption::Inclusive)),
+        None,
+        module_config,
+        nag_processor,
+    ))])
 }
 
 /// Nags members active in the chat about late membership fees, at most once every 24 hours.

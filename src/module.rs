@@ -87,35 +87,22 @@
 //!     // object representing module configuration
 //!     let module_config: ModuleConfig = config.typed_module_config(module_path!())?;
 //!
-//!     // [`tokio::sync::mpsc`] channel for passing events to the module. If the module is not
-//!     // expected to take significant amount of time for processing the events, capacity of `1`
-//!     // should be enough. If a module won't be able to accept the event, the event will be
-//!     // discarded.
-//!     let (tx, rx) = mpsc::channel(1);
-//!
-//!     // [`ModuleInfo`] for the module
-//!     let wolfram = ModuleInfo {
-//!         name: "wolfram".s(),
-//!         help: "calculate something using wolfram alpha".s(),
+//!     // [`ModuleInfo`] for the module. Using the [`ModuleInfo::new`] helper is optional, but
+//!     // this function will also take care of channel creation and channel consumer spawning
+//!     // for you. For more advanced examples, where this helper is not used, see [`core_starter`].
+//!     let wolfram = ModuleInfo::new(
+//!         "wolfram",
+//!         "calculate something using wolfram alpha",
 //!         // Vector [`Acl`] objects representing requirements for triggering the module
-//!         acl: vec![],
-//!         // [`TriggerType`] for the module. Note how triggers can be defined in configuration.
-//!         trigger: TriggerType::Keyword(module_config.keywords.clone()),
-//!         // Channel sender. If the module performs a more sophisticated
-//!         // initialization process that failed, the receiver should get dropped and
-//!         // channel should be considered closed.
-//!         channel: tx,
+//!         vec![],
+//!         // [`TriggerType`] for the module. Note how trigger words can be defined in configuration.
+//!         TriggerType::Keyword(module_config.keywords.clone()),
 //!         // Option of error message prefixes. If processing an event for the module fails, and
 //!         // is not `None`, the error message will be posted to the channel.
-//!         error_prefix: Some("error getting wolfram response".s()),
-//!     };
-//!     // Actually starting the module. Using this function is optional, and you can start an event
-//!     // processing task your own way. See [`core_starter`] for an example of that, where the
-//!     // event consumers and processors for `help`, `list`, and `reload` functionality take
-//!     // additional arguments.
-//!     // `processor`, as passed to the [`ModuleInfo::spawn`] function, is expected to take a
-//!     // single [`ConsumerEvent`] and module configuration as arguments.
-//!     wolfram.spawn(rx, module_config, processor);
+//!         Some("error getting wolfram response"),
+//!         module_config,
+//!         processor,
+//!     );
 //!
 //!     // Return the list of registered modules.
 //!     // The module list can also be constructed dynamically, and appended with each registered
@@ -332,39 +319,22 @@ impl ModuleInfo {
         let owned_error_prefix = error_prefix.map(str::to_owned);
         let (tx, rx) = mpsc::channel(1);
 
-        let module = Self {
+        tokio::task::spawn(Self::consumer(
+            rx,
+            config,
+            owned_error_prefix.clone(),
+            processor,
+            name.to_owned(),
+        ));
+
+        Self {
             name: name.to_owned(),
             help: help.to_owned(),
             acl,
             trigger,
             channel: tx,
             error_prefix: owned_error_prefix,
-        };
-        module.spawn(rx, config, processor);
-
-        module
-    }
-
-    /// Convenience function to spawn generic event channel consumer.
-    ///
-    /// Spawns a new tokio task dedicated to receiving events from the module mpsc
-    /// channel, and calling the event processor
-    pub fn spawn<C, Fut>(
-        &self,
-        rx: mpsc::Receiver<ConsumerEvent>,
-        config: C,
-        processor: impl Fn(ConsumerEvent, C) -> Fut + Send + 'static,
-    ) where
-        C: Clone + Send + Sync + 'static,
-        Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
-    {
-        tokio::task::spawn(Self::consumer(
-            rx,
-            config,
-            self.error_prefix.clone(),
-            processor,
-            self.name.clone(),
-        ));
+        }
     }
 
     /// Generic event consumer.

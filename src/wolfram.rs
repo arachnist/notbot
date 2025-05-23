@@ -39,18 +39,15 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
     info!("registering modules");
     let module_config: ModuleConfig = config.typed_module_config(module_path!())?;
 
-    let (tx, rx) = mpsc::channel(1);
-    let wolfram = ModuleInfo {
-        name: "wolfram".s(),
-        help: "calculate something using wolfram alpha".s(),
-        acl: vec![],
-        trigger: TriggerType::Keyword(module_config.keywords.clone()),
-        channel: tx,
-        error_prefix: Some("error getting wolfram response".s()),
-    };
-    wolfram.spawn(rx, module_config, processor);
-
-    Ok(vec![wolfram])
+    Ok(vec![ModuleInfo::new(
+        "wolfram",
+        "calculate something using wolfram alpha",
+        vec![],
+        TriggerType::Keyword(module_config.keywords.clone()),
+        Some("error getting wolfram response"),
+        module_config,
+        processor,
+    )])
 }
 
 /// Event processor for wolfram module

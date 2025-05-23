@@ -274,29 +274,26 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
     info!("registering grafana modules");
     let module_config: ModuleConfig = config.typed_module_config(module_path!())?;
 
-    let (alerting_tx, alerting_rx) = mpsc::channel::<ConsumerEvent>(1);
-    let alerting = ModuleInfo {
-        name: "alerting".s(),
-        help: "shows which alerts are now firing".s(),
-        acl: vec![],
-        trigger: TriggerType::Keyword(module_config.keywords_alerting.clone()),
-        channel: alerting_tx,
-        error_prefix: Some("error".s()),
-    };
-    alerting.spawn(alerting_rx, module_config.clone(), alerting_processor);
-
-    let (purge_tx, purge_rx) = mpsc::channel::<ConsumerEvent>(1);
-    let purge = ModuleInfo {
-        name: "alerts_purge".s(),
-        help: "reset the firing alerts to empty state".s(),
-        acl: vec![Acl::Room(module_config.rooms_purge.clone())],
-        trigger: TriggerType::Keyword(module_config.keywords_purge.clone()),
-        channel: purge_tx,
-        error_prefix: Some("error purging state".s()),
-    };
-    purge.spawn(purge_rx, module_config, purge_processor);
-
-    Ok(vec![alerting, purge])
+    Ok(vec![
+        ModuleInfo::new(
+            "alerting",
+            "shows which alerts are now firing",
+            vec![],
+            TriggerType::Keyword(module_config.keywords_alerting.clone()),
+            Some("error"),
+            module_config.clone(),
+            alerting_processor,
+        ),
+        ModuleInfo::new(
+            "alerts_purge",
+            "reset the firing alerts to empty state",
+            vec![Acl::Room(module_config.rooms_purge.clone())],
+            TriggerType::Keyword(module_config.keywords_purge.clone()),
+            Some("error purging state"),
+            module_config,
+            purge_processor,
+        ),
+    ])
 }
 
 /// Removes entries from the list of known alerts.

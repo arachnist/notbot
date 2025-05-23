@@ -126,18 +126,15 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
     }
     drop(dbc);
 
-    let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
-    let db = ModuleInfo {
-        name: "dbstatus".s(),
-        help: "check status of database connections".s(),
-        acl: vec![],
-        trigger: TriggerType::Keyword(vec!["db".s()]),
-        channel: tx,
-        error_prefix: Some("error getting database status".s()),
-    };
-    db.spawn(rx, module_config, dbstatus);
-
-    Ok(vec![db])
+    Ok(vec![ModuleInfo::new(
+        "dbstatus",
+        "check status of database connections",
+        vec![],
+        TriggerType::Keyword(vec!["db".s()]),
+        Some("error getting database status"),
+        module_config,
+        dbstatus,
+    )])
 }
 
 /// Check status of database connections in the chat room.

@@ -593,29 +593,26 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
     info!("registering modules");
     let module_config: ModuleConfig = config.typed_module_config(module_path!())?;
 
-    let (addtx, addrx) = mpsc::channel::<ConsumerEvent>(1);
-    let add = ModuleInfo {
-        name: "add".s(),
-        help: "add an entry to knowledge base".s(),
-        acl: vec![],
-        trigger: TriggerType::Keyword(module_config.keywords_add.clone()),
-        channel: addtx,
-        error_prefix: Some("error adding entry".s()),
-    };
-    add.spawn(addrx, module_config.clone(), add_processor);
-
-    let (removetx, removerx) = mpsc::channel::<ConsumerEvent>(1);
-    let remove = ModuleInfo {
-        name: "remove".s(),
-        help: "remove an entry to knowledge base".s(),
-        acl: vec![Acl::KlaczLevel(10)],
-        trigger: TriggerType::Keyword(module_config.keywords_remove.clone()),
-        channel: removetx,
-        error_prefix: Some("error removing entry".s()),
-    };
-    remove.spawn(removerx, module_config, remove_processor);
-
-    Ok(vec![add, remove])
+    Ok(vec![
+        ModuleInfo::new(
+            "add",
+            "add an entry to knowledge base",
+            vec![],
+            TriggerType::Keyword(module_config.keywords_add.clone()),
+            Some("error adding entry"),
+            module_config.clone(),
+            add_processor,
+        ),
+        ModuleInfo::new(
+            "remove",
+            "remove an entry from knowledge base",
+            vec![Acl::KlaczLevel(10)],
+            TriggerType::Keyword(module_config.keywords_remove.clone()),
+            Some("error removing entry"),
+            module_config,
+            remove_processor,
+        ),
+    ])
 }
 
 /// Adds entries/terms to the database.

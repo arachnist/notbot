@@ -104,28 +104,26 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
     info!("registering modules");
     let module_config: ModuleConfig = config.typed_module_config(module_path!())?;
 
-    let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
-    let at = ModuleInfo {
-        name: "at".s(),
-        help: "see who is present at the hackerspace".s(),
-        acl: vec![],
-        trigger: TriggerType::Keyword(module_config.keywords.clone()),
-        channel: tx,
-        error_prefix: Some("error getting presence status".s()),
-    };
-    at.spawn(rx, module_config.clone(), at_processor);
-
-    let heatmap = ModuleInfo::new(
-        "heatmap",
-        "show activity at the hackerspace for the last week",
-        vec![],
-        TriggerType::Keyword(module_config.keywords_heatmap.clone()),
-        Some("error generating heatmap"),
-        module_config,
-        heatmap,
-    );
-
-    Ok(vec![at, heatmap])
+    Ok(vec![
+        ModuleInfo::new(
+            "at",
+            "see who is present at the hackerspace",
+            vec![],
+            TriggerType::Keyword(module_config.keywords.clone()),
+            Some("error getting presence status"),
+            module_config.clone(),
+            at_processor,
+        ),
+        ModuleInfo::new(
+            "heatmap",
+            "show activity at the hackerspace for the last week",
+            vec![],
+            TriggerType::Keyword(module_config.keywords_heatmap.clone()),
+            Some("error generating heatmap"),
+            module_config,
+            heatmap,
+        ),
+    ])
 }
 
 /// Query configured `SpaceAPI` for presence state.

@@ -18,18 +18,15 @@ pub fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
     info!("registering modules");
     let module_config: ModuleConfig = config.typed_module_config(module_path!())?;
 
-    let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
-    let sage = ModuleInfo {
-        name: "sage".s(),
-        help: "lol, lmao".s(),
-        acl: vec![],
-        trigger: TriggerType::Keyword(module_config.keywords.clone()),
-        channel: tx,
-        error_prefix: Some("failed to remove them".s()),
-    };
-    sage.spawn(rx, module_config, processor);
-
-    Ok(vec![sage])
+    Ok(vec![ModuleInfo::new(
+        "sage",
+        "lol, lmao",
+        vec![],
+        TriggerType::Keyword(module_config.keywords.clone()),
+        Some("failed to remove them"),
+        module_config,
+        processor,
+    )])
 }
 
 async fn processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {

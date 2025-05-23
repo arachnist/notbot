@@ -81,16 +81,15 @@ pub(crate) fn starter(mx: &Client, config: &Config) -> anyhow::Result<Vec<Module
     };
     tokio::task::spawn(join_consumer(join_rx, mx.clone(), autojoiner_handle));
 
-    let (leave_tx, leave_rx) = mpsc::channel::<ConsumerEvent>(1);
-    let leave = ModuleInfo {
-        name: "leave".s(),
-        help: "makes the bot leave a channel".s(),
-        acl: vec![Acl::SpecificUsers(config.admins())],
-        trigger: TriggerType::Keyword(module_config.keywords_leave.clone()),
-        channel: leave_tx,
-        error_prefix: Some("couldn't leave room".s()),
-    };
-    leave.spawn(leave_rx, module_config, leave_processor);
+    let leave = ModuleInfo::new(
+        "leave",
+        "makes the bot leave a channel",
+        vec![Acl::SpecificUsers(config.admins())],
+        TriggerType::Keyword(module_config.keywords_leave.clone()),
+        Some("couldn't leave room"),
+        module_config,
+        leave_processor,
+    );
 
     Ok(vec![join, leave])
 }
