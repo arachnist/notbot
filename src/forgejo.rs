@@ -495,13 +495,13 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
 
 pub mod activity_fmt {
     //! Formating forgejo feed activities, separated into its own module.
+    use crate::template_filters as filters;
     use crate::tools::ToStringExt;
     use askama::Template;
     use forgejo_api::structs::{Activity, ActivityOpType};
     use reqwest::Url;
     use serde_derive::Deserialize;
     use unicode_ellipsis::truncate_str;
-    use crate::template_filters as filters;
 
     /// Object for rendering a Matrix message from filtered forgejo feed results.
     #[derive(Template)]

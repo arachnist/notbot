@@ -486,7 +486,11 @@ impl ModuleInfo {
     fn mun_create_channel(lua: &Lua, name: &str, room: &Room) -> anyhow::Result<mlua::Table> {
         let (plain_tx, plain_rx) = mpsc::channel::<String>(1);
         let (html_tx, html_rx) = mpsc::channel::<(String, String)>(1);
-        tokio::task::spawn(Self::mun_send_plain(name.to_string(), room.clone(), plain_rx));
+        tokio::task::spawn(Self::mun_send_plain(
+            name.to_string(),
+            room.clone(),
+            plain_rx,
+        ));
         tokio::task::spawn(Self::mun_send_html(name.to_string(), room.clone(), html_rx));
 
         let mun_channel = lua.create_table()?;
@@ -605,8 +609,7 @@ impl PassThroughModuleInfo {
 
             let content = event.ev.content.body();
 
-            let Ok(mun_channel) =
-                ModuleInfo::mun_create_channel(&event.lua, &name, &event.room)
+            let Ok(mun_channel) = ModuleInfo::mun_create_channel(&event.lua, &name, &event.room)
             else {
                 error!("{name}: createing mun channel failed");
                 continue;

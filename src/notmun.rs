@@ -30,7 +30,10 @@ use mlua::{
     chunk,
 };
 
-#[allow(clippy::cognitive_complexity, reason = "false positive: just an iteration over directory listing + appending two vectors")]
+#[allow(
+    clippy::cognitive_complexity,
+    reason = "false positive: just an iteration over directory listing + appending two vectors"
+)]
 pub(crate) fn module_starter(
     client: &Client,
     config: &Config,
@@ -91,7 +94,11 @@ pub(crate) fn module_starter(
 ///
 /// # Errors
 /// Will return `Err` if manipulating lua tables fails, or locking of constructed modules list fails.
-#[allow(clippy::too_many_lines, clippy::cognitive_complexity, reason = "splitting this up wouldn't make sense")]
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    reason = "splitting this up wouldn't make sense"
+)]
 pub fn mun_load_plugin(
     lua: &Lua,
     config: &Config,
@@ -233,20 +240,23 @@ pub fn mun_load_plugin(
         .exec()?;
 
     let Ok(locked_modules) = modules.lock() else {
-        bail!("locking modules failed")
+        bail!("locking modules failed");
     };
-    for module in locked_modules.iter() {
-        retmodules.push(module.clone());
-    }
+    retmodules.extend(locked_modules.iter().map(std::borrow::ToOwned::to_owned));
     drop(locked_modules);
 
     let Ok(locked_passthrough) = passthrough.lock() else {
         bail!("locking passthrough failed");
     };
-    for module in locked_passthrough.iter() {
-        retpassthrough.push(module.clone());
-    }
+    retpassthrough.extend(
+        locked_passthrough
+            .iter()
+            .map(std::borrow::ToOwned::to_owned),
+    );
     drop(locked_passthrough);
+
+    let globals: &Table = &lua.globals();
+    globals.set(plugin_id, plugin_env)?;
 
     Ok((retmodules, retpassthrough))
 }
@@ -258,7 +268,10 @@ pub fn mun_load_plugin(
 ///
 /// # Errors
 /// Will return `Err` if mlua calls to manipulate the prepared env table fail.
-#[allow(clippy::cognitive_complexity, reason = "false positive: just a bunch of variable gets/sets")]
+#[allow(
+    clippy::cognitive_complexity,
+    reason = "false positive: just a bunch of variable gets/sets"
+)]
 pub fn mun_plugin_env(lua: &Lua) -> anyhow::Result<mlua::Table> {
     trace!("plugin env: initializing");
     let env_table = lua.create_table()?;
@@ -423,9 +436,7 @@ async fn lua_db_query(
     trace!("#results: {}", lua_result.len()?);
 
     trace!("constructing iterator");
-    let iter_u = lua.create_function(|_, t:Table| {
-        LuaResult::Ok(t.pop::<Table>().ok())
-    })?;
+    let iter_u = lua.create_function(|_, t: Table| LuaResult::Ok(t.pop::<Table>().ok()))?;
     let iter = iter_u.bind(&lua_result)?;
 
     LuaResult::Ok(iter)
