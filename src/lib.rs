@@ -30,6 +30,7 @@ pub mod notbottime;
 pub mod notmun;
 mod sage;
 pub mod spaceapi;
+pub mod template_filters;
 pub mod tools;
 pub mod webterface;
 pub mod wolfram;

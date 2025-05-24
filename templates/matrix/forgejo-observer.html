@@ -1,8 +1,8 @@
 {%- macro displayname(user) -%}
 {%- if user.clone().full_name.is_some() && user.clone().full_name.unwrap().is_empty() -%}
-  {{ user.clone().full_name.unwrap() | trim }}
+  {{ user.clone().full_name.unwrap() | trim | dehighlight_name }}
 {%- else -%}
-  {{ user.clone().login.unwrap() | truncate(20) }}
+  {{ user.clone().login.unwrap() | truncate(20) | dehighlight_name }}
 {%- endif -%}
 {%- endmacro -%}
 
@@ -56,7 +56,7 @@
 {%- if act_user.id.unwrap() > 0 -%}
   <a href="{{ act_user.clone().html_url.unwrap().to_string() }}">{% call displayname(act_user) %}</a>
 {%- else -%}
-  {{ act_user.login.clone().unwrap() | truncate(20) }}
+  {{ act_user.login.clone().unwrap() | truncate(20) | dehighlight_name }}
 {%- endif -%}
 {{ " has" }} {% call activity_descr(act_op) %} <a href="{{ act_repo_url.to_string() }}">{{ act_repo.name.unwrap() }}</a>
 {%- match act_op -%}
@@ -105,7 +105,7 @@
 {%- if act_user.id.unwrap() > 0 -%}
   {% call displayname(act_user) %}
 {%- else -%}
-  {{ act_user.login.clone().unwrap() | truncate(20) }}
+  {{ act_user.login.clone().unwrap() | truncate(20) | dehighlight_name }}
 {%- endif -%}
 {{ " has" }} {% call activity_descr(act_op) %} {{ act_repo.name.unwrap() }}
 {%- match act_op -%}

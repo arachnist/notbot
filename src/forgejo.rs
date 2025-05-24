@@ -47,6 +47,7 @@
 //! Provides updates about configured events to configured rooms.
 
 use crate::prelude::*;
+use crate::template_filters as filters;
 
 use std::fmt::Debug;
 
@@ -500,6 +501,7 @@ pub mod activity_fmt {
     use reqwest::Url;
     use serde_derive::Deserialize;
     use unicode_ellipsis::truncate_str;
+    use crate::template_filters as filters;
 
     /// Object for rendering a Matrix message from filtered forgejo feed results.
     #[derive(Template)]

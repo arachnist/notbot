@@ -26,6 +26,7 @@
 //! Worker function [`gerrit_feeds`] provides updates about new CRs to configured rooms.
 
 use crate::prelude::*;
+use crate::template_filters as filters;
 
 use gerrit_api::{ChangeInfo, gerrit_fetch};
 use tokio::time::{Duration, interval};

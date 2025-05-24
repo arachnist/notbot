@@ -4,7 +4,7 @@
 {%- if let Some(user) = item.user -%}
   {%- if let Some(name) = user.login -%}
     {%- if let Some(url) = user.html_url -%}
-      <a href="{{ url.to_string() }}">{{ name }}</a>
+      <a href="{{ url.to_string() }}">{{ name | dehighlight_name }}</a>
     {%- else -%}
       {{ name }}
     {%- endif -%}
@@ -28,7 +28,7 @@
   on {{ date.date() }}
 {%- endif ~%} {%~ if let Some(user) = item.user -%}
   {%- if let Some(name) = user.login -%}
-    {{ name }}
+    {{ name | dehighlight_name }}
   {%- endif -%}
 {%- endif ~%} {%~ if let Some(item_title) = item.title -%}
   opened:
