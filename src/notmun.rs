@@ -30,6 +30,7 @@ use mlua::{
     chunk,
 };
 
+#[allow(clippy::cognitive_complexity, reason = "false positive: just an iteration over directory listing + appending two vectors")]
 pub(crate) fn module_starter(
     client: &Client,
     config: &Config,
@@ -90,6 +91,7 @@ pub(crate) fn module_starter(
 ///
 /// # Errors
 /// Will return `Err` if manipulating lua tables fails, or locking of constructed modules list fails.
+#[allow(clippy::too_many_lines, clippy::cognitive_complexity, reason = "splitting this up wouldn't make sense")]
 pub fn mun_load_plugin(
     lua: &Lua,
     config: &Config,
@@ -179,6 +181,7 @@ pub fn mun_load_plugin(
     trace!("{plugin_id}: initializing AddHook");
     let add_hook_unbound = lua.create_function({
         let passthrough = passthrough.clone();
+        #[allow(clippy::cognitive_complexity, reason = "false positive")]
         move |_,
                   (plugin_env, event_name, name, callback): (
                 Table,
@@ -238,10 +241,10 @@ pub fn mun_load_plugin(
     drop(locked_modules);
 
     let Ok(locked_passthrough) = passthrough.lock() else {
-        bail!("locking passthrough failed")
+        bail!("locking passthrough failed");
     };
     for module in locked_passthrough.iter() {
-        retpassthrough.push(module.clone())
+        retpassthrough.push(module.clone());
     }
     drop(locked_passthrough);
 
@@ -255,6 +258,7 @@ pub fn mun_load_plugin(
 ///
 /// # Errors
 /// Will return `Err` if mlua calls to manipulate the prepared env table fail.
+#[allow(clippy::cognitive_complexity, reason = "false positive: just a bunch of variable gets/sets")]
 pub fn mun_plugin_env(lua: &Lua) -> anyhow::Result<mlua::Table> {
     trace!("plugin env: initializing");
     let env_table = lua.create_table()?;
@@ -326,33 +330,17 @@ pub fn mun_plugin_env(lua: &Lua) -> anyhow::Result<mlua::Table> {
 
         let query_unbound = lua.create_async_function(
             async move |lua,
-                        (handle, conn, statement, query_args): (
+                        (handle, _, statement, query_args): (
                 String,
                 Table,
                 String,
                 Variadic<String>,
             )| {
-                let res = lua_db_query(&lua, &handle, &statement, query_args)
+                let iter = lua_db_query(&lua, &handle, &statement, query_args)
                     .await
                     .into_lua_err()?;
 
-                conn.set("n", 0 as usize)?;
-                conn.set("res", res)?;
-
-                let iter_u = lua.create_function(|_, t: Table| {
-                    let b_res = t.get::<Vec<Table>>("res")?;
-                    let mut i_res = b_res.iter();
-                    let n = t.get::<usize>("n")?;
-
-                    let rval = i_res.nth(n).map(std::borrow::ToOwned::to_owned);
-
-                    if rval.is_some() {
-                        t.set("n", n + 1)?;
-                    }
-
-                    LuaResult::Ok(rval)
-                })?;
-                let iter = iter_u.bind(&conn)?;
+                trace!("got iterator from query");
 
                 LuaResult::Ok(iter)
             },
@@ -402,7 +390,7 @@ async fn lua_db_query(
     handle: &str,
     statement_str: &str,
     query_args: Variadic<String>,
-) -> LuaResult<Vec<Table>> {
+) -> LuaResult<mlua::Function> {
     trace!("acquiring client for {handle}");
     let client = DBPools::get_client(handle).await.into_lua_err()?;
     trace!("preparing statement with {statement_str}");
@@ -427,12 +415,33 @@ async fn lua_db_query(
             Err(_) => break,
         };
 
-        let lua_row: Table = lua_db_row_to_table(&lua, &row)?;
+        let lua_row: Table = lua_db_row_to_table(lua, &row)?;
 
         lua_result.push(lua_row);
     }
 
-    LuaResult::Ok(lua_result)
+    let res = lua.create_table()?;
+    res.set("n", 0_usize)?;
+    res.set("res", lua_result)?;
+
+    trace!("constructing iterator");
+    // excruciatingly slow hack
+    let iter_u = lua.create_function(|_, t: Table| {
+        let b_res: Vec<Table> = t.get("res")?;
+        let mut i_res = b_res.iter();
+        let n = t.get::<usize>("n")?;
+
+        let rval = i_res.nth(n).map(std::borrow::ToOwned::to_owned);
+
+        if rval.is_some() {
+            t.set("n", n + 1)?;
+        }
+
+        LuaResult::Ok(rval)
+    })?;
+    let iter = iter_u.bind(res)?;
+
+    LuaResult::Ok(iter)
 }
 
 fn lua_db_row_to_table(lua: &Lua, row: &Row) -> LuaResult<Table> {

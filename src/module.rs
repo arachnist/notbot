@@ -395,14 +395,11 @@ impl ModuleInfo {
             arity,
         ));
 
-        let acl = match maybe_klacz_level {
-            Some(i) => vec![Acl::KlaczLevel(i)],
-            None => vec![],
-        };
+        let acl = maybe_klacz_level.map_or_else(std::vec::Vec::new, |i| vec![Acl::KlaczLevel(i)]);
 
         Self {
             name: name.to_owned(),
-            help: help.unwrap_or(format!("command {name} has no help")),
+            help: help.unwrap_or_else(|| format!("command {name} has no help")),
             acl,
             trigger: TriggerType::Keyword(vec![name.to_owned()]),
             channel: tx,
@@ -478,7 +475,7 @@ impl ModuleInfo {
             bail!("Please provide an argument.");
         }
 
-        let mun_channel = Self::mun_create_channel(&event.lua, name.to_owned(), &event.room)?;
+        let mun_channel = Self::mun_create_channel(&event.lua, name, &event.room)?;
 
         processor
             .call_async::<()>((event.sender.as_str(), mun_channel, lua_args.join(" ")))
@@ -486,11 +483,11 @@ impl ModuleInfo {
             .map_err(|le| anyhow::anyhow!("mun command error: {le}"))
     }
 
-    fn mun_create_channel(lua: &Lua, name: String, room: &Room) -> anyhow::Result<mlua::Table> {
+    fn mun_create_channel(lua: &Lua, name: &str, room: &Room) -> anyhow::Result<mlua::Table> {
         let (plain_tx, plain_rx) = mpsc::channel::<String>(1);
         let (html_tx, html_rx) = mpsc::channel::<(String, String)>(1);
-        tokio::task::spawn(Self::mun_send_plain(name.clone(), room.clone(), plain_rx));
-        tokio::task::spawn(Self::mun_send_html(name.clone(), room.clone(), html_rx));
+        tokio::task::spawn(Self::mun_send_plain(name.to_string(), room.clone(), plain_rx));
+        tokio::task::spawn(Self::mun_send_html(name.to_string(), room.clone(), html_rx));
 
         let mun_channel = lua.create_table()?;
         let say = lua.create_async_function(move |_, (_, message): (mlua::Table, String)| {
@@ -609,7 +606,7 @@ impl PassThroughModuleInfo {
             let content = event.ev.content.body();
 
             let Ok(mun_channel) =
-                ModuleInfo::mun_create_channel(&event.lua, name.clone(), &event.room)
+                ModuleInfo::mun_create_channel(&event.lua, &name, &event.room)
             else {
                 error!("{name}: createing mun channel failed");
                 continue;
@@ -1223,6 +1220,7 @@ pub fn init_modules(
         };
     }
 
+    #[allow(clippy::single_element_loop, reason = "future functionality")]
     for starter in [crate::kasownik::passthrough] {
         match starter(mx, config) {
             Err(e) => error!("module initialization failed fatally: {e}"),
