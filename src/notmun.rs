@@ -326,17 +326,35 @@ pub fn mun_plugin_env(lua: &Lua) -> anyhow::Result<mlua::Table> {
 
         let query_unbound = lua.create_async_function(
             async move |lua,
-                        (handle, _, statement, query_args): (
+                        (handle, conn, statement, query_args): (
                 String,
                 Table,
                 String,
                 Variadic<String>,
             )| {
-                let res = lua_db_query(lua, &handle, &statement, query_args)
+                let res = lua_db_query(&lua, &handle, &statement, query_args)
                     .await
                     .into_lua_err()?;
 
-                LuaResult::Ok(res)
+                conn.set("n", 0 as usize)?;
+                conn.set("res", res)?;
+
+                let iter_u = lua.create_function(|_, t: Table| {
+                    let b_res = t.get::<Vec<Table>>("res")?;
+                    let mut i_res = b_res.iter();
+                    let n = t.get::<usize>("n")?;
+
+                    let rval = i_res.nth(n).map(std::borrow::ToOwned::to_owned);
+
+                    if rval.is_some() {
+                        t.set("n", n + 1)?;
+                    }
+
+                    LuaResult::Ok(rval)
+                })?;
+                let iter = iter_u.bind(&conn)?;
+
+                LuaResult::Ok(iter)
             },
         )?;
         let query = query_unbound.bind(handle)?;
@@ -348,9 +366,7 @@ pub fn mun_plugin_env(lua: &Lua) -> anyhow::Result<mlua::Table> {
 
     // mun.core.plugin.API.CurrentTime
     let time: mlua::Function = g_os.get("time")?;
-    plugin.set(
-        "CurrentTime", time
-    )?;
+    plugin.set("CurrentTime", time)?;
 
     // values missing from env_table.plugin at this point vs Mun:
     // * `Register` - unused
@@ -382,11 +398,11 @@ pub fn mun_plugin_env(lua: &Lua) -> anyhow::Result<mlua::Table> {
 }
 
 async fn lua_db_query(
-    lua: Lua,
+    lua: &Lua,
     handle: &str,
     statement_str: &str,
     query_args: Variadic<String>,
-) -> LuaResult<Table> {
+) -> LuaResult<Vec<Table>> {
     trace!("acquiring client for {handle}");
     let client = DBPools::get_client(handle).await.into_lua_err()?;
     trace!("preparing statement with {statement_str}");
@@ -402,21 +418,19 @@ async fn lua_db_query(
     pin_mut!(results_stream);
 
     trace!("constructing response");
-    let lua_result = lua.create_table()?;
+
+    let mut lua_result: Vec<Table> = vec![];
 
     while let Some(result) = results_stream.next().await {
         let row: Row = match result {
             Ok(r) => r,
             Err(_) => break,
         };
-        trace!("returned row: {:#?}", row);
 
         let lua_row: Table = lua_db_row_to_table(&lua, &row)?;
 
-        lua_result.push(lua_row)?;
+        lua_result.push(lua_row);
     }
-
-    trace!("returning results {:#?}", lua_result);
 
     LuaResult::Ok(lua_result)
 }
@@ -425,8 +439,6 @@ fn lua_db_row_to_table(lua: &Lua, row: &Row) -> LuaResult<Table> {
     let lua_row: Table = lua.create_table()?;
 
     for (i, rcol) in row.columns().iter().enumerate() {
-        trace!("column type is: {:#?}", rcol.type_());
-        // lua_row.set(rcol.name(), row.get::<usize, >(i))?,
         match rcol.type_().to_owned() {
             Type::INT8 => lua_row.set(rcol.name(), row.get::<usize, i64>(i))?,
             _ => lua_row.set(rcol.name(), row.get::<usize, String>(i))?,
