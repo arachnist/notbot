@@ -37,11 +37,16 @@ use mlua::{
 pub(crate) fn module_starter(
     client: &Client,
     config: &Config,
-) -> anyhow::Result<(Vec<ModuleInfo>, Vec<PassThroughModuleInfo>)> {
+) -> anyhow::Result<(
+    Vec<ModuleInfo>,
+    Vec<PassThroughModuleInfo>,
+    Vec<anyhow::Error>,
+)> {
     let lua: Lua = Lua::new();
 
     let mut modules: Vec<ModuleInfo> = vec![];
     let mut passthrough: Vec<PassThroughModuleInfo> = vec![];
+    let mut errors: Vec<anyhow::Error> = vec![];
 
     let plugins_path = format!("{mun_path}/plugins/", mun_path = config.mun_path(),);
 
@@ -75,6 +80,7 @@ pub(crate) fn module_starter(
                     Ok(r) => r,
                     Err(e) => {
                         error!("loading plugin {plugin_id} failed: {e}");
+                        errors.push(anyhow!("{plugin_id} failed: {e}"));
                         continue;
                     }
                 };
@@ -87,7 +93,7 @@ pub(crate) fn module_starter(
 
     client.add_event_handler_context(lua);
 
-    Ok((modules, passthrough))
+    Ok((modules, passthrough, errors))
 }
 
 /// Completes setting up plugin environment, and loads a Mun plugin.

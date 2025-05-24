@@ -53,6 +53,8 @@ pub struct BotManagerInner {
 pub enum ReloadError {
     /// Configuration file failed to parse. Bot will continue running with the old configuration.
     ConfigParseError(anyhow::Error),
+    /// Some modules failed to load. Bot will try to continue running.
+    ComponentFailure(Vec<anyhow::Error>),
 }
 
 impl StdError for ReloadError {}
@@ -61,6 +63,10 @@ impl fmt::Display for ReloadError {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::ConfigParseError(e) => write!(fmt, "configuration error: {e}"),
+            Self::ComponentFailure(e) => write!(
+                fmt,
+                "configuration reloaded, but some components failed: {e:?}"
+            ),
         }
     }
 }
@@ -97,13 +103,17 @@ impl BotManagerInner {
 
         self.client
             .remove_event_handler(self.dispatcher_handle.clone());
-        let dispatcher_handle =
+        let (dispatcher_handle, module_failures) =
             crate::module::init_modules(&self.client, &self.config, self.reload_ev_tx.clone());
 
         info!("initialized modules");
         self.dispatcher_handle = dispatcher_handle;
 
-        Ok(())
+        if module_failures.is_empty() {
+            Ok(())
+        } else {
+            Err(ReloadError::ComponentFailure(module_failures))
+        }
     }
 }
 
@@ -150,7 +160,12 @@ impl BotManager {
             tokio_metrics_collector::default_runtime_collector(),
         ))?;
 
-        let dispatcher_handle = crate::module::init_modules(&client, &config, reload_ev_tx.clone());
+        let (dispatcher_handle, errors) =
+            crate::module::init_modules(&client, &config, reload_ev_tx.clone());
+
+        if !errors.is_empty() {
+            error!("initialization errors: {errors:#?}");
+        };
 
         info!("finished initializing");
 
@@ -331,10 +346,20 @@ impl BotManager {
             debug!("reload: grabbed lock");
 
             let response = match inner.reload() {
-                Ok(()) => "configuration reloaded",
-                Err(e) => {
-                    error!("reload error: {e}");
-                    "configuration parsing error, check logs"
+                Ok(()) => "configuration reloaded".to_string(),
+                Err(ReloadError::ConfigParseError(e)) => {
+                    error!("config reload error: {e}");
+                    "configuration parsing error, check logs".to_string()
+                }
+                Err(ReloadError::ComponentFailure(v)) => {
+                    error!("components failed: {v:#?}");
+                    let mut i = v.iter();
+                    let first = i.next().map(|e| e.to_owned());
+
+                    first.map_or_else(
+                        || format!("wtf? non-zero: {}, components failed, but first didn't unwrap", v.len()),
+                        |f| format!("{} componets failed; first: {:#?}", v.len(), f),
+                    )
                 }
             };
 

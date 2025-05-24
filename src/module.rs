@@ -1256,22 +1256,24 @@ pub fn init_modules(
     mx: &Client,
     config: &Config,
     reload_tx: mpsc::Sender<Room>,
-) -> EventHandlerHandle {
+) -> (EventHandlerHandle, Vec<anyhow::Error>) {
     let klacz = KlaczDB { handle: "main" };
     let mut modules: Vec<ModuleInfo> = vec![];
     let mut passthrough_modules: Vec<PassThroughModuleInfo> = vec![];
     let mut workers: Vec<WorkerInfo> = vec![];
+    let mut errors: Vec<anyhow::Error> = vec![];
 
-    let (rmod, rpass) = match crate::notmun::module_starter(mx, config) {
+    let (rmod, rpass, rerr) = match crate::notmun::module_starter(mx, config) {
         Ok(r) => r,
         Err(e) => {
             error!("loading notmun failed: {e}");
-            (vec![], vec![])
+            (vec![], vec![], vec![e])
         }
     };
 
     modules.extend(rmod);
     passthrough_modules.extend(rpass);
+    errors.extend(rerr);
 
     for starter in [
         crate::klaczdb::starter,
@@ -1286,7 +1288,10 @@ pub fn init_modules(
         crate::forgejo::starter,
     ] {
         match starter(mx, config) {
-            Err(e) => error!("module initialization failed fatally: {e}"),
+            Err(e) => {
+                error!("module initialization failed fatally: {e}");
+                errors.push(e);
+            }
             Ok(m) => modules.extend(m),
         };
     }
@@ -1294,7 +1299,10 @@ pub fn init_modules(
     #[allow(clippy::single_element_loop, reason = "future functionality")]
     for starter in [crate::kasownik::passthrough] {
         match starter(mx, config) {
-            Err(e) => error!("module initialization failed fatally: {e}"),
+            Err(e) => {
+                error!("module initialization failed fatally: {e}");
+                errors.push(e);
+            }
             Ok(m) => passthrough_modules.extend(m),
         };
     }
@@ -1306,7 +1314,10 @@ pub fn init_modules(
         crate::gerrit::workers,
     ] {
         match starter(mx, config) {
-            Err(e) => error!("module initialization failed fatally: {e}"),
+            Err(e) => {
+                error!("module initialization failed fatally: {e}");
+                errors.push(e);
+            }
             Ok(m) => workers.extend(m),
         };
     }
@@ -1328,7 +1339,7 @@ pub fn init_modules(
     mx.add_event_handler_context(passthrough_modules);
     mx.add_event_handler_context(workers);
 
-    mx.add_event_handler(dispatcher)
+    (mx.add_event_handler(dispatcher), errors)
 }
 
 /// Initializes help, list, reload, and shutdown modules.
