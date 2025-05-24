@@ -407,7 +407,7 @@ async fn lua_db_query(
 
     trace!("constructing response");
 
-    let mut lua_result: Vec<Table> = vec![];
+    let lua_result = lua.create_table()?;
 
     while let Some(result) = results_stream.next().await {
         let row: Row = match result {
@@ -417,29 +417,16 @@ async fn lua_db_query(
 
         let lua_row: Table = lua_db_row_to_table(lua, &row)?;
 
-        lua_result.push(lua_row);
+        lua_result.push(lua_row)?;
     }
 
-    let res = lua.create_table()?;
-    res.set("n", 0_usize)?;
-    res.set("res", lua_result)?;
+    trace!("#results: {}", lua_result.len()?);
 
     trace!("constructing iterator");
-    // excruciatingly slow hack
-    let iter_u = lua.create_function(|_, t: Table| {
-        let b_res: Vec<Table> = t.get("res")?;
-        let mut i_res = b_res.iter();
-        let n = t.get::<usize>("n")?;
-
-        let rval = i_res.nth(n).map(std::borrow::ToOwned::to_owned);
-
-        if rval.is_some() {
-            t.set("n", n + 1)?;
-        }
-
-        LuaResult::Ok(rval)
+    let iter_u = lua.create_function(|_, t:Table| {
+        LuaResult::Ok(t.pop::<Table>().ok())
     })?;
-    let iter = iter_u.bind(res)?;
+    let iter = iter_u.bind(&lua_result)?;
 
     LuaResult::Ok(iter)
 }
