@@ -580,11 +580,19 @@ impl PassThroughModuleInfo {
                 MessageType::Notice(_) | MessageType::Text(_) => Ok(Consumption::Passthrough),
                 _ => Ok(Consumption::Reject),
             },
+            "bot.UnknownCommand" => |_, _, _, _, _| Ok(Consumption::CommandNotFound),
             _ => |_, _, _, _, _| Ok(Consumption::Reject),
         };
 
         let (tx, rx) = mpsc::channel(1);
-        tokio::task::spawn(Self::mun_hook_consumer(rx, name.to_owned(), processor));
+        match event_type {
+            "bot.UnknownCommand" => tokio::task::spawn(Self::mun_hook_unknown_command(
+                rx,
+                name.to_owned(),
+                processor,
+            )),
+            _ => tokio::task::spawn(Self::mun_hook_consumer(rx, name.to_owned(), processor)),
+        };
 
         Self(ModuleInfo {
             name: name.to_owned(),
@@ -594,6 +602,35 @@ impl PassThroughModuleInfo {
             channel: tx,
             error_prefix: None,
         })
+    }
+
+    async fn mun_hook_unknown_command(
+        mut rx: mpsc::Receiver<ConsumerEvent>,
+        name: String,
+        processor: mlua::Function,
+    ) -> anyhow::Result<()> {
+        loop {
+            let Some(event) = rx.recv().await else {
+                warn!("{name} channel closed");
+                bail!("channel closed");
+            };
+
+            let user = event.sender.as_str();
+            let command = event.keyword;
+            let arguments = event.args.unwrap_or_else(|| "".s());
+            let Ok(mun_channel) = ModuleInfo::mun_create_channel(&event.lua, &name, &event.room)
+            else {
+                error!("{name}: createing mun channel failed");
+                continue;
+            };
+
+            if let Err(e) = processor
+                .call_async::<()>((user, mun_channel, command, arguments))
+                .await
+            {
+                error!("{name}: mun command failed: {e}");
+            };
+        }
     }
 
     async fn mun_hook_consumer(
@@ -675,6 +712,8 @@ pub enum Acl {
 /// first one checked wins.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Debug)]
 pub enum Consumption {
+    /// Run this module if we matched a non-restricted keyword, but no exclusive module matched.
+    CommandNotFound,
     /// module doesn't want this event
     Reject,
     /// module wants this event, but in a passive way; shouldn't be later rejected with ACLs (noisy)
@@ -785,7 +824,7 @@ pub async fn dispatcher(
     klacz: Ctx<KlaczDB>,
     lua: Ctx<Lua>,
 ) {
-    use Consumption::{Exclusive, Inclusive, Passthrough, Reject};
+    use Consumption::{CommandNotFound, Exclusive, Inclusive, Passthrough, Reject};
     use TriggerType::{Catchall, Keyword};
 
     let Some(ev_ts) = ev.origin_server_ts.to_system_time() else {
@@ -891,6 +930,7 @@ pub async fn dispatcher(
     };
 
     let mut run_modules: Vec<(Consumption, ModuleInfo)> = vec![];
+    let mut command_not_found: Option<ModuleInfo> = None;
     let mut consumption = Inclusive;
 
     // go through all the modules first to figure out consumption priority
@@ -953,6 +993,13 @@ pub async fn dispatcher(
 
                 run_modules.push((module_consumption, module.clone()));
             }
+            // normal module registering for command-not-found? sure
+            CommandNotFound => {
+                trace!("registering as command-not-found: {}", module.name);
+                if command_not_found.is_none() {
+                    command_not_found = Some(module.clone());
+                };
+            }
             Reject => continue,
         };
     }
@@ -960,7 +1007,7 @@ pub async fn dispatcher(
     // restricted prefixes implementation
     if consumption == Consumption::Exclusive {
         // event actually matched a prefix
-        if let Some(prefix) = prefix_selected {
+        if let Some(prefix) = prefix_selected.clone() {
             // restricted prefixes map is defined
             if let Some(map) = config.prefixes_restricted() {
                 // the matched prefix is on the list
@@ -1016,6 +1063,12 @@ pub async fn dispatcher(
                             continue;
                         }
                         Ok(Reject) => continue,
+                        Ok(CommandNotFound) => {
+                            trace!("registering command not found: {}", module.0.name);
+                            if command_not_found.is_none() {
+                                command_not_found = Some(module.0.clone());
+                            };
+                        }
                         Ok(_) => run_passthrough_modules.push(module.0.clone()),
                     },
                 };
@@ -1038,6 +1091,21 @@ pub async fn dispatcher(
                 )
                 .await;
             }
+
+            if prefix_selected.is_some_and(|e| config.prefixes().contains(&e)) {
+                if let Some(command_not_found) = command_not_found {
+                    dispatch_module(
+                        config.clone(),
+                        false,
+                        &command_not_found,
+                        klacz_level,
+                        sender.clone(),
+                        room.clone(),
+                        consumer_event.clone(),
+                    )
+                    .await;
+                };
+            };
         }
         _ => {
             debug!("skipping passthrough modules");
