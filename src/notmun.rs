@@ -102,6 +102,17 @@ pub fn mun_load_plugin(
     let passthrough: Arc<Mutex<Vec<PassThroughModuleInfo>>> = Arc::new(Mutex::new(vec![]));
     let mut retpassthrough: Vec<PassThroughModuleInfo> = vec![];
 
+    let print_unbound = lua.create_function(move |_, (plugin_id, message): (String, String)| {
+        info!("[{plugin_id}]: {message}");
+        LuaResult::Ok(())
+    })?;
+    let error_unbound = lua.create_function(move |_, (plugin_id, message): (String, String)| {
+        error!("[{plugin_id}]: {message}");
+        LuaResult::Ok(())
+    })?;
+    full_plugin_env.set("print", print_unbound.bind(plugin_id)?)?;
+    full_plugin_env.set("error", error_unbound.bind(plugin_id)?)?;
+
     let plugin_env: &Table = &full_plugin_env.get("plugin")?;
 
     trace!("{plugin_id}: initializing ConfigGet");
@@ -247,6 +258,7 @@ pub fn mun_load_plugin(
 pub fn mun_plugin_env(lua: &Lua) -> anyhow::Result<mlua::Table> {
     trace!("plugin env: initializing");
     let env_table = lua.create_table()?;
+    let globals = lua.globals();
 
     trace!("plugin env: require(string) ");
     env_table.set(
@@ -295,37 +307,14 @@ pub fn mun_plugin_env(lua: &Lua) -> anyhow::Result<mlua::Table> {
     env_table.set("json", json)?;
 
     trace!("plugin env: initializing misc sandbox functions");
-    env_table.set("print", lua.load(chunk! { print(...) }).into_function()?)?;
-    env_table.set("error", lua.load(chunk! { error(...) }).into_function()?)?;
-    env_table.set(
-        "tonumber",
-        lua.load(chunk! { tonumber(...) }).into_function()?,
-    )?;
-    env_table.set(
-        "tostring",
-        lua.load(chunk! { tostring(...) }).into_function()?,
-    )?;
-    env_table.set("pcall", lua.load(chunk! { pcall(...) }).into_function()?)?;
-    env_table.set("type", lua.load(chunk! { type(...) }).into_function()?)?;
-    env_table.set("pairs", lua.load(chunk! { pairs(...) }).into_function()?)?;
+    for funcname in ["pairs", "tonumber", "tostring", "pcall"] {
+        let func: mlua::Function = globals.get(funcname)?;
+        env_table.set(funcname, func)?;
+    }
 
     let os = &lua.create_table()?;
     os.set("time", lua.load(chunk! { os.time(...) }).into_function()?)?;
     env_table.set("os", os)?;
-
-    env_table.set(
-        "loadstring",
-        lua.load(
-            r#"return function(s)
-            if s:byte(1) == 27 then
-                return nil, "Refusing to load bytecode"
-            else
-                return loadstring(s)
-            end
-        end"#,
-        )
-        .into_function()?,
-    )?;
 
     let plugin = lua.create_table()?;
 
@@ -334,13 +323,19 @@ pub fn mun_plugin_env(lua: &Lua) -> anyhow::Result<mlua::Table> {
         let conn = lua.create_table()?;
 
         let query_unbound = lua.create_async_function(
-            async move |lua, (handle, _, statement, query_args): (String, Table, String, Variadic<String>)| {
+            async move |lua,
+                        (handle, _, statement, query_args): (
+                String,
+                Table,
+                String,
+                Variadic<String>,
+            )| {
                 let res = lua_db_query(lua, &handle, &statement, query_args)
                     .await
                     .into_lua_err()?;
 
                 LuaResult::Ok(res)
-            }
+            },
         )?;
         let query = query_unbound.bind(handle)?;
         conn.set("Query", query)?;
@@ -368,7 +363,7 @@ pub fn mun_plugin_env(lua: &Lua) -> anyhow::Result<mlua::Table> {
 
     env_table.set(
         "r_trace",
-        lua.create_function(|_, value: Value| {
+        lua.create_function(|_, value: Variadic<Value>| {
             trace!("[mun]: {value:#?}");
             Ok(())
         })?,

@@ -418,7 +418,6 @@ impl ModuleInfo {
     /// # Errors
     /// This function will return `Err` if:
     /// * the event channel is closed
-    /// * casting arity to usize fails
     pub async fn mun_command_consumer(
         mut rx: mpsc::Receiver<ConsumerEvent>,
         name: String,
@@ -431,63 +430,60 @@ impl ModuleInfo {
                 bail!("channel closed");
             };
 
-            let mut lua_args: Vec<String> = vec![];
-
-            if let Some(argstr) = event.args {
-                if arity == -1 {
-                    lua_args.push(argstr);
-                } else {
-                    let split_args = argstr.split_whitespace();
-
-                    for arg in split_args {
-                        lua_args.push(arg.to_owned());
+            if let Err(e) = Self::mun_preprocessor(&event, &name, &processor, arity).await {
+                error!("[{name}]: {e}");
+                if let Some(first) = e.to_string().lines().next() {
+                    if let Err(ee) = event
+                        .room
+                        .send(RoomMessageEventContent::text_plain(format!(
+                            "[{name}]: {first}"
+                        )))
+                        .await
+                    {
+                        error!("[{name}]: couldn't send error: {ee}");
                     }
                 }
             }
-
-            if arity == -1 && lua_args.is_empty() {
-                if let Err(e) = event
-                    .room
-                    .send(RoomMessageEventContent::text_plain(format!(
-                        "Command '{name}' expects '{arity}' arguments, got '{}'.",
-                        lua_args.len()
-                    )))
-                    .await
-                {
-                    error!("{name}: sending arity error message failed: {e}");
-                }
-
-                continue;
-            }
-
-            if arity != -1 && lua_args.len() != usize::try_from(arity)? {
-                if let Err(e) = event
-                    .room
-                    .send(RoomMessageEventContent::text_plain(format!(
-                        "Command '{name}' expects '{arity}' arguments, got '{}'.",
-                        lua_args.len()
-                    )))
-                    .await
-                {
-                    error!("{name}: sending arity error message failed: {e}");
-                }
-
-                continue;
-            }
-
-            let Ok(mun_channel) = Self::mun_create_channel(&event.lua, name.clone(), &event.room)
-            else {
-                error!("{name}: createing mun channel failed");
-                continue;
-            };
-
-            if let Err(e) = processor
-                .call_async::<()>((event.sender.as_str(), mun_channel, lua_args.join(" ")))
-                .await
-            {
-                error!("{name}: mun command failed: {e}");
-            };
         }
+    }
+
+    async fn mun_preprocessor(
+        event: &ConsumerEvent,
+        name: &str,
+        processor: &mlua::Function,
+        arity: i64,
+    ) -> anyhow::Result<()> {
+        let mut lua_args: Vec<&str> = vec![];
+
+        if let Some(argstr) = &event.args {
+            if arity == -1 {
+                lua_args.push(argstr);
+            } else {
+                let split_args = argstr.split_whitespace();
+
+                for arg in split_args {
+                    lua_args.push(arg);
+                }
+            }
+        }
+
+        if arity == -1 && lua_args.is_empty() {
+            bail!(
+                "Command '{name}' expects '{arity}' arguments, got '{}'.",
+                lua_args.len()
+            );
+        }
+
+        if arity != -1 && lua_args.len() != usize::try_from(arity)? {
+            bail!("Please provide an argument.");
+        }
+
+        let mun_channel = Self::mun_create_channel(&event.lua, name.to_owned(), &event.room)?;
+
+        processor
+            .call_async::<()>((event.sender.as_str(), mun_channel, lua_args.join(" ")))
+            .await
+            .map_err(|le| anyhow::anyhow!("mun command error: {le}"))
     }
 
     fn mun_create_channel(lua: &Lua, name: String, room: &Room) -> anyhow::Result<mlua::Table> {
