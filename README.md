@@ -48,17 +48,21 @@ In no particular order:
 * Soon: tests
 * actual web interface
 * some semi-automatic handling of web interface routes/handlers
-* ~~Soon: better ability to map between matrix user ids and hswaw members~~ Done
 * feature-gating features, especially things hswaw specific
 * using <https://github.com/clarkmcc/cel-rust> for ACLs
 * using regular expressions and/or clap for defining module arguments.
 * providing more defaults for configuration values, graceful degradation if they're not provided
-* ~~Soon: ability to explicitly enable/disable modules at runtime, preferrably in a persistent way~~ Done
-* ingesting notmun modules directly as notbot modules, with a thin rust wrapper around each one.
-  right now we're pretending to what remains of mun runtime that there's an irc connection in there somewhere.
 * Maybe: resurrecting [dyncfg](https://github.com/arachnist/dyncfg) in some form for dynamic per-room/sender configuration
 * removing `notbottime.rs`
 * See if we can get around setting `LUA_PATH` env var for mlua
 * connecting to jitsi rooms to monitor membership changes on them. might use a Go sidecar (prototype [here](https://github.com/arachnist/jitsi-go/)) for that, as it was easier to modify a [Go xmpp](https://github.com/arachnist/go-xmpp) library to speak jitsi, than modifying [xmpp-rs](https://docs.rs/xmpp/latest/xmpp/) to do the same.
 * some sort of fedi integration. did i mention there's no scope defined?
 * weather/aqi stats from the API <https://github.com/CyberDeer/InPost-Air> uses. Sensor nearest hswaw appears to be waw230m.
+
+Done:
+* 2025-05-20, ~~better ability to map between matrix user ids and hswaw members~~
+* 2025-05-21, ~~ability to explicitly enable/disable modules at runtime, preferrably in a persistent way~~
+* 2025-05-24, ~~See if we can get around setting `LUA_PATH` env var for mlua~~
+* 2025-05-24, ~~ingesting notmun modules directly as notbot modules, with a thin rust wrapper around each one.~~
+  ~~right now we're pretending to what remains of mun runtime that there's an irc connection in there somewhere.~~
+

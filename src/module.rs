@@ -381,11 +381,10 @@ impl ModuleInfo {
     #[must_use]
     pub fn new_mun_command(
         name: &str,
-        keyword: String, // Command
         arity: i64,
         processor: mlua::Function, // Callback
-        help: &str,
-        klacz_level: i64,
+        help: Option<String>,
+        maybe_klacz_level: Option<i64>,
     ) -> Self {
         let (tx, rx) = mpsc::channel(1);
 
@@ -396,11 +395,16 @@ impl ModuleInfo {
             arity,
         ));
 
+        let acl = match maybe_klacz_level {
+            Some(i) => vec![Acl::KlaczLevel(i)],
+            None => vec![],
+        };
+
         Self {
             name: name.to_owned(),
-            help: help.to_owned(),
-            acl: vec![Acl::KlaczLevel(klacz_level)],
-            trigger: TriggerType::Keyword(vec![keyword]),
+            help: help.unwrap_or(format!("command {name} has no help")),
+            acl,
+            trigger: TriggerType::Keyword(vec![name.to_owned()]),
             channel: tx,
             error_prefix: None,
         }
@@ -471,40 +475,11 @@ impl ModuleInfo {
                 continue;
             }
 
-            let (plain_tx, plain_rx) = mpsc::channel::<String>(1);
-            let (html_tx, html_rx) = mpsc::channel::<(String, String)>(1);
-            tokio::task::spawn(Self::mun_send_plain(
-                name.clone(),
-                event.room.clone(),
-                plain_rx,
-            ));
-            tokio::task::spawn(Self::mun_send_html(
-                name.clone(),
-                event.room.clone(),
-                html_rx,
-            ));
-            let Ok(mun_channel) = event.lua.create_table() else {
+            let Ok(mun_channel) = Self::mun_create_channel(&event.lua, name.clone(), &event.room)
+            else {
                 error!("{name}: createing mun channel failed");
                 continue;
             };
-            let Ok(say) = event.lua.create_function({
-                move |_, (_, message): (mlua::Table, String)| {
-                    plain_tx.blocking_send(message).into_lua_err()
-                }
-            }) else {
-                error!("{name}: creating Say function failed");
-                continue;
-            };
-            let Ok(html) = event.lua.create_function({
-                move |_, (_, plain, html): (mlua::Table, String, String)| {
-                    html_tx.blocking_send((plain, html)).into_lua_err()
-                }
-            }) else {
-                error!("{name}: creating Html function failed");
-                continue;
-            };
-            mun_channel.set("Say", say)?;
-            mun_channel.set("Html", html)?;
 
             if let Err(e) = processor
                 .call_async::<()>((event.sender.as_str(), mun_channel, lua_args.join(" ")))
@@ -513,6 +488,30 @@ impl ModuleInfo {
                 error!("{name}: mun command failed: {e}");
             };
         }
+    }
+
+    fn mun_create_channel(lua: &Lua, name: String, room: &Room) -> anyhow::Result<mlua::Table> {
+        let (plain_tx, plain_rx) = mpsc::channel::<String>(1);
+        let (html_tx, html_rx) = mpsc::channel::<(String, String)>(1);
+        tokio::task::spawn(Self::mun_send_plain(name.clone(), room.clone(), plain_rx));
+        tokio::task::spawn(Self::mun_send_html(name.clone(), room.clone(), html_rx));
+
+        let mun_channel = lua.create_table()?;
+        let say = lua.create_async_function(move |_, (_, message): (mlua::Table, String)| {
+            let tx = plain_tx.clone();
+            async move { tx.send(message).await.into_lua_err() }
+        })?;
+        let html = lua.create_async_function(
+            move |_, (_, plain, html): (mlua::Table, String, String)| {
+                let tx = html_tx.clone();
+                async move { tx.send((plain, html)).await.into_lua_err() }
+            },
+        )?;
+
+        mun_channel.set("Say", say)?;
+        mun_channel.set("Html", html)?;
+
+        Ok(mun_channel)
     }
 
     /// Short-lived plain message sender for Mun module call.
@@ -569,6 +568,66 @@ impl ModuleInfo {
 /// Exists because the matrix-rust-sdk can only hold one extra context object per type.
 #[derive(Clone)]
 pub struct PassThroughModuleInfo(pub ModuleInfo);
+
+impl PassThroughModuleInfo {
+    /// Registers a Mun hook as notbot passthrough module.
+    #[must_use]
+    pub fn new_mun_hook(
+        event_type: &str,
+        name: &str,
+        processor: mlua::Function, // Callback
+    ) -> Self {
+        // too lazy to handle other event types for now
+        let decider: CatchallDecider = match event_type {
+            "irc.Message" | "irc.Notice" => |_, _, _, content, _| match &content.msgtype {
+                MessageType::Notice(_) | MessageType::Text(_) => Ok(Consumption::Passthrough),
+                _ => Ok(Consumption::Reject),
+            },
+            _ => |_, _, _, _, _| Ok(Consumption::Reject),
+        };
+
+        let (tx, rx) = mpsc::channel(1);
+        tokio::task::spawn(Self::mun_hook_consumer(rx, name.to_owned(), processor));
+
+        Self(ModuleInfo {
+            name: name.to_owned(),
+            help: format!("Mun hook {name}"),
+            acl: vec![],
+            trigger: TriggerType::Catchall(decider),
+            channel: tx,
+            error_prefix: None,
+        })
+    }
+
+    async fn mun_hook_consumer(
+        mut rx: mpsc::Receiver<ConsumerEvent>,
+        name: String,
+        processor: mlua::Function,
+    ) -> anyhow::Result<()> {
+        loop {
+            let Some(event) = rx.recv().await else {
+                warn!("{name} channel closed");
+                bail!("channel closed");
+            };
+
+            let content = event.ev.content.body();
+
+            let Ok(mun_channel) =
+                ModuleInfo::mun_create_channel(&event.lua, name.clone(), &event.room)
+            else {
+                error!("{name}: createing mun channel failed");
+                continue;
+            };
+
+            if let Err(e) = processor
+                .call_async::<()>((event.sender.as_str(), mun_channel, content))
+                .await
+            {
+                error!("{name}: mun command failed: {e}");
+            };
+        }
+    }
+}
 
 /// Function signature for Decider function for non-keyword modules.
 ///
@@ -1139,12 +1198,16 @@ pub fn init_modules(
     let mut passthrough_modules: Vec<PassThroughModuleInfo> = vec![];
     let mut workers: Vec<WorkerInfo> = vec![];
 
-    // start moving notmun to becoming a 1st-class citizen
-    if let Err(e) = crate::notmun::module_starter(mx, config) {
-        error!("failed initializing notmun: {e}");
-    } else {
-        info!("initialized notmun");
+    let (rmod, rpass) = match crate::notmun::module_starter(mx, config) {
+        Ok(r) => r,
+        Err(e) => {
+            error!("loading notmun failed: {e}");
+            (vec![], vec![])
+        }
     };
+
+    modules.extend(rmod);
+    passthrough_modules.extend(rpass);
 
     for starter in [
         crate::klaczdb::starter,
@@ -1164,7 +1227,7 @@ pub fn init_modules(
         };
     }
 
-    for starter in [crate::kasownik::passthrough, crate::notmun::passthrough] {
+    for starter in [crate::kasownik::passthrough] {
         match starter(mx, config) {
             Err(e) => error!("module initialization failed fatally: {e}"),
             Ok(m) => passthrough_modules.extend(m),

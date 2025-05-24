@@ -21,10 +21,6 @@
 
 use crate::prelude::*;
 
-use std::ops::Add;
-
-use tokio::sync::mpsc::{Receiver, channel};
-
 use futures::pin_mut;
 use tokio_postgres::{Row, types::Type};
 use tokio_stream::StreamExt;
@@ -34,326 +30,60 @@ use mlua::{
     chunk,
 };
 
-#[derive(Clone, Deserialize)]
-struct ModuleConfig {
-    mun_path: String,
-}
+pub(crate) fn module_starter(
+    client: &Client,
+    config: &Config,
+) -> anyhow::Result<(Vec<ModuleInfo>, Vec<PassThroughModuleInfo>)> {
+    let lua: Lua = Lua::new();
 
-async fn lua_generic_dispatcher(
-    ev: AnySyncTimelineEvent,
-    client: Client,
-    room: Room,
-    lua: Ctx<Lua>,
-) -> anyhow::Result<()> {
-    let event = ev.into_full_event(room.room_id().into());
+    let mut modules: Vec<ModuleInfo> = vec![];
+    let mut passthrough: Vec<PassThroughModuleInfo> = vec![];
 
-    let target = room_name(&room);
+    let plugins_path = format!("{mun_path}/plugins/", mun_path = config.mun_path(),);
 
-    let Some(ev_ts) = event.origin_server_ts().to_system_time() else {
-        error!("event timestamp couldn't get parsed to system time");
-        return Ok(());
-    };
+    for entry in fs::read_dir(plugins_path)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "lua") {
+                let Some(fname) = path.file_name() else {
+                    error!(
+                        "wtf? tried to read a file name of a file that we already checked extension for, and failed: {:?}",
+                        path
+                    );
+                    continue;
+                };
 
-    if ev_ts.add(Duration::from_secs(10)) < SystemTime::now() {
-        trace!("received too old event: {ev_ts:?}");
-        return Ok(());
-    };
+                let Some(fname_str) = fname.to_str() else {
+                    error!("wtf? apparently not valid unicode: {:?}", fname);
+                    continue;
+                };
 
-    #[allow(clippy::single_match)]
-    match event {
-        AnyTimelineEvent::State(AnyStateEvent::RoomMember(RoomMemberEvent::Original(event))) => {
-            info!(
-                "membership change: {target} {:#?} {}",
-                event.membership_change(),
-                event.state_key
-            );
-            match event.membership_change() {
-                MembershipChange::Joined => {
-                    debug!("handling join");
-                    // needed to properly fill-up channel objects on joins
-                    if event.state_key != client.user_id().unwrap() {
-                        debug!(
-                            "event not for us: {}, {}",
-                            event.state_key,
-                            client.user_id().unwrap()
-                        );
-                        return Ok(());
-                    };
-                    debug!("calling irc:Join for {target}");
-                    lua.load(chunk! {
-                        irc:Join($target)
-                    })
-                    .exec()?;
-                }
-                MembershipChange::Invited => {
-                    trace!("membership content: {event:#?}");
-                    // needed to properly fill-up channel objects on inites
-                    if event.state_key != client.user_id().unwrap() {
-                        debug!(
-                            "event not for us: {}, {}",
-                            event.state_key,
-                            client.user_id().unwrap()
-                        );
-                        return Ok(());
-                    };
-                    debug!("calling irc:Join for {target}");
-                    lua.load(chunk! {
-                        irc:Join($target)
-                    })
-                    .exec()?;
-                }
-                _ => (),
+                let Some(plugin_id) = fname_str.strip_suffix(".lua") else {
+                    error!(
+                        "wtf? stripping extension from a file name that we already checked extension for failed: {:?}",
+                        fname
+                    );
+                    continue;
+                };
+
+                let (rmod, rpass) = match mun_load_plugin(&lua, config, plugin_id) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        error!("loading plugin {plugin_id} failed: {e}");
+                        continue;
+                    }
+                };
+
+                modules.extend(rmod);
+                passthrough.extend(rpass);
             }
         }
-        _ => (),
-    };
-
-    Ok(())
-}
-
-pub(crate) fn module_starter(client: &Client, config: &Config) -> anyhow::Result<()> {
-    let module_config: ModuleConfig = config.typed_module_config(module_path!())?;
-
-    let lua: Lua = Lua::new();
-    let lua_globals: Table = lua.globals();
-
-    initialize_lua_env(&lua, &lua_globals, &module_config)?;
-
-    let (tx, rx) = channel::<NotMunAction>(1);
-    let lua_matrix: Table = lua.create_table()?;
-
-    let proxy_tx = tx;
-
-    lua_matrix.set(
-        "Proxy",
-        lua.create_async_function(move |_, msg: Variadic<String>| {
-            let msg_tx = proxy_tx.clone();
-            async move {
-                let action: NotMunAction = msg.to_vec().try_into().into_lua_err()?;
-
-                if let Err(e) = msg_tx.send(action).await {
-                    error!("couldn't send irc message to pipe: {e}");
-                    return Err(e.into_lua_err());
-                };
-                Ok(())
-            }
-        })?,
-    )?;
-    let _ = lua_globals.set("Matrix", lua_matrix);
-
-    tokio::task::spawn(consumer(client.clone(), rx));
-
-    let startmun = Path::new(&module_config.mun_path).join("start.lua");
-    info!("startmun: {}", startmun.display());
-
-    lua.load(fs::read_to_string(startmun)?)
-        .set_name("mun start.lua")
-        .exec()?;
-
-    for room in client.joined_rooms() {
-        let name = room_name(&room);
-        lua.load(chunk! {
-            irc:Join($name)
-        })
-        .exec()?;
     }
 
     client.add_event_handler_context(lua);
 
-    Ok(()) // Ok(client.add_event_handler(lua_dispatcher))
-}
-
-#[allow(clippy::unnecessary_wraps, reason = "required by caller")]
-pub(crate) fn passthrough(mx: &Client, _: &Config) -> anyhow::Result<Vec<PassThroughModuleInfo>> {
-    info!("registering modules");
-    let lua_handler_handle = mx.add_event_handler(lua_generic_dispatcher);
-
-    let (tx, rx) = mpsc::channel::<ConsumerEvent>(1);
-    let notmun = PassThroughModuleInfo(ModuleInfo {
-        name: "notmun".s(),
-        help: "run mun runtime for fun and questionable profit".s(),
-        acl: vec![],
-        trigger: TriggerType::Catchall(|_, _, _, _, _| Ok(Consumption::Inclusive)),
-        channel: tx,
-        error_prefix: None,
-    });
-    tokio::task::spawn(join_consumer(rx, mx.clone(), lua_handler_handle));
-
-    Ok(vec![notmun])
-}
-
-async fn join_consumer(
-    mut rx: mpsc::Receiver<ConsumerEvent>,
-    mx: Client,
-    lua_handler_handle: EventHandlerHandle,
-) -> anyhow::Result<()> {
-    loop {
-        let Some(event) = rx.recv().await else {
-            warn!("channel closed");
-            info!("stopping mun handler");
-            mx.remove_event_handler(lua_handler_handle);
-            bail!("channel closed");
-        };
-        if let Err(e) = processor(event).await {
-            error!("couldn't join the room: {e}");
-        };
-    }
-}
-
-async fn processor(event: ConsumerEvent) -> anyhow::Result<()> {
-    let target = room_name(&event.room);
-    let handle_command = event.lua.load(chunk! {
-        irc:HandleCommand(...)
-    });
-
-    let (ev_type, content) = match &event.ev.content.msgtype {
-        MessageType::Notice(content) => ("irc.Notice", content.body.as_str()),
-        MessageType::Text(content) => ("irc.Message", content.body.as_str()),
-        _ => return Ok(()),
-    };
-
-    handle_command
-        .call_async::<()>((ev_type, event.sender.as_str(), target.as_str(), content))
-        .await?;
-
-    Ok(())
-}
-
-async fn consumer(client: Client, mut rx: Receiver<NotMunAction>) -> anyhow::Result<()> {
-    loop {
-        let Some(action) = rx.recv().await else {
-            return Err(NotMunError::ChannelClosed.into());
-        };
-
-        if let Err(e) = consume(&client, &action).await {
-            error!("error while consuming action: {e}");
-        }
-    }
-}
-
-async fn consume(client: &Client, action: &NotMunAction) -> anyhow::Result<()> {
-    let room = action.get_room(client).await?;
-    let target = action.get_target();
-    let reason = action.get_reason();
-
-    match action {
-        NotMunAction::Say(_, _) | NotMunAction::Notice(_, _) | NotMunAction::Html(_, _, _) => {
-            room.send(action.get_message()?).await?;
-            return Ok(());
-        }
-        NotMunAction::Kick(_, _, _) => match target {
-            Some(t) => room.kick_user(&t, reason).await?,
-            None => {
-                room.send(RoomMessageEventContent::text_plain(
-                    "sorry fam, don't know 'em",
-                ))
-                .await?;
-            }
-        },
-        NotMunAction::Ban(_, _, _) => match target {
-            Some(t) => room.ban_user(&t, reason).await?,
-            None => {
-                room.send(RoomMessageEventContent::text_plain(
-                    "sorry fam, don't know 'em",
-                ))
-                .await?;
-            }
-        },
-        NotMunAction::SetNick(_, _roomnick) => {
-            let _member_event = room
-                .get_state_event_static_for_key::<RoomMemberEventContent, UserId>(
-                    client.user_id().unwrap(),
-                )
-                .await?;
-            error!("SetNick is a work in progress");
-            // need to send an m.room.member event with `content.displayname: whatever` set
-            return Err(NotMunError::UnhandledAction(action.clone()).into());
-        }
-        NotMunAction::Invite(_, _) => {
-            return Err(NotMunError::UnhandledAction(action.clone()).into());
-        }
-    };
-
-    Ok(())
-}
-
-fn initialize_lua_env(lua: &Lua, global: &Table, config: &ModuleConfig) -> anyhow::Result<()> {
-    global.set("MUN_PATH", config.mun_path.clone())?;
-
-    global.set(
-        "async_fetch_http",
-        lua.create_async_function(|lua, uri| async move {
-            async_fetch_http(lua, uri).await.into_lua_err()
-        })?,
-    )?;
-    global.set(
-        "fetch_json",
-        lua.create_async_function(|lua, uri: String| async move {
-            let resp = reqwest::get(&uri)
-                .await
-                .and_then(reqwest::Response::error_for_status)
-                .into_lua_err()?;
-            let json = resp.json::<serde_json::Value>().await.into_lua_err()?;
-            lua.to_value(&json)
-        })?,
-    )?;
-    global.set(
-        "rust_db_query_wrapper",
-        lua.create_async_function(
-            |lua, (handle, statement, query_args): (String, String, Variadic<String>)| async move {
-                trace!(
-                    "in db query wrapper: {handle} | {statement} | {:#?}",
-                    query_args
-                );
-                let res = lua_db_query(lua, &handle, &statement, query_args)
-                    .await
-                    .into_lua_err()?;
-                trace!("returning from query wrapper: {:#?}", res);
-                LuaResult::Ok(res)
-            },
-        )?,
-    )?;
-    global.set(
-        "r_error",
-        lua.create_function(|_, value: Value| {
-            error!("[mun]: {value:#?}");
-            Ok(())
-        })?,
-    )?;
-    global.set(
-        "r_warn",
-        lua.create_function(|_, value: Value| {
-            warn!("[mun]: {value:#?}");
-            Ok(())
-        })?,
-    )?;
-    global.set(
-        "r_info",
-        lua.create_function(|_, value: Value| {
-            info!("[mun]: {value:#?}");
-            Ok(())
-        })?,
-    )?;
-    global.set(
-        "r_debug",
-        lua.create_function(|_, value: Value| {
-            debug!("[mun]: {value:#?}");
-            Ok(())
-        })?,
-    )?;
-    global.set(
-        "r_trace",
-        lua.create_function(|_, value: Value| {
-            trace!("[mun]: {value:#?}");
-            Ok(())
-        })?,
-    )?;
-    global.set(
-        "r_format",
-        lua.create_function(|_, value: Value| Ok(format!("{value:#?}")))?,
-    )?;
-
-    Ok(())
+    Ok((modules, passthrough))
 }
 
 /// Completes setting up plugin environment, and loads a Mun plugin.
@@ -364,11 +94,17 @@ pub fn mun_load_plugin(
     lua: &Lua,
     config: &Config,
     plugin_id: &str,
-) -> anyhow::Result<Vec<ModuleInfo>> {
-    let plugin_env = &mun_plugin_env(lua)?;
+) -> anyhow::Result<(Vec<ModuleInfo>, Vec<PassThroughModuleInfo>)> {
+    trace!("{plugin_id}: loading");
+    let full_plugin_env = &mun_plugin_env(lua)?;
     let modules: Arc<Mutex<Vec<ModuleInfo>>> = Arc::new(Mutex::new(vec![]));
     let mut retmodules: Vec<ModuleInfo> = vec![];
+    let passthrough: Arc<Mutex<Vec<PassThroughModuleInfo>>> = Arc::new(Mutex::new(vec![]));
+    let mut retpassthrough: Vec<PassThroughModuleInfo> = vec![];
 
+    let plugin_env: &Table = &full_plugin_env.get("plugin")?;
+
+    trace!("{plugin_id}: initializing ConfigGet");
     let config_get_unbound = lua.create_function({
         let config = config.clone();
         move |lua, (plugin, key): (String, String)| {
@@ -387,54 +123,118 @@ pub fn mun_load_plugin(
     let config_get = config_get_unbound.bind(plugin_id.to_owned())?;
     plugin_env.set("ConfigGet", config_get)?;
 
+    trace!("{plugin_id}: initializing AddCommand");
     let add_command_unbound = lua.create_function({
         let modules = modules.clone();
         move |_,
-              (plugin_env, name, keyword, arity, callback, help, klacz_level): (
+              (plugin_env, name, arity, callback, maybe_help, maybe_klacz_level): (
             Table,
-            String,
             String,
             i64,
             mlua::Function,
-            String,
-            i64,
+            Option<String>,
+            Option<i64>,
         )| {
+            trace!("{name}: loading module");
             let Ok(mut modules) = modules.lock() else {
-                return Err(mlua::Error::runtime(format!("{name}: locking modules failed")));
+                return Err(mlua::Error::runtime(format!(
+                    "{name}: locking modules failed"
+                )));
             };
 
             if !callback.set_environment(plugin_env)? {
-                return Err(mlua::Error::runtime(
-                    format!("{name}: setting sandbox env for failed"),
-                ));
+                error!("{name}: setting sandbox env for failed");
+                return Err(mlua::Error::runtime(format!(
+                    "{name}: setting sandbox env for failed"
+                )));
             };
 
             modules.push(ModuleInfo::new_mun_command(
                 &name,
-                keyword,
                 arity,
                 callback,
-                &help,
-                klacz_level,
+                maybe_help,
+                maybe_klacz_level,
             ));
             drop(modules);
+            info!("{name} module loaded");
 
             LuaResult::Ok(())
         }
     })?;
-    let add_command = add_command_unbound.bind(plugin_env)?;
+    let add_command = add_command_unbound.bind(full_plugin_env)?;
     plugin_env.set("AddCommand", add_command)?;
+
+    trace!("{plugin_id}: initializing AddHook");
+    let add_hook_unbound = lua.create_function({
+        let passthrough = passthrough.clone();
+        move |_,
+                  (plugin_env, event_name, name, callback): (
+                Table,
+                String,
+                String,
+                mlua::Function,
+            )| {
+                trace!("{name}: loading hook");
+                let Ok(mut passthrough) = passthrough.lock() else {
+                    error!("{name}: locking passthrough failed");
+                    return Err(mlua::Error::runtime(format!(
+                        "{name}: locking passthrough failed"
+                    )));
+                };
+
+                if !callback.set_environment(plugin_env)? {
+                    error!("{name}: setting sandbox env for failed");
+                    return Err(mlua::Error::runtime(format!(
+                        "{name}: setting sandbox env for failed"
+                    )));
+                };
+
+                passthrough.push(PassThroughModuleInfo::new_mun_hook(
+                    &event_name,
+                    &name,
+                    callback,
+                ));
+                drop(passthrough);
+                info!("{name} hook loaded");
+
+                LuaResult::Ok(())
+            }
+    })?;
+    let add_hook = add_hook_unbound.bind(full_plugin_env)?;
+    plugin_env.set("AddHook", add_hook)?;
+
+    full_plugin_env.set("plugin", plugin_env)?;
+
+    let plugin_path = format!(
+        "{mun_path}/plugins/{plugin_id}.lua",
+        mun_path = config.mun_path(),
+    );
+
+    info!("loading Mun plugin {plugin_id} from {plugin_path}");
+    lua.load(fs::read_to_string(plugin_path)?)
+        .set_name(plugin_id)
+        .set_environment(full_plugin_env.to_owned())
+        .set_mode(mlua::ChunkMode::Text)
+        .exec()?;
 
     let Ok(locked_modules) = modules.lock() else {
         bail!("locking modules failed")
     };
-
     for module in locked_modules.iter() {
         retmodules.push(module.clone());
     }
     drop(locked_modules);
 
-    Ok(retmodules)
+    let Ok(locked_passthrough) = passthrough.lock() else {
+        bail!("locking passthrough failed")
+    };
+    for module in locked_passthrough.iter() {
+        retpassthrough.push(module.clone())
+    }
+    drop(locked_passthrough);
+
+    Ok((retmodules, retpassthrough))
 }
 
 /// Prepares environment (lua "upvalue") for Mun plugins.
@@ -445,24 +245,29 @@ pub fn mun_load_plugin(
 /// # Errors
 /// Will return `Err` if mlua calls to manipulate the prepared env table fail.
 pub fn mun_plugin_env(lua: &Lua) -> anyhow::Result<mlua::Table> {
+    trace!("plugin env: initializing");
     let env_table = lua.create_table()?;
 
-    env_table.set(
-        "table",
-        lua.load(chunk! { require("table") })
-            .call::<mlua::Table>(())?,
-    )?;
+    trace!("plugin env: require(string) ");
     env_table.set(
         "string",
-        lua.load(chunk! { require("string") })
+        lua.load(chunk! { return require("string") })
             .call::<mlua::Table>(())?,
     )?;
+    trace!("plugin env: require(table) ");
+    env_table.set(
+        "table",
+        lua.load(chunk! { return require("table") })
+            .call::<mlua::Table>(())?,
+    )?;
+    trace!("plugin env: require(math) ");
     env_table.set(
         "math",
-        lua.load(chunk! { require("math") })
+        lua.load(chunk! { return require("math") })
             .call::<mlua::Table>(())?,
     )?;
 
+    trace!("plugin env: initializing http client");
     let http = &lua.create_table()?;
     http.set(
         "request",
@@ -473,6 +278,7 @@ pub fn mun_plugin_env(lua: &Lua) -> anyhow::Result<mlua::Table> {
     env_table.set("http", http)?;
     env_table.set("https", http)?;
 
+    trace!("plugin env: initializing json decoder");
     // why is this nested like this? idk. the lua json library originally used in Mun did this
     let json = lua.create_table()?;
     let json_decode_table = lua.create_table()?;
@@ -486,7 +292,9 @@ pub fn mun_plugin_env(lua: &Lua) -> anyhow::Result<mlua::Table> {
     })?;
     json_decode_table.set("decode", json_decode)?;
     json.set("decode", json_decode_table)?;
+    env_table.set("json", json)?;
 
+    trace!("plugin env: initializing misc sandbox functions");
     env_table.set("print", lua.load(chunk! { print(...) }).into_function()?)?;
     env_table.set("error", lua.load(chunk! { error(...) }).into_function()?)?;
     env_table.set(
@@ -498,7 +306,7 @@ pub fn mun_plugin_env(lua: &Lua) -> anyhow::Result<mlua::Table> {
         lua.load(chunk! { tostring(...) }).into_function()?,
     )?;
     env_table.set("pcall", lua.load(chunk! { pcall(...) }).into_function()?)?;
-    env_table.set("type", lua.load(chunk! { r#type(...) }).into_function()?)?;
+    env_table.set("type", lua.load(chunk! { type(...) }).into_function()?)?;
     env_table.set("pairs", lua.load(chunk! { pairs(...) }).into_function()?)?;
 
     let os = &lua.create_table()?;
@@ -507,14 +315,16 @@ pub fn mun_plugin_env(lua: &Lua) -> anyhow::Result<mlua::Table> {
 
     env_table.set(
         "loadstring",
-        lua.load(chunk! {function(s)
+        lua.load(
+            r#"return function(s)
             if s:byte(1) == 27 then
                 return nil, "Refusing to load bytecode"
             else
                 return loadstring(s)
             end
-        end})
-            .into_function()?,
+        end"#,
+        )
+        .into_function()?,
     )?;
 
     let plugin = lua.create_table()?;
@@ -524,10 +334,11 @@ pub fn mun_plugin_env(lua: &Lua) -> anyhow::Result<mlua::Table> {
         let conn = lua.create_table()?;
 
         let query_unbound = lua.create_async_function(
-            async move |lua, (handle, statement, query_args): (String, String, Variadic<String>)| {
+            async move |lua, (handle, _, statement, query_args): (String, Table, String, Variadic<String>)| {
                 let res = lua_db_query(lua, &handle, &statement, query_args)
                     .await
                     .into_lua_err()?;
+
                 LuaResult::Ok(res)
             }
         )?;
@@ -554,6 +365,18 @@ pub fn mun_plugin_env(lua: &Lua) -> anyhow::Result<mlua::Table> {
 
     env_table.set("plugin", plugin)?;
     env_table.set("_G", &env_table)?;
+
+    env_table.set(
+        "r_trace",
+        lua.create_function(|_, value: Value| {
+            trace!("[mun]: {value:#?}");
+            Ok(())
+        })?,
+    )?;
+    env_table.set(
+        "r_format",
+        lua.create_function(|_, value: Value| Ok(format!("{value:#?}")))?,
+    )?;
 
     // values missing from env_table vs Mun:
     // * `setfenv` - only used for repl, will be replaced with [`mlua::Function::set_environment`]
@@ -633,151 +456,4 @@ async fn async_fetch_http(lua: Lua, uri: String) -> anyhow::Result<(String, u16,
 
     let rval = (body, code, headers);
     Ok(rval)
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub(crate) enum NotMunAction {
-    Say(String, String),
-    Html(String, String, String),
-    Notice(String, String),
-    Invite(String, String),
-    Kick(String, String, Option<String>),
-    Ban(String, String, Option<String>),
-    SetNick(String, String),
-}
-
-impl NotMunAction {
-    async fn get_room(&self, c: &Client) -> anyhow::Result<Room> {
-        match self {
-            Self::Say(room, _)
-            | Self::Html(room, _, _)
-            | Self::Notice(room, _)
-            | Self::Invite(room, _)
-            | Self::Kick(room, _, _)
-            | Self::Ban(room, _, _)
-            | Self::SetNick(room, _) => Ok(maybe_get_room(c, room).await?),
-        }
-    }
-
-    fn get_target(&self) -> Option<OwnedUserId> {
-        match self {
-            Self::Invite(_, target) | Self::Kick(_, target, _) | Self::Ban(_, target, _) => {
-                UserId::parse(target).ok()
-            }
-            _ => None,
-        }
-    }
-
-    fn get_reason(&self) -> Option<&str> {
-        match self {
-            Self::Kick(_, _, reason) | Self::Ban(_, _, reason) => reason.as_deref(),
-            _ => None,
-        }
-    }
-
-    fn get_message(&self) -> anyhow::Result<RoomMessageEventContent> {
-        match self {
-            Self::Say(_, message) | Self::Notice(_, message) => {
-                Ok(RoomMessageEventContent::text_plain(message))
-            }
-            Self::Html(_, plain, html) => Ok(RoomMessageEventContent::text_html(plain, html)),
-            _ => Err(NotMunError::UnhandledAction(self.clone()).into()),
-        }
-    }
-}
-
-impl fmt::Display for NotMunAction {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Say(room, message) => write!(fmt, "Say: {room} <- {message}"),
-            // maybe we could detect somehow figure out how different plain/html versions are, and maybe display both if the difference is non-trivial?
-            Self::Html(room, message, _) => write!(fmt, "Html: {room} <- {message}"),
-            Self::Notice(room, message) => write!(fmt, "Notice: {room} <- {message}"),
-            Self::Invite(room, target) => {
-                write!(fmt, "Invite: {room} <- {target}")
-            }
-            Self::Kick(room, target, reason) => {
-                write!(fmt, "Kick: {room} -> {target}: {reason:?}")
-            }
-            Self::Ban(room, target, reason) => {
-                write!(fmt, "Ban: {room} !> {target}: {reason:?}")
-            }
-            Self::SetNick(room, display_name) => {
-                write!(fmt, "Present as: {room} -> {display_name}")
-            }
-        }
-    }
-}
-
-impl TryFrom<Vec<String>> for NotMunAction {
-    type Error = NotMunError;
-
-    fn try_from(msg: Vec<String>) -> Result<Self, NotMunError> {
-        let first = msg[0].clone();
-        let room = msg[1].clone();
-        match first.as_str() {
-            "Say" => {
-                let message: String = msg[2].clone();
-                Ok(Self::Say(room, message))
-            }
-            "Html" => {
-                let plain: String = msg[2].clone();
-                let html: String = msg[3].clone();
-                Ok(Self::Html(room, plain, html))
-            }
-            "Notice" => {
-                let message: String = msg[2].clone();
-                Ok(Self::Notice(room, message))
-            }
-            "Invite" => {
-                let target: String = msg[2].clone();
-                Ok(Self::Invite(room, target))
-            }
-            "Kick" => {
-                let target: String = msg[2].clone();
-                let message: Option<String> = if msg.len() >= 3 {
-                    Some(msg[3].clone())
-                } else {
-                    None
-                };
-                Ok(Self::Kick(room, target, message))
-            }
-            "Ban" => {
-                let target: String = msg[2].clone();
-                let message: Option<String> = if msg.len() >= 3 {
-                    Some(msg[3].clone())
-                } else {
-                    None
-                };
-                Ok(Self::Ban(room, target, message))
-            }
-            "SetNick" => {
-                let display_name: String = msg[2].clone();
-                Ok(Self::SetNick(room, display_name))
-            }
-            &_ => Err(NotMunError::UnknownAction),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) enum NotMunError {
-    #[allow(dead_code)]
-    NoSuchRoom(String),
-    UnknownAction,
-    UnhandledAction(NotMunAction),
-    ChannelClosed,
-}
-
-impl StdError for NotMunError {}
-
-impl fmt::Display for NotMunError {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::NoSuchRoom(e) => write!(fmt, "Couldn't get room from: {e}"),
-            Self::UnknownAction => write!(fmt, "Unknown action"),
-            Self::UnhandledAction(e) => write!(fmt, "Unhandled action: {e}"),
-            Self::ChannelClosed => write!(fmt, "Action consumer channel is closed"),
-        }
-    }
 }

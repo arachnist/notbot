@@ -66,6 +66,7 @@ struct ConfigInner {
     modules_disabled: Vec<String>,
     #[serde(default = "empty")]
     modules_fenced: Vec<String>,
+    mun_path: String,
 }
 
 const fn empty() -> Vec<String> {
@@ -139,6 +140,11 @@ impl Config {
     pub(crate) fn device_id(&self) -> String {
         let inner = &self.inner.lock().unwrap();
         inner.device_id.clone()
+    }
+
+    pub(crate) fn mun_path(&self) -> String {
+        let inner = &self.inner.lock().unwrap();
+        inner.mun_path.clone()
     }
 
     /// Prefixes bot responds to
