@@ -313,7 +313,9 @@ pub fn mun_plugin_env(lua: &Lua) -> anyhow::Result<mlua::Table> {
     }
 
     let os = &lua.create_table()?;
-    os.set("time", lua.load(chunk! { os.time(...) }).into_function()?)?;
+    let g_os: Table = globals.get("os")?;
+    let time: mlua::Function = g_os.get("time")?;
+    os.set("time", time)?;
     env_table.set("os", os)?;
 
     let plugin = lua.create_table()?;
@@ -345,9 +347,9 @@ pub fn mun_plugin_env(lua: &Lua) -> anyhow::Result<mlua::Table> {
     plugin.set("DBOpen", db_open)?;
 
     // mun.core.plugin.API.CurrentTime
+    let time: mlua::Function = g_os.get("time")?;
     plugin.set(
-        "CurrentTime",
-        lua.load(chunk! { os.time() }).into_function()?,
+        "CurrentTime", time
     )?;
 
     // values missing from env_table.plugin at this point vs Mun:
