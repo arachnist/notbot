@@ -28,6 +28,7 @@ pub mod metrics;
 pub mod module;
 pub mod notbottime;
 pub mod notmun;
+pub mod prom_query;
 mod sage;
 pub mod spaceapi;
 pub mod template_filters;

@@ -357,7 +357,12 @@ impl BotManager {
                     let first = i.next().map(|e| e.to_owned());
 
                     first.map_or_else(
-                        || format!("wtf? non-zero: {}, components failed, but first didn't unwrap", v.len()),
+                        || {
+                            format!(
+                                "wtf? non-zero: {}, components failed, but first didn't unwrap",
+                                v.len()
+                            )
+                        },
                         |f| format!("{} componets failed; first: {:#?}", v.len(), f),
                     )
                 }

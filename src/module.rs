@@ -206,7 +206,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::bail;
 use futures::Future;
-use prometheus::{IntCounterVec, IntGaugeVec, opts, register_int_counter_vec, register_int_gauge_vec};
+use prometheus::{
+    IntCounterVec, IntGaugeVec, opts, register_int_counter_vec, register_int_gauge_vec,
+};
 use tracing::{debug, error, info, trace, warn};
 
 use matrix_sdk::event_handler::{Ctx, EventHandlerHandle};
@@ -1302,6 +1304,7 @@ pub fn init_modules(
         crate::alerts::starter,
         crate::autojoiner::starter,
         crate::forgejo::starter,
+        crate::prom_query::starter,
     ] {
         match starter(mx, config) {
             Err(e) => {
