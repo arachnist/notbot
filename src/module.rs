@@ -206,7 +206,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::bail;
 use futures::Future;
-use prometheus::{IntCounterVec, opts, register_int_counter_vec};
+use prometheus::{IntCounterVec, IntGaugeVec, opts, register_int_counter_vec, register_int_gauge_vec};
 use tracing::{debug, error, info, trace, warn};
 
 use matrix_sdk::event_handler::{Ctx, EventHandlerHandle};
@@ -252,6 +252,18 @@ pub static MODULE_CHANNEL_FULL: LazyLock<IntCounterVec> = LazyLock::new(|| {
         opts!(
             "module_channel_full",
             "Number of events a module did not consume due to event channel being full"
+        ),
+        &["module"]
+    )
+    .unwrap()
+});
+
+/// Number of Mun message receivers that are alive. Should be 0 most of the time.
+pub static MUN_RECEIVERS_LIVE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
+    register_int_gauge_vec!(
+        opts!(
+            "mun_receivers_live",
+            "Number of Mun message receivers that are alive"
         ),
         &["module"]
     )
@@ -521,8 +533,10 @@ impl ModuleInfo {
         room: Room,
         mut rx: mpsc::Receiver<String>,
     ) -> anyhow::Result<()> {
+        MUN_RECEIVERS_LIVE.with_label_values(&[&name]).inc();
         loop {
             let Some(message) = rx.recv().await else {
+                MUN_RECEIVERS_LIVE.with_label_values(&[&name]).dec();
                 bail!("channel closed");
             };
 
@@ -545,8 +559,10 @@ impl ModuleInfo {
         room: Room,
         mut rx: mpsc::Receiver<(String, String)>,
     ) -> anyhow::Result<()> {
+        MUN_RECEIVERS_LIVE.with_label_values(&[&name]).inc();
         loop {
             let Some((plain, html)) = rx.recv().await else {
+                MUN_RECEIVERS_LIVE.with_label_values(&[&name]).dec();
                 bail!("channel closed");
             };
 
