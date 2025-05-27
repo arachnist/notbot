@@ -1,10 +1,14 @@
 //! Provides interfaces to query prometheus-like tsdb's.
 
 use crate::prelude::*;
+use js_int::uint;
+use matrix_sdk::attachment::{AttachmentConfig, AttachmentInfo, BaseImageInfo};
+
 use askama::Template;
 use chrono::{DateTime, Utc};
-// use plotters::{prelude::*, style::full_palette::PURPLE_A400};
+use plotters::prelude::*;
 use serde::Deserialize;
+use tempfile::Builder;
 
 /// Configuration for known VictoriaMetrics/Prometheus instances
 #[derive(Clone, Debug, Deserialize)]
@@ -14,13 +18,20 @@ pub struct PromQueryConfig {
     /// Named instances and their names
     pub instances: HashMap<String, String>,
     #[serde(default = "keywords")]
-    /// Keywords the module will respond to. Default are `prom`, `env`, and `env-dc`
+    /// Keywords the query module will respond to. Default are `prom`, `env`, and `env-dc`
     /// If a keyword matches a defined query name, that query is used.
     pub keywords: Vec<String>,
+    /// Default directory for temporary graph images. Default is `./`
+    #[serde(default = "graph_tmp_dir")]
+    pub graph_tmp_dir: String,
 }
 
 fn keywords() -> Vec<String> {
     vec!["prom".s(), "env".s(), "env-dc".s()]
+}
+
+fn graph_tmp_dir() -> String {
+    "./".s()
 }
 
 /// Actual named query.
@@ -73,10 +84,7 @@ async fn query(event: ConsumerEvent, config: PromQueryConfig) -> anyhow::Result<
         }
     };
 
-    let instance = match config.instances.get(&q.instance) {
-        Some(i) => i,
-        None => &q.instance,
-    };
+    let instance = config.instances.get(&q.instance).map_or(&q.instance, |i| i);
 
     let client = reqwest::ClientBuilder::new()
         .redirect(reqwest::redirect::Policy::none())
@@ -109,27 +117,13 @@ async fn query(event: ConsumerEvent, config: PromQueryConfig) -> anyhow::Result<
 }
 
 async fn graph(event: ConsumerEvent, config: PromQueryConfig) -> anyhow::Result<()> {
-    let maybe_args = match event.args {
-        Some(a) => a,
-        None => bail!("missing arguments: <query> [time range]"),
-    };
+    let Some(maybe_args) = event.args else { bail!("missing arguments: <query> [time range]") };
 
-    let mut args = maybe_args.trim().split_whitespace();
+    let mut args = maybe_args.split_whitespace();
 
-    let maybe_query_name = match args.next() {
-        Some(n) => n,
-        None => bail!("missing or arguments: <query> [time range]"),
-    };
-
-    let query = match config.queries.get(maybe_query_name) {
-        Some(q) => q,
-        None => bail!("no configured query matched"),
-    };
-
-    let instance = match config.instances.get(&query.instance) {
-        Some(i) => i,
-        None => &query.instance,
-    };
+    let Some(maybe_query_name) = args.next() else { bail!("missing or arguments: <query> [time range]") };
+    let Some(query) = config.queries.get(maybe_query_name) else { bail!("no configured query matched") };
+    let instance = config.instances.get(&query.instance).map_or(&query.instance, |i| i);
 
     let mut tr_parts = vec![];
 
@@ -165,14 +159,40 @@ async fn graph(event: ConsumerEvent, config: PromQueryConfig) -> anyhow::Result<
         QueryResponse::Error { error_type, error } => bail!("query failed: {error_type}: {error}"),
     };
 
-    data.graph()?;
+    let normalized = data.normalize();
 
-    event
-        .room
-        .send(RoomMessageEventContent::text_plain(
-            "sorry, WIP. but if we got here, at least the query worked",
-        ))
-        .await?;
+    for metric in normalized {
+        let named_tempfile = Builder::new()
+            .prefix("notbot-prom-")
+            .suffix(".png")
+            .rand_bytes(5)
+            .tempfile_in(config.graph_tmp_dir.clone())?;
+
+        match QueryData::graph(&named_tempfile, &metric) {
+            Ok(()) => (),
+            Err(e) => {
+                error!("graphing failed: {e}");
+                continue;
+            }
+        };
+
+        let image = fs::read(named_tempfile)?;
+
+        let attachment_config = AttachmentConfig::new()
+            .caption(metric.0.get("property").cloned())
+            .info(AttachmentInfo::Image(BaseImageInfo {
+                height: Some(uint!(330)),
+                width: Some(uint!(1010)),
+                ..Default::default()
+            }));
+
+        trace!("sending image");
+
+        event
+            .room
+            .send_attachment("graph.png", &mime::IMAGE_PNG, image, attachment_config)
+            .await?;
+    }
 
     Ok(())
 }
@@ -208,7 +228,7 @@ pub enum SeriesVariant {
 }
 
 impl SeriesVariant {
-    /// Normalizes the returned SeriesVariant into a more Matrix-like structure.
+    /// Normalizes the returned `SeriesVariant` into a more Matrix-like structure.
     ///
     /// Attempts to parse the timestamps and values in the returned datapoints, and will
     /// skip any that don't parse. This may result in returned values vector being empty.
@@ -216,20 +236,18 @@ impl SeriesVariant {
     /// # TODO:
     /// It would probably be better to normalize the datapoints when deserializing, with
     /// a serde visitor.
+    #[must_use]
+    #[allow(clippy::type_complexity)]
     pub fn normalize(&self) -> (HashMap<String, String>, Vec<(DateTime<Utc>, f64)>) {
         match self {
-            SeriesVariant::Vector { metric, value } => {
-                if let Some(dp) = Self::normalize_datapoint(&value) {
-                    (metric.clone(), vec![dp])
-                } else {
-                    (metric.clone(), vec![])
-                }
+            Self::Vector { metric, value } => {
+                Self::normalize_datapoint(value).map_or_else(|| (metric.clone(), vec![]), |dp| (metric.clone(), vec![dp]))
             }
-            SeriesVariant::Matrix { metric, values } => {
+            Self::Matrix { metric, values } => {
                 let mut rval: Vec<(DateTime<Utc>, f64)> = vec![];
 
                 for value in values {
-                    if let Some(dp) = Self::normalize_datapoint(&value) {
+                    if let Some(dp) = Self::normalize_datapoint(value) {
                         rval.push(dp);
                     }
                 }
@@ -240,7 +258,9 @@ impl SeriesVariant {
     }
 
     fn normalize_datapoint(dp: &(f64, String)) -> Option<(DateTime<Utc>, f64)> {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let secs = dp.0.trunc() as i64;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let nsecs = (dp.0.fract() * 1_000_000_000_f64) as u32;
 
         let dt = DateTime::from_timestamp(secs, nsecs)?;
@@ -268,6 +288,8 @@ pub struct QueryData {
 
 impl QueryData {
     /// Normalizes the data to equivalent of the Matrix variant to make things easier to work with.
+    #[must_use]
+    #[allow(clippy::type_complexity)]
     pub fn normalize(&self) -> Vec<(HashMap<String, String>, Vec<(DateTime<Utc>, f64)>)> {
         let mut retv = vec![];
 
@@ -279,8 +301,46 @@ impl QueryData {
     }
 
     /// Graph the returned timeseries data.
-    pub fn graph(self) -> anyhow::Result<()> {
-        let _data = self.normalize();
+    /// # Errors
+    /// Will return `Err` if provided data is empty, it's impossible
+    /// to find minimum/maximum values, or drawing operations fail.
+    #[allow(clippy::type_complexity)]
+    pub fn graph(
+        named_tempfile: &tempfile::NamedTempFile,
+        normalized: &(HashMap<String, String>, Vec<(DateTime<Utc>, f64)>),
+    ) -> anyhow::Result<()> {
+        let root = BitMapBackend::new(&named_tempfile, (1010, 330)).into_drawing_area();
+        root.fill(&WHITE)?;
+
+        trace!("file: {named_tempfile:#?}");
+
+        let Some(first) = normalized.1.first() else { bail!("empty data") };
+        let Some(last) = normalized.1.last() else { bail!("empty data") };
+
+        #[allow(clippy::cast_possible_truncation)]
+        let min = normalized
+            .1
+            .iter()
+            .min_by_key(|e| e.1 as i64 - 1)
+            .ok_or_else(|| anyhow!("cannot find minimum value in data"))?;
+        #[allow(clippy::cast_possible_truncation)]
+        let max = normalized
+            .1
+            .iter()
+            .max_by_key(|e| e.1 as i64 + 1)
+            .ok_or_else(|| anyhow!("cannot find maximum value in data"))?;
+
+        let mut chart = ChartBuilder::on(&root)
+            .margin(10)
+            .set_label_area_size(LabelAreaPosition::Left, 30)
+            .set_label_area_size(LabelAreaPosition::Bottom, 30)
+            .build_cartesian_2d(first.0..last.0, min.1..max.1)?;
+
+        chart.configure_mesh().x_labels(15).y_labels(5).draw()?;
+
+        chart.draw_series(LineSeries::new(normalized.1.clone(), &BLUE))?;
+
+        root.present()?;
 
         Ok(())
     }

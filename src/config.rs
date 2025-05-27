@@ -42,7 +42,9 @@ impl fmt::Display for ConfigError {
             Parse(e) => write!(fmt, "parsing error: {e}"),
             NoModuleConfig(e) => write!(fmt, "No configuration for module: {e}"),
             InnerLockError => write!(fmt, "Locking inner config failed"),
-            ModuleConfigDeserialize(m) => write!(fmt, "Module configuration failed deserialization: {m}"),
+            ModuleConfigDeserialize(m) => {
+                write!(fmt, "Module configuration failed deserialization: {m}")
+            }
         }
     }
 }
@@ -303,12 +305,9 @@ impl Config {
             return Err(ConfigError::NoModuleConfig(n.to_owned()));
         };
 
-        inner.module[n]
-            .clone()
-            .try_into()
-            .map_err(|e| {
-                error!("failed to deserialize {n}: {e}");
-                ConfigError::ModuleConfigDeserialize(n.to_owned())
-            })
+        inner.module[n].clone().try_into().map_err(|e| {
+            error!("failed to deserialize {n}: {e}");
+            ConfigError::ModuleConfigDeserialize(n.to_owned())
+        })
     }
 }
