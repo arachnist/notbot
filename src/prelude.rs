@@ -21,7 +21,7 @@ pub use std::{fs, io, path::Path};
 
 pub use core::{error::Error as StdError, fmt};
 
-pub use anyhow::{anyhow, bail};
+pub use anyhow::{anyhow, bail, Context};
 
 pub use matrix_sdk::event_handler::{Ctx, EventHandlerHandle};
 pub use matrix_sdk::ruma::events::room::{
