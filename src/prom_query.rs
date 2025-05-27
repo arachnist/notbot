@@ -336,7 +336,7 @@ impl QueryData {
             .set_label_area_size(LabelAreaPosition::Bottom, 30)
             .build_cartesian_2d(first.0..last.0, min.1..max.1)?;
 
-        chart.configure_mesh().x_labels(15).y_labels(5).draw()?;
+        chart.configure_mesh().x_labels(8).y_labels(5).draw()?;
 
         chart.draw_series(LineSeries::new(normalized.1.clone(), &BLUE))?;
 
