@@ -1,5 +1,23 @@
-{%- block formatted -%}
-{%- endblock -%}
-
-{%- block plain -%}
-{%- endblock -%}
+{%- for (metric, values) in self.normalize() -%}
+	{%- if values.is_empty() -%}
+		{%- continue -%}
+	{%- endif -%}
+	{%- if let Some(name) = metric.get("name") -%}
+		{%- match name.as_str() -%}
+			{%- when "ambient-dcr01" -%}
+				{%- if let Some(propname) = metric.get("property") -%}
+					{%- match propname.as_str() -%}
+						{%- when "degree" -%}
+							temperature: {% for value in values -%} {{ value.1 }}° {% endfor -%}
+						{%- endwhen -%}
+						{%- when "humidity" -%}
+							humidity: {% for value in values -%} {{ value.1 }}% {% endfor -%}
+						{%- endwhen -%}
+						{%- when _ -%}{%- endwhen -%}
+					{%- endmatch -%}
+				{%- endif -%}
+			{%- endwhen -%}
+			{%- when _ -%} sorry, query not yet handled in rendering template {%- endwhen -%}
+		{%- endmatch -%}
+	{%- endif -%}
+{%- endfor -%}
