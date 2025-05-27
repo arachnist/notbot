@@ -84,10 +84,6 @@ async fn query(event: ConsumerEvent, config: PromQueryConfig) -> anyhow::Result<
         .context("building http client:")?;
 
     let params = [("query", q.query.clone())];
-    trace!(
-        "query: {params:#?}, client: {client:#?}, instance: {:#?}",
-        q.instance.clone()
-    );
 
     let response: QueryResponse = client
         .post(instance)
@@ -104,9 +100,8 @@ async fn query(event: ConsumerEvent, config: PromQueryConfig) -> anyhow::Result<
         QueryResponse::Error { error_type, error } => bail!("query failed: {error_type}: {error}"),
     };
 
-    let plain = data.as_plain().render()?;
-    let formatted = data.as_formatted().render()?;
-    let message = RoomMessageEventContent::text_html(plain, formatted);
+    let plain = data.render()?;
+    let message = RoomMessageEventContent::text_plain(plain);
 
     event.room.send(message).await?;
 
@@ -221,13 +216,13 @@ impl SeriesVariant {
     /// # TODO:
     /// It would probably be better to normalize the datapoints when deserializing, with
     /// a serde visitor.
-    pub fn normalize(self) -> (HashMap<String, String>, Vec<(DateTime<Utc>, f64)>) {
+    pub fn normalize(&self) -> (HashMap<String, String>, Vec<(DateTime<Utc>, f64)>) {
         match self {
             SeriesVariant::Vector { metric, value } => {
                 if let Some(dp) = Self::normalize_datapoint(&value) {
-                    (metric, vec![dp])
+                    (metric.clone(), vec![dp])
                 } else {
-                    (metric, vec![])
+                    (metric.clone(), vec![])
                 }
             }
             SeriesVariant::Matrix { metric, values } => {
@@ -239,7 +234,7 @@ impl SeriesVariant {
                     }
                 }
 
-                (metric, rval)
+                (metric.clone(), rval)
             }
         }
     }
@@ -249,6 +244,7 @@ impl SeriesVariant {
         let nsecs = (dp.0.fract() * 1_000_000_000_f64) as u32;
 
         let dt = DateTime::from_timestamp(secs, nsecs)?;
+
         let value = dp.1.parse().ok()?;
 
         Some((dt, value))
@@ -272,22 +268,19 @@ pub struct QueryData {
 
 impl QueryData {
     /// Normalizes the data to equivalent of the Matrix variant to make things easier to work with.
-    pub fn normalize(self) -> Vec<(HashMap<String, String>, Vec<(f64, f64)>)> {
+    pub fn normalize(&self) -> Vec<(HashMap<String, String>, Vec<(DateTime<Utc>, f64)>)> {
         let mut retv = vec![];
 
-        for elem in self.result {
-            match elem {
-                SeriesVariant::Vector { metric, value, .. } => retv.push((metric, vec![value])),
-                SeriesVariant::Matrix { metric, values, .. } => retv.push((metric, values)),
-            }
+        for elem in &self.result {
+            retv.push(elem.normalize());
         }
 
-        vec![]
+        retv
     }
 
     /// Graph the returned timeseries data.
     pub fn graph(self) -> anyhow::Result<()> {
-        let _data: Vec<(HashMap<String, String>, Vec<(f64, f64)>)> = self.normalize();
+        let _data = self.normalize();
 
         Ok(())
     }
