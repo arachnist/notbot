@@ -117,13 +117,22 @@ async fn query(event: ConsumerEvent, config: PromQueryConfig) -> anyhow::Result<
 }
 
 async fn graph(event: ConsumerEvent, config: PromQueryConfig) -> anyhow::Result<()> {
-    let Some(maybe_args) = event.args else { bail!("missing arguments: <query> [time range]") };
+    let Some(maybe_args) = event.args else {
+        bail!("missing arguments: <query> [time range]")
+    };
 
     let mut args = maybe_args.split_whitespace();
 
-    let Some(maybe_query_name) = args.next() else { bail!("missing or arguments: <query> [time range]") };
-    let Some(query) = config.queries.get(maybe_query_name) else { bail!("no configured query matched") };
-    let instance = config.instances.get(&query.instance).map_or(&query.instance, |i| i);
+    let Some(maybe_query_name) = args.next() else {
+        bail!("missing or arguments: <query> [time range]")
+    };
+    let Some(query) = config.queries.get(maybe_query_name) else {
+        bail!("no configured query matched")
+    };
+    let instance = config
+        .instances
+        .get(&query.instance)
+        .map_or(&query.instance, |i| i);
 
     let mut tr_parts = vec![];
 
@@ -240,9 +249,8 @@ impl SeriesVariant {
     #[allow(clippy::type_complexity)]
     pub fn normalize(&self) -> (HashMap<String, String>, Vec<(DateTime<Utc>, f64)>) {
         match self {
-            Self::Vector { metric, value } => {
-                Self::normalize_datapoint(value).map_or_else(|| (metric.clone(), vec![]), |dp| (metric.clone(), vec![dp]))
-            }
+            Self::Vector { metric, value } => Self::normalize_datapoint(value)
+                .map_or_else(|| (metric.clone(), vec![]), |dp| (metric.clone(), vec![dp])),
             Self::Matrix { metric, values } => {
                 let mut rval: Vec<(DateTime<Utc>, f64)> = vec![];
 
@@ -314,8 +322,12 @@ impl QueryData {
 
         trace!("file: {named_tempfile:#?}");
 
-        let Some(first) = normalized.1.first() else { bail!("empty data") };
-        let Some(last) = normalized.1.last() else { bail!("empty data") };
+        let Some(first) = normalized.1.first() else {
+            bail!("empty data")
+        };
+        let Some(last) = normalized.1.last() else {
+            bail!("empty data")
+        };
 
         #[allow(clippy::cast_possible_truncation)]
         let min = normalized

@@ -36,6 +36,7 @@ use tokio::sync::{
     mpsc,
     mpsc::{Receiver, Sender},
 };
+use tokio::time::sleep;
 
 /// State holding structure for [`BotManager`]
 pub struct BotManagerInner {
@@ -154,7 +155,19 @@ impl BotManager {
         client.add_event_handler(Self::message_logger);
 
         debug!("performing initial sync");
-        client.sync_once(sync_settings.clone()).await?;
+        let mut delay = 2000_f64;
+        while let Err(e) = client.sync_once(sync_settings.clone()).await {
+            error!("initial sync failed: {e}");
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "precision isn't critical here"
+            )]
+            sleep(Duration::from_millis(delay.round() as u64)).await;
+            if delay < 200.0 {
+                delay *= 1.41;
+            };
+        }
 
         prometheus::default_registry().register(Box::new(
             tokio_metrics_collector::default_runtime_collector(),
