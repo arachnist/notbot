@@ -376,7 +376,6 @@ pub(crate) fn workers(mx: &Client, config: &Config) -> anyhow::Result<Vec<Worker
 /// Will return `Err` if:
 /// * module is misconfigured
 /// * configuration behaves weirdly at runtime
-/// *
 pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::Result<()> {
     let mut interval = interval(Duration::from_secs(60 * module_config.feed_interval));
     // (instance name, org)
@@ -466,6 +465,12 @@ pub async fn forgejo_feeds(mx: Client, module_config: ForgejoConfig) -> anyhow::
             if potentially_pushed_activities.is_empty() {
                 continue;
             }
+
+            let potentially_pushed_activities = potentially_pushed_activities
+                .iter()
+                .rev()
+                .map(std::borrow::ToOwned::to_owned)
+                .collect();
 
             let render_feed = activity_fmt::RenderFeed {
                 items: potentially_pushed_activities,
