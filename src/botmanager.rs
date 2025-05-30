@@ -1,13 +1,13 @@
 //! Main bot structure
 //!
-//! Handles the event loop, reloads, logging, and holding Matrix client state.
+//! Handles the event loop, reloads, logging, invites, and holding Matrix client state.
 
 use core::{error::Error as StdError, fmt};
 
 use std::fs;
 use std::ops::Add;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, SystemTime};
 
 use crate::config::Config;
@@ -17,9 +17,10 @@ use matrix_sdk::{
     Client, Error as MatrixError, LoopCtrl, Room,
     authentication::matrix::MatrixSession,
     config::SyncSettings,
-    event_handler::EventHandlerHandle,
-    ruma::events::room::message::{
-        MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
+    event_handler::{Ctx, EventHandlerHandle},
+    ruma::events::room::{
+        member::StrippedRoomMemberEvent,
+        message::{MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent},
     },
 };
 
@@ -37,6 +38,13 @@ use tokio::sync::{
     mpsc::{Receiver, Sender},
 };
 use tokio::time::sleep;
+
+use prometheus::Counter;
+use prometheus::{opts, register_counter};
+
+static ROOM_INVITES: LazyLock<Counter> = LazyLock::new(|| {
+    register_counter!(opts!("room_invite_events_total", "Number of room invites",)).unwrap()
+});
 
 /// State holding structure for [`BotManager`]
 pub struct BotManagerInner {
@@ -153,6 +161,7 @@ impl BotManager {
         }
 
         client.add_event_handler(Self::message_logger);
+        client.add_event_handler(Self::autojoiner);
 
         debug!("performing initial sync");
         let mut delay = 2000_f64;
@@ -388,6 +397,66 @@ impl BotManager {
                 error!("sending reload status failed: {e}");
             };
         }
+    }
+
+    /// Listens for invitation events, and joins the appropriate room if the room id is from one of the permitted homeservers.
+    ///
+    /// # Errors
+    /// Will return `Err` if:
+    /// * invite not ment for us
+    /// * retrieving room server name fails
+    /// * room is on wrong homeserver
+    pub async fn autojoiner(
+        room_member: StrippedRoomMemberEvent,
+        client: Client,
+        room: Room,
+        config: Ctx<Config>,
+    ) -> anyhow::Result<()> {
+        // ignore invites not meant for us
+        if room_member.state_key
+            != client
+                .user_id()
+                .ok_or_else(|| anyhow::anyhow!("missing our own userid!?"))?
+        {
+            bail!("invite not ment for us");
+        }
+
+        let Some(room_homeserver) = &room.room_id().server_name() else {
+            bail!("retrieving room server name fails");
+        };
+
+        if !config
+            .trusted_homeservers()
+            .contains(&room_homeserver.to_string())
+        {
+            bail!("room is on wrong homeserver");
+        };
+
+        ROOM_INVITES.inc();
+
+        info!("Autojoining room {}", room.room_id());
+        let mut delay = 2;
+
+        while let Err(err) = room.join().await {
+            // retry autojoin due to synapse sending invites, before the
+            // invited user can join for more information see
+            // https://github.com/matrix-org/synapse/issues/4345
+            error!(
+                "Failed to join room {} ({err:?}), retrying in {delay}s",
+                room.room_id()
+            );
+
+            sleep(Duration::from_secs(delay)).await;
+            delay *= 2;
+
+            if delay > 3600 {
+                error!("Can't join room {} ({err:?})", room.room_id());
+                break;
+            }
+        }
+        trace!("Successfully joined room {}", room.room_id());
+
+        Ok(())
     }
 }
 

@@ -69,6 +69,7 @@ struct ConfigInner {
     #[serde(default = "empty")]
     modules_fenced: Vec<String>,
     mun_path: String,
+    trusted_homeservers: Vec<String>,
 }
 
 const fn empty() -> Vec<String> {
@@ -230,6 +231,18 @@ impl Config {
     pub fn modules_fenced(&self) -> Vec<String> {
         let inner = &self.inner.lock().unwrap();
         inner.modules_fenced.clone()
+    }
+
+    /// Trusted homeservers.
+    ///
+    /// Homeservers we will, for example, accept room invites from.
+    ///
+    /// # Panics
+    /// Will panic if acquiring mutex on inner configuration structure fails.
+    #[must_use]
+    pub fn trusted_homeservers(&self) -> Vec<String> {
+        let inner = &self.inner.lock().unwrap();
+        inner.trusted_homeservers.clone()
     }
 
     /// Disable a module.
