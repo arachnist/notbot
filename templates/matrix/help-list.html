@@ -35,3 +35,49 @@
   {%- for name in w_names.0 %} {{ name }}{%- endfor -%}
 {%- endif -%}{%- if mod_names.1 || pmod_names.1 || w_names.1 -%}; modules marked with * stopped working {%- endif -%}
 {%- endblock -%}
+
+{%- block wiki -%}
+<pre data-md="```">
+<code class="language-dokuwiki">
+{%- set mods = sorted_modules() -%}
+{%- set pmods = sorted_passthrough() -%}
+{%- set workers = sorted_workers() -%}
+{%- if set Some(cfg) = config -%}
+==== Prefixes ====<br/>
+Command prefixes are characters or words the bot will expect the active commands on the beginning of the line. Configured prefixes are:<br/>
+{%- for prefix in cfg.prefixes() -%}
+{{ "  * " }}''{{ prefix }}''<br/>
+{%- endfor -%}<br/>
+{%- if set Some(restricted) = cfg.prefixes_restricted() -%}
+There are also some restricted prefixes configred, that are to be used when the bot is directly replacing a functionality of another bot, that is still present on shared channels. These prefixes will only work with certain modules:<br/>
+{%- for (prefix, mod_names) in restricted -%}
+{{ "  * " }}''{{ prefix }}'' - modules: {%- for mod_n in mod_names -%}{{ " " }}{{ mod_n }}{%- endfor -%}<br/>
+{%- endfor -%}
+{%- endif -%}
+{%- endif -%}
+<br/>
+==== Active modules ====<br/>
+Modules that will - per convention - actively respond to and "consume" specific events, usually prefixed keywords:<br/>
+{%- for module in mods -%}
+{{ "  * " }}''{{ module.name }}'': {{ module.help }}
+{%- if set TriggerType::Keyword(v) = module.trigger -%}
+; keyword{{ v.len() | pluralize }}:{% for kw in v %} ''{{ kw }}''{%- endfor -%}
+{%- endif -%}
+<br/>
+{%- endfor -%}
+<br/>
+==== Passthrough modules ====<br/>
+Modules that will only consume events if none of the "active" modules consumed an event in an "exclusive" manner:<br/>
+{%- for module in pmods -%}
+{{ "  * " }}''{{ module.name }}'': {{ module.help }}<br/>
+{%- endfor -%}
+<br/>
+==== Workers ====<br/>
+A special type of module that will usually not respond directly to any Matrix event, and instead will act on some external events, eg. expose a web interface, or periodically monitor responses of some external APIs:<br/>
+{%- for module in workers -%}
+{{ "  * " }}''{{ module.name }}'': {{ module.help }}<br/>
+{%- endfor -%}
+
+</code>
+</pre>
+{%- endblock -%}

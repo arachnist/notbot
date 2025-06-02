@@ -1388,6 +1388,17 @@ pub fn core_starter(
     };
     modules.push(list);
 
+    let (list_wiki_tx, list_wiki_rx) = mpsc::channel::<ConsumerEvent>(1);
+    let list_wiki = ModuleInfo {
+        name: "list-wiki".s(),
+        help: "get the list of currently registered modules in dokuwiki format".s(),
+        acl: vec![],
+        trigger: TriggerType::Keyword(vec!["list-wiki".s()]),
+        channel: list_wiki_tx,
+        error_prefix: None,
+    };
+    modules.push(list_wiki);
+
     let (reload_tx, reload_rx) = mpsc::channel::<ConsumerEvent>(1);
     let reload = ModuleInfo {
         name: "reload".s(),
@@ -1445,6 +1456,13 @@ pub fn core_starter(
         weak_modules.clone(),
         weak_passthrough.clone(),
         registered_workers.clone(),
+    ));
+    tokio::task::spawn(list_wiki_consumer(
+        list_wiki_rx,
+        weak_modules.clone(),
+        weak_passthrough.clone(),
+        registered_workers.clone(),
+        config.clone(),
     ));
     tokio::task::spawn(list_consumer(
         list_rx,
@@ -1686,15 +1704,16 @@ pub async fn help_processor(
     Ok(())
 }
 
-#[derive(Template)]
+#[derive(Template, Clone)]
 #[template(
     path = "matrix/help-list.html",
-    blocks = ["formatted", "plain"],
+    blocks = ["formatted", "plain", "wiki"],
 )]
 struct RenderList {
     modules: Vec<WeakModuleInfo>,
     passthrough: Vec<WeakModuleInfo>,
     workers: Vec<WorkerInfo>,
+    config: Option<Config>,
 }
 
 impl RenderList {
@@ -1733,6 +1752,24 @@ impl RenderList {
             failed,
         )
     }
+
+    fn sorted_modules(&self) -> Vec<WeakModuleInfo> {
+        let mut rmod = self.modules.clone();
+        rmod.sort_by_key(|e| e.name.clone());
+        rmod
+    }
+
+    fn sorted_passthrough(&self) -> Vec<WeakModuleInfo> {
+        let mut rmod = self.passthrough.clone();
+        rmod.sort_by_key(|e| e.name.clone());
+        rmod
+    }
+
+    fn sorted_workers(&self) -> Vec<WorkerInfo> {
+        let mut rmod = self.workers.clone();
+        rmod.sort_by_key(|e| e.name.clone());
+        rmod
+    }
 }
 
 /// Provides a list of all registered modules, passthrough modules, and workers.
@@ -1755,11 +1792,47 @@ pub async fn list_consumer(
             modules: modules.clone(),
             passthrough: passthrough.clone(),
             workers: workers.clone(),
+            config: None,
         };
 
         let response = RoomMessageEventContent::text_html(
             render_list.as_plain().render()?,
             render_list.as_formatted().render()?,
+        );
+
+        if let Err(e) = event.room.send(response).await {
+            error!("failed sending list response: {e}");
+        }
+    }
+}
+
+/// Provides a list of all registered modules, passthrough modules, and workers in dokuwiki format
+///
+/// # Errors
+/// Will return `Err` when its own channel gets dropped, or rendering response fails.
+pub async fn list_wiki_consumer(
+    mut rx: mpsc::Receiver<ConsumerEvent>,
+    modules: Vec<WeakModuleInfo>,
+    passthrough: Vec<WeakModuleInfo>,
+    workers: Vec<WorkerInfo>,
+    config: Config,
+) -> anyhow::Result<()> {
+    loop {
+        let Some(event) = rx.recv().await else {
+            warn!("list channel closed");
+            bail!("channel closed");
+        };
+
+        let render_list = RenderList {
+            modules: modules.clone(),
+            passthrough: passthrough.clone(),
+            workers: workers.clone(),
+            config: Some(config.clone()),
+        };
+
+        let response = RoomMessageEventContent::text_html(
+            render_list.as_wiki().render()?,
+            render_list.as_wiki().render()?,
         );
 
         if let Err(e) = event.room.send(response).await {
