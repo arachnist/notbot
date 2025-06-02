@@ -37,12 +37,12 @@
 
 use crate::prelude::*;
 
-use crate::notbottime::{NOTBOT_EPOCH, NotBotTime};
-
 use matrix_sdk::ruma::events::reaction::OriginalSyncReactionEvent;
 
 use axum::{extract::State, response::IntoResponse};
 use axum_oidc::OidcClaims;
+
+use tokio_postgres::types::Type as dbtype;
 
 fn default_keywords() -> Vec<String> {
     vec!["invite".s()]
@@ -62,6 +62,8 @@ pub struct ModuleConfig {
     /// keywords the bot will listen for invitation requests.
     #[serde(default = "default_keywords")]
     pub keywords: Vec<String>,
+    /// Database handle for nag persistence
+    pub handle: String,
 }
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
@@ -88,30 +90,22 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
 /// *
 pub async fn invite_request(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
     info!("invitation request from: {}", event.sender);
-    let prefixed_sender = "inviter:".to_owned() + event.sender.as_str();
     let client = event.room.client();
-    let store = client.state_store();
 
-    let next_allowed_attempt = match store.get_custom_value(prefixed_sender.as_bytes()).await {
-        Err(e) => {
-            bail!("error fetching next allowed attempt time: {e}");
-        }
-        Ok(maybe_result) => maybe_result.map_or(NOTBOT_EPOCH, std::convert::Into::into),
+    let persistence = InvitePersistence {
+        handle: config.handle.clone(),
     };
+    let next_allowed_attempt = persistence
+        .next_invite_time(&event.sender.to_string())
+        .await?;
 
-    if NotBotTime::now() > next_allowed_attempt {
-        let next_allowed_attempt =
-            NotBotTime(SystemTime::now() + Duration::from_secs(60 * 60 * 24 * 7));
-        store
-            .set_custom_value_no_read(prefixed_sender.as_bytes(), next_allowed_attempt.into())
-            .await?;
-    } else {
+    if SystemTime::now() < next_allowed_attempt {
         info!(
             "user attempted invite request too soon: {}",
             event.sender.as_str()
         );
         return Ok(());
-    }
+    };
 
     let evid = event.ev.event_id.clone();
     let evsender = event.sender.clone();
@@ -235,4 +229,62 @@ pub async fn web_inviter(
     })?;
 
     Ok(())
+}
+
+#[derive(Clone, Debug)]
+struct InvitePersistence {
+    handle: String,
+}
+
+impl InvitePersistence {
+    const GET_NAG_TIME: &str = r"SELECT nag_time FROM invite_attempts WHERE mxid = $1";
+    const SET_NAG_TIME: &str = r"INSERT INTO invite_attempts (mxid, nag_time)
+    VALUES ( $1, $2 )
+    ON CONFLICT (mxid) DO UPDATE
+        SET nag_time = $2";
+    async fn next_invite_time(&self, mxid: &str) -> anyhow::Result<SystemTime> {
+        let now = SystemTime::now();
+        let future_time = now
+            .checked_add(Duration::from_secs(24 * 3600))
+            .map_or(now, |e| e);
+
+        let mut client = DBPools::get_client(&self.handle).await?;
+        let transaction = client.transaction().await?;
+
+        let get_nag = transaction
+            .prepare_typed_cached(Self::GET_NAG_TIME, &[dbtype::VARCHAR])
+            .await?;
+        let set_nag = transaction
+            .prepare_typed_cached(Self::SET_NAG_TIME, &[dbtype::VARCHAR, dbtype::TIMESTAMP])
+            .await?;
+
+        let nag_q = transaction.query(&get_nag, &[&mxid]).await?;
+        let nag = match nag_q.len() {
+            0 => {
+                transaction
+                    .execute(&set_nag, &[&mxid, &future_time])
+                    .await?;
+
+                SystemTime::UNIX_EPOCH
+            }
+            1 => {
+                let t = match nag_q.first() {
+                    None => bail!("wtf? db inconsistency: can't fetch first result row"),
+                    Some(r) => r.try_get(0)?,
+                };
+
+                if t < now {
+                    transaction
+                        .execute(&set_nag, &[&mxid, &future_time])
+                        .await?;
+                };
+
+                t
+            }
+            _ => bail!("wtf? db inconsistency: multiple entries per member in kasownik_nag"),
+        };
+
+        transaction.commit().await?;
+        Ok(nag)
+    }
 }

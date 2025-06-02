@@ -30,7 +30,7 @@
 
 use crate::prelude::*;
 
-use crate::notbottime::NotBotTime;
+use tokio_postgres::types::Type as dbtype;
 
 fn default_due_keywords() -> Vec<String> {
     vec!["due".s()]
@@ -57,6 +57,8 @@ pub struct ModuleConfig {
     pub keywords_due_me: Vec<String>,
     /// Token for querying capacifier
     pub capacifier_token: String,
+    /// Database handle for nag persistence
+    pub handle: String,
 }
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
@@ -198,38 +200,37 @@ pub(crate) fn passthrough(
 /// # Errors
 /// Will return error if sending nagging notification fails
 pub async fn nag_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
+    trace!("in nag_processor");
     use MembershipStatus::Active;
     let sender_str: &str = event.sender.as_str();
+    trace!("getting member");
+    let maybe_member: Option<Vec<String>> = capacifier_kvl_query(
+        config.capacifier_token.clone(),
+        "kvl",
+        "uid",
+        "matrixUserID",
+        event.sender.to_string(),
+    )
+    .await?;
 
-    trace!("getting client store");
-    let c = event.room.client();
-    let store = c.state_store();
-    let next_nag_time = match store.get_custom_value(event.sender.as_bytes()).await {
-        Ok(maybe_result) => match maybe_result {
-            None => {
-                let nag_time = NotBotTime(SystemTime::now() - Duration::new(60 * 60 * 24, 0));
-                let nag_time_bytes: Vec<u8> = nag_time.into();
-
-                store
-                    .set_custom_value_no_read(event.sender.as_bytes(), nag_time_bytes)
-                    .await?;
-
-                nag_time
-            }
-            Some(nag_time_bytes) => nag_time_bytes.into(),
+    trace!("extracting uid");
+    let member_uid = match maybe_member {
+        None => bail!("not a member"),
+        Some(m) => match m.iter().next() {
+            None => bail!("not a member"),
+            Some(u) => u.to_owned(),
         },
-        Err(e) => bail!("error fetching nag time: {e}"),
     };
+
+    trace!("building persistence object");
+    let persistence = NagPersistence {
+        handle: config.handle,
+    };
+    let next_nag_time = persistence.next_nag_time(&member_uid).await?;
 
     trace!("next_nag_time: {:#?}", next_nag_time);
 
-    if NotBotTime::now() > next_nag_time {
-        let next_nag_time = NotBotTime(SystemTime::now() + Duration::new(60 * 60 * 24, 0));
-
-        store
-            .set_custom_value_no_read(event.sender.as_bytes(), next_nag_time.into())
-            .await?;
-    } else {
+    if SystemTime::now() < next_nag_time {
         return Ok(());
     };
 
@@ -274,4 +275,62 @@ pub async fn nag_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow
     event.room.send(msg).await?;
 
     Ok(())
+}
+
+#[derive(Clone, Debug)]
+struct NagPersistence {
+    handle: String,
+}
+
+impl NagPersistence {
+    const GET_NAG_TIME: &str = r"SELECT nag_time FROM kasownik_nag WHERE member = $1";
+    const SET_NAG_TIME: &str = r"INSERT INTO kasownik_nag (member, nag_time)
+    VALUES ( $1, $2 )
+    ON CONFLICT (member) DO UPDATE
+        SET nag_time = $2";
+    async fn next_nag_time(&self, member: &str) -> anyhow::Result<SystemTime> {
+        let now = SystemTime::now();
+        let future_time = now
+            .checked_add(Duration::from_secs(24 * 3600))
+            .map_or(now, |e| e);
+
+        let mut client = DBPools::get_client(&self.handle).await?;
+        let transaction = client.transaction().await?;
+
+        let get_nag = transaction
+            .prepare_typed_cached(Self::GET_NAG_TIME, &[dbtype::VARCHAR])
+            .await?;
+        let set_nag = transaction
+            .prepare_typed_cached(Self::SET_NAG_TIME, &[dbtype::VARCHAR, dbtype::TIMESTAMP])
+            .await?;
+
+        let nag_q = transaction.query(&get_nag, &[&member]).await?;
+        let nag = match nag_q.len() {
+            0 => {
+                transaction
+                    .execute(&set_nag, &[&member, &future_time])
+                    .await?;
+
+                SystemTime::UNIX_EPOCH
+            }
+            1 => {
+                let t = match nag_q.first() {
+                    None => bail!("wtf? db inconsistency: can't fetch first result row"),
+                    Some(r) => r.try_get(0)?,
+                };
+
+                if t < now {
+                    transaction
+                        .execute(&set_nag, &[&member, &future_time])
+                        .await?;
+                };
+
+                t
+            }
+            _ => bail!("wtf? db inconsistency: multiple entries per member in kasownik_nag"),
+        };
+
+        transaction.commit().await?;
+        Ok(nag)
+    }
 }

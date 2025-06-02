@@ -53,7 +53,6 @@ In no particular order:
 * using regular expressions and/or clap for defining module arguments.
 * providing more defaults for configuration values, graceful degradation if they're not provided
 * Maybe: resurrecting [dyncfg](https://github.com/arachnist/dyncfg) in some form for dynamic per-room/sender configuration
-* removing `notbottime.rs`
 * See if we can get around setting `LUA_PATH` env var for mlua
 * connecting to jitsi rooms to monitor membership changes on them. might use a Go sidecar (prototype [here](https://github.com/arachnist/jitsi-go/)) for that, as it was easier to modify a [Go xmpp](https://github.com/arachnist/go-xmpp) library to speak jitsi, than modifying [xmpp-rs](https://docs.rs/xmpp/latest/xmpp/) to do the same.
 * some sort of fedi integration. did i mention there's no scope defined?
@@ -65,4 +64,4 @@ Done:
 * 2025-05-24, ~~See if we can get around setting `LUA_PATH` env var for mlua~~
 * 2025-05-24, ~~ingesting notmun modules directly as notbot modules, with a thin rust wrapper around each one.~~
   ~~right now we're pretending to what remains of mun runtime that there's an irc connection in there somewhere.~~
-
+* 2025-06-02, ~~removing `notbottime.rs`~~

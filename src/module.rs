@@ -277,8 +277,6 @@ pub static MUN_RECEIVERS_LIVE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
 /// For modules consuming text-like events, this should contain everything that's needed.
 #[derive(Clone)]
 pub struct ConsumerEvent {
-    /// "klacz" permission level of the event sender, defined on a room/sender pair.
-    pub klacz_level: i64,
     /// full original event from matrix-rust-sdk
     pub ev: OriginalSyncRoomMessageEvent,
     /// convienience field for event sender
@@ -291,8 +289,6 @@ pub struct ConsumerEvent {
     pub args: Option<String>,
     /// lua interpreter, pre-configured for running [notmun](https://code.hackerspace.pl/ar/notmun) modules and functions.
     pub lua: Lua,
-    /// [klacz](https://code.hackerspace.pl/hswaw/klacz) database object, providing convienient access to the database contents
-    pub klacz: KlaczDB,
 }
 
 /// Main module object.
@@ -937,14 +933,12 @@ pub async fn dispatcher(
     };
 
     let consumer_event = ConsumerEvent {
-        klacz_level,
         ev: ev.clone(),
         sender: sender.clone(),
         room: room.clone(),
         keyword: keyword.clone(),
         args: remainder,
         lua: lua.deref().clone(),
-        klacz: klacz.deref().clone(),
     };
 
     let mut run_modules: Vec<(Consumption, ModuleInfo)> = vec![];
@@ -1275,7 +1269,7 @@ pub fn init_modules(
     config: &Config,
     reload_tx: mpsc::Sender<Room>,
 ) -> (EventHandlerHandle, Vec<anyhow::Error>) {
-    let klacz = KlaczDB { handle: "main" };
+    let klacz = KlaczDB { handle: "main".s() };
     let mut modules: Vec<ModuleInfo> = vec![];
     let mut passthrough_modules: Vec<PassThroughModuleInfo> = vec![];
     let mut workers: Vec<WorkerInfo> = vec![];

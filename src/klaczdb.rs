@@ -142,7 +142,7 @@ use tokio_postgres::types::Type as dbtype;
 /// Just holds a name of the database handle that will be requested from the [`crate::db`] module.
 pub struct KlaczDB {
     /// Name of the database handle.
-    pub handle: &'static str,
+    pub handle: String,
 }
 
 /// Functions for interacting with the klacz database in less-naive ways.
@@ -155,7 +155,7 @@ impl KlaczDB {
     /// # Errors
     /// Will return `Err` if underlying database operations fail.
     async fn get_instance_id(&self) -> anyhow::Result<i64> {
-        let client = DBPools::get_client(self.handle).await?;
+        let client = DBPools::get_client(&self.handle).await?;
         let statement = client.prepare_cached(Self::GET_INSTANCE_ID).await?;
 
         let row = client.query_one(&statement, &[]).await?;
@@ -179,7 +179,7 @@ impl KlaczDB {
         let name = room_name(room);
         let user_name = user.as_str();
 
-        let client = DBPools::get_client(self.handle).await?;
+        let client = DBPools::get_client(&self.handle).await?;
         let statement = client
             .prepare_typed_cached(Self::GET_LEVEL, &[dbtype::VARCHAR, dbtype::VARCHAR])
             .await?;
@@ -213,7 +213,7 @@ impl KlaczDB {
         let id = self.get_instance_id().await?;
         let oid = KlaczClass::Level.make_oid(id);
 
-        let mut client = DBPools::get_client(self.handle).await?;
+        let mut client = DBPools::get_client(&self.handle).await?;
         let transaction = client.transaction().await?;
 
         let delete = transaction
@@ -264,7 +264,7 @@ impl KlaczDB {
     /// # Errors
     /// Will return `Err` if underlying database operations fail, or database state is inconsistent.
     pub async fn get_entry(&self, term: &str) -> anyhow::Result<String> {
-        let client = DBPools::get_client(self.handle).await?;
+        let client = DBPools::get_client(&self.handle).await?;
 
         let term_statement = client
             .prepare_typed_cached(Self::GET_TERM_OID, &[dbtype::VARCHAR])
@@ -314,7 +314,7 @@ impl KlaczDB {
     /// Will return `Err` if underlying database operations fail, or database state is inconsistent.
     pub async fn remove_entry(&self, term: &str, entry: &str) -> anyhow::Result<KlaczKBChange> {
         let mut response = KlaczKBChange::Unchanged;
-        let mut client = DBPools::get_client(self.handle).await?;
+        let mut client = DBPools::get_client(&self.handle).await?;
         let get_term_statement = client
             .prepare_typed_cached(Self::GET_TERM_OID, &[dbtype::VARCHAR])
             .await?;
@@ -386,7 +386,7 @@ impl KlaczDB {
         term: &str,
         entry: &str,
     ) -> anyhow::Result<KlaczKBChange> {
-        let mut client = DBPools::get_client(self.handle).await?;
+        let mut client = DBPools::get_client(&self.handle).await?;
         let mut ok_result = KlaczKBChange::AddedEntry;
         let user_name = user.as_str();
 
@@ -578,6 +578,10 @@ fn default_remove_keywords() -> Vec<String> {
     vec!["remove".s()]
 }
 
+fn default_handle() -> String {
+    "main".s()
+}
+
 /// Module configuration
 #[derive(Clone, Deserialize)]
 pub struct ModuleConfig {
@@ -587,6 +591,9 @@ pub struct ModuleConfig {
     /// Keywords to which the remove function should respond to
     #[serde(default = "default_remove_keywords")]
     pub keywords_remove: Vec<String>,
+    /// Klacz DB handle
+    #[serde(default = "default_handle")]
+    pub handle: String,
 }
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
@@ -619,7 +626,7 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
 ///
 /// # Errors
 /// Will return `Err` if arguments are missing, database manipulation fails, or sending response fails.
-pub async fn add_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
+pub async fn add_processor(event: ConsumerEvent, c: ModuleConfig) -> anyhow::Result<()> {
     let Some(body) = event.args else {
         event
             .room
@@ -643,12 +650,10 @@ pub async fn add_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Res
     };
 
     trace!("attempting to add: term: {term}: definition: {definition}");
+    let klacz = KlaczDB { handle: c.handle };
 
     let mut response = String::new();
-    let result = event
-        .klacz
-        .add_entry(&event.sender, term, definition)
-        .await?;
+    let result = klacz.add_entry(&event.sender, term, definition).await?;
     if result == KlaczKBChange::CreatedTerm {
         response.push_str(format!("Created term \"{term}\"\n").as_str());
     };
@@ -666,7 +671,7 @@ pub async fn add_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Res
 ///
 /// # Errors
 /// Will return `Err` if arguments are missing, database manipulation fails, or sending response fails.
-pub async fn remove_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::Result<()> {
+pub async fn remove_processor(event: ConsumerEvent, c: ModuleConfig) -> anyhow::Result<()> {
     let Some(body) = event.args else {
         event
             .room
@@ -690,8 +695,9 @@ pub async fn remove_processor(event: ConsumerEvent, _: ModuleConfig) -> anyhow::
     };
 
     trace!("attempting to remove: term: {term}: definition: {definition}");
+    let klacz = KlaczDB { handle: c.handle };
 
-    let response = event.klacz.remove_entry(term, definition).await?;
+    let response = klacz.remove_entry(term, definition).await?;
     let message = match response {
         KlaczKBChange::Unchanged => format!("entry not found in {term}"),
         KlaczKBChange::RemovedEntry => format!("removed entry from {term}"),

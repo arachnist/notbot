@@ -26,7 +26,6 @@ pub mod kasownik;
 pub mod klaczdb;
 pub mod metrics;
 pub mod module;
-pub mod notbottime;
 pub mod notmun;
 pub mod prom_query;
 mod sage;
