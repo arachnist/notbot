@@ -1390,16 +1390,16 @@ pub fn core_starter(
     };
     modules.push(list);
 
-    let (list_wiki_tx, list_wiki_rx) = mpsc::channel::<ConsumerEvent>(1);
-    let list_wiki = ModuleInfo {
-        name: "list-wiki".s(),
-        help: "get the list of currently registered modules in dokuwiki format".s(),
+    let (help_wiki_tx, help_wiki_rx) = mpsc::channel::<ConsumerEvent>(1);
+    let help_wiki = ModuleInfo {
+        name: "help-wiki".s(),
+        help: "render bot documentation page in dokuwiki format. you're likely reading this now".s(),
         acl: vec![],
-        trigger: TriggerType::Keyword(vec!["list-wiki".s()]),
-        channel: list_wiki_tx,
+        trigger: TriggerType::Keyword(vec!["help-wiki".s()]),
+        channel: help_wiki_tx,
         error_prefix: None,
     };
-    modules.push(list_wiki);
+    modules.push(help_wiki);
 
     let (reload_tx, reload_rx) = mpsc::channel::<ConsumerEvent>(1);
     let reload = ModuleInfo {
@@ -1459,8 +1459,8 @@ pub fn core_starter(
         weak_passthrough.clone(),
         registered_workers.clone(),
     ));
-    tokio::task::spawn(list_wiki_consumer(
-        list_wiki_rx,
+    tokio::task::spawn(help_wiki_consumer(
+        help_wiki_rx,
         weak_modules.clone(),
         weak_passthrough.clone(),
         registered_workers.clone(),
@@ -1820,7 +1820,7 @@ pub async fn list_consumer(
 ///
 /// # Errors
 /// Will return `Err` when its own channel gets dropped, or rendering response fails.
-pub async fn list_wiki_consumer(
+pub async fn help_wiki_consumer(
     mut rx: mpsc::Receiver<ConsumerEvent>,
     modules: Vec<WeakModuleInfo>,
     passthrough: Vec<WeakModuleInfo>,

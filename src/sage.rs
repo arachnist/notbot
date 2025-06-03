@@ -20,7 +20,7 @@ pub fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
 
     Ok(vec![ModuleInfo::new(
         "sage",
-        "lol, lmao",
+        "remove (almost) any room member mentioned in the event, social experiment",
         vec![],
         TriggerType::Keyword(module_config.keywords.clone()),
         Some("failed to remove them"),
