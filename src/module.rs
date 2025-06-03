@@ -391,6 +391,7 @@ impl ModuleInfo {
     #[must_use]
     pub fn new_mun_command(
         name: &str,
+        keyword: &str,
         arity: i64,
         processor: mlua::Function, // Callback
         help: Option<String>,
@@ -411,7 +412,7 @@ impl ModuleInfo {
             name: name.to_owned(),
             help: help.unwrap_or_else(|| format!("command {name} has no help")),
             acl,
-            trigger: TriggerType::Keyword(vec![name.to_owned()]),
+            trigger: TriggerType::Keyword(vec![keyword.to_owned()]),
             channel: tx,
             error_prefix: None,
         }
@@ -517,6 +518,7 @@ impl ModuleInfo {
 
         mun_channel.set("Say", say)?;
         mun_channel.set("Html", html)?;
+        mun_channel.set("Name", room_name(room))?;
 
         Ok(mun_channel)
     }
@@ -1755,6 +1757,14 @@ impl RenderList {
 
     fn sorted_modules(&self) -> Vec<WeakModuleInfo> {
         let mut rmod = self.modules.clone();
+        rmod.retain(|m| !m.name.contains("/"));
+        rmod.sort_by_key(|e| e.name.clone());
+        rmod
+    }
+
+    fn sorted_mun_modules(&self) -> Vec<WeakModuleInfo> {
+        let mut rmod = self.modules.clone();
+        rmod.retain(|m| m.name.contains("/"));
         rmod.sort_by_key(|e| e.name.clone());
         rmod
     }

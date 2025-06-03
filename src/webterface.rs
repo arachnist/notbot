@@ -94,9 +94,12 @@ fn issuer() -> String {
 
 #[allow(clippy::unnecessary_wraps, reason = "required by caller")]
 pub(crate) fn workers(mx: &Client, config: &Config) -> anyhow::Result<Vec<WorkerInfo>> {
+    let module_config: ModuleConfig = config.typed_module_config(module_path!())?;
+    let help_string = format!("exposes bot web interface at {}", module_config.app_url);
+
     Ok(vec![WorkerInfo::new(
         "webterface",
-        "exposes bot web interface",
+        help_string.as_str(),
         "web",
         mx.clone(),
         config.clone(),

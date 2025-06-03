@@ -153,8 +153,9 @@ pub fn mun_load_plugin(
     let add_command_unbound = lua.create_function({
         let modules = modules.clone();
         move |_,
-              (plugin_env, name, arity, callback, maybe_help, maybe_klacz_level): (
+              (plugin_env, plugin_id, name, arity, callback, maybe_help, maybe_klacz_level): (
             Table,
+            String,
             String,
             i64,
             mlua::Function,
@@ -175,7 +176,9 @@ pub fn mun_load_plugin(
                 )));
             };
 
+            let full_name = format!("{plugin_id}/{name}");
             modules.push(ModuleInfo::new_mun_command(
+                &full_name,
                 &name,
                 arity,
                 callback,
@@ -188,7 +191,7 @@ pub fn mun_load_plugin(
             LuaResult::Ok(())
         }
     })?;
-    let add_command = add_command_unbound.bind(full_plugin_env)?;
+    let add_command = add_command_unbound.bind(full_plugin_env)?.bind(plugin_id)?;
     plugin_env.set("AddCommand", add_command)?;
 
     trace!("{plugin_id}: initializing AddHook");
@@ -196,39 +199,41 @@ pub fn mun_load_plugin(
         let passthrough = passthrough.clone();
         #[allow(clippy::cognitive_complexity, reason = "false positive")]
         move |_,
-                  (plugin_env, event_name, name, callback): (
-                Table,
-                String,
-                String,
-                mlua::Function,
-            )| {
-                trace!("{name}: loading hook");
-                let Ok(mut passthrough) = passthrough.lock() else {
-                    error!("{name}: locking passthrough failed");
-                    return Err(mlua::Error::runtime(format!(
-                        "{name}: locking passthrough failed"
-                    )));
-                };
+              (plugin_env, plugin_id, event_name, name, callback): (
+            Table,
+            String,
+            String,
+            String,
+            mlua::Function,
+        )| {
+            trace!("{name}: loading hook");
+            let Ok(mut passthrough) = passthrough.lock() else {
+                error!("{name}: locking passthrough failed");
+                return Err(mlua::Error::runtime(format!(
+                    "{name}: locking passthrough failed"
+                )));
+            };
 
-                if !callback.set_environment(plugin_env)? {
-                    error!("{name}: setting sandbox env for failed");
-                    return Err(mlua::Error::runtime(format!(
-                        "{name}: setting sandbox env for failed"
-                    )));
-                };
+            if !callback.set_environment(plugin_env)? {
+                error!("{name}: setting sandbox env for failed");
+                return Err(mlua::Error::runtime(format!(
+                    "{name}: setting sandbox env for failed"
+                )));
+            };
 
-                passthrough.push(PassThroughModuleInfo::new_mun_hook(
-                    &event_name,
-                    &name,
-                    callback,
-                ));
-                drop(passthrough);
-                info!("{name} hook loaded");
+            let name = format!("{plugin_id}/{name}");
+            passthrough.push(PassThroughModuleInfo::new_mun_hook(
+                &event_name,
+                &name,
+                callback,
+            ));
+            drop(passthrough);
+            info!("{name} hook loaded");
 
-                LuaResult::Ok(())
-            }
+            LuaResult::Ok(())
+        }
     })?;
-    let add_hook = add_hook_unbound.bind(full_plugin_env)?;
+    let add_hook = add_hook_unbound.bind(full_plugin_env)?.bind(plugin_id)?;
     plugin_env.set("AddHook", add_hook)?;
 
     full_plugin_env.set("plugin", plugin_env)?;

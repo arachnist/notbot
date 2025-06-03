@@ -72,7 +72,7 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
 
     Ok(vec![ModuleInfo::new(
         "inviter",
-        "processes invite requests to matrix rooms and spaces",
+        "processes invite requests to matrix rooms and spaces. requests will need to be approved by one of privileged members with a 👍 (thumbs-up) reaction",
         vec![Acl::Room(module_config.requests.clone())],
         TriggerType::Keyword(module_config.keywords.clone()),
         Some("couldn't process invite request"),

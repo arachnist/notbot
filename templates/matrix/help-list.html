@@ -40,10 +40,16 @@
 <pre data-md="```">
 <code class="language-dokuwiki">
 {%- set mods = sorted_modules() -%}
+{%- set mun_mods = sorted_mun_modules() -%}
 {%- set pmods = sorted_passthrough() -%}
 {%- set workers = sorted_workers() -%}
+<br/>
+''notbot'' documentation sections below are generated at using bot code/configuration itself using the template present here: https://code.hackerspace.pl/ar/notbot/src/branch/riir/templates/matrix/help-list.html#L39<br/>
+
 {%- if set Some(cfg) = config -%}
-==== Prefixes ====<br/>
+==== Configuration ====<br/>
+Bot configuration can be reloaded at runtime. Anything described here can be easily changed. Currently describes only global bot configuration. Most modules have additional configuration settings available<br/>
+=== Prefixes ===<br/>
 Command prefixes are characters or words the bot will expect the active commands on the beginning of the line. Configured prefixes are:<br/>
 {%- for prefix in cfg.prefixes() -%}
 {{ "  * " }}''{{ prefix }}''<br/>
@@ -52,13 +58,37 @@ Command prefixes are characters or words the bot will expect the active commands
 There are also some restricted prefixes configred, that are to be used when the bot is directly replacing a functionality of another bot, that is still present on shared channels. These prefixes will only work with certain modules:<br/>
 {%- for (prefix, mod_names) in restricted -%}
 {{ "  * " }}''{{ prefix }}'' - modules: {%- for mod_n in mod_names -%}{{ " " }}{{ mod_n }}{%- endfor -%}<br/>
-{%- endfor -%}
-{%- endif -%}
-{%- endif -%}
+{%- endfor -%}{%- endif -%}<br/>
+=== Admins ===<br/>
+List of users who can invoke bot management commands, such as reloading configuration, disabling/enabling specific modules at runtime, instructing the bot to join/leave any rooms, or shutting down the bot<br/>
+{%- for user in cfg.admins() -%}
+{{ "  * " }}''{{ user }}''<br/>
+{%- endfor -%}<br/>
+=== Ignored ===<br/>
+List of users that are ignored to avoid triggering bot loops:<br/>
+{%- for user in cfg.ignored() -%}
+{{ "  * " }}''{{ user }}''<br/>
+{%- endfor -%}<br/>
 <br/>
+=== Trusted homeservers ===<br/>
+Because of spam/abuse, bot will only accept arbitrary room invites from these homeservers:<br/>
+{%- for hs in cfg.trusted_homeservers() -%}
+{{ "  * " }}''{{ hs }}''<br/>
+{%- endfor -%}<br/>
+<br/>
+{%- endif -%}
 ==== Active modules ====<br/>
 Modules that will - per convention - actively respond to and "consume" specific events, usually prefixed keywords:<br/>
 {%- for module in mods -%}
+{{ "  * " }}''{{ module.name }}'': {{ module.help }}
+{%- if set TriggerType::Keyword(v) = module.trigger -%}
+; keyword{{ v.len() | pluralize }}:{% for kw in v %} ''{{ kw }}''{%- endfor -%}
+{%- endif -%}
+<br/>
+{%- endfor -%}
+<br/>
+Additionally, ''notbot'' can load Mun modules written in Lua at runtime. Name part before ''/'' indicates what mun plugin (file) they were loaded from:<br/>
+{%- for module in mun_mods -%}
 {{ "  * " }}''{{ module.name }}'': {{ module.help }}
 {%- if set TriggerType::Keyword(v) = module.trigger -%}
 ; keyword{{ v.len() | pluralize }}:{% for kw in v %} ''{{ kw }}''{%- endfor -%}
