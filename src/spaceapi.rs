@@ -116,7 +116,7 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
         ),
         ModuleInfo::new(
             "heatmap",
-            "show activity at the hackerspace for the last week",
+            "graph members activity at the hackerspace for the last week/month/year/all monitored time, divided by hour and day of the week",
             vec![],
             TriggerType::Keyword(module_config.keywords_heatmap.clone()),
             Some("error generating heatmap"),
