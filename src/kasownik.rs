@@ -28,7 +28,7 @@
 //! Catch-all:
 //! * [`nag_processor`] - events not consumed by other modules will trigger a check for fees status, and nag the user if they're late.
 
-use crate::prelude::*;
+use crate::{prelude::*, tools};
 
 use tokio_postgres::types::Type as dbtype;
 
@@ -38,6 +38,10 @@ fn default_due_keywords() -> Vec<String> {
 
 fn default_due_me_keywords() -> Vec<String> {
     vec!["due-me".s(), "dueme".s()]
+}
+
+fn members_only_rooms() -> Vec<String> {
+    vec![]
 }
 
 /// Module configuration object.
@@ -59,6 +63,9 @@ pub struct ModuleConfig {
     pub capacifier_token: String,
     /// Database handle for nag persistence
     pub handle: String,
+    /// List of members-only matrix rooms/spaces.
+    #[serde(default = "members_only_rooms")]
+    pub members_only_rooms: Vec<String>,
 }
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
@@ -81,8 +88,20 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
             vec![],
             TriggerType::Keyword(module_config.keywords_due_me.clone()),
             Some("error checking membership fees"),
-            module_config,
+            module_config.clone(),
             due_me_processor,
+        ),
+        ModuleInfo::new(
+            "debtors",
+            "lists users present on members-only rooms that have their hswaw membership marked as Inactive",
+            vec![Acl::Room(vec![
+                "#bottest:is-a.cat".s(),
+                "#notbot-test-private-room:is-a.cat".s(),
+            ])],
+            TriggerType::Keyword(vec!["debtors".s()]),
+            Some("error getting debtors list"),
+            module_config,
+            list_late,
         ),
     ])
 }
@@ -168,6 +187,73 @@ pub async fn due_me_processor(event: ConsumerEvent, c: ModuleConfig) -> anyhow::
             2..=i64::MAX => format!("need to pay {months} membership fees."),
         },
     };
+
+    event
+        .room
+        .send(RoomMessageEventContent::text_plain(response))
+        .await?;
+
+    Ok(())
+}
+
+async fn list_late(event: ConsumerEvent, c: ModuleConfig) -> anyhow::Result<()> {
+    use MembershipStatus::{Inactive, NotAMember};
+
+    let mut debtors: HashMap<String, Vec<String>> = HashMap::default();
+    let mut not_members: HashMap<String, Vec<String>> = HashMap::default();
+
+    for room_name in c.members_only_rooms {
+        trace!("checking room: {room_name}");
+        let room = tools::maybe_get_room(&event.room.client(), &room_name).await?;
+
+        // `ACTIVE` here means users that are joined or invited
+        for room_member in room.members(matrix_sdk::RoomMemberships::ACTIVE).await? {
+            let mxid: String = room_member.user_id().to_string();
+            trace!("checking member: {}", mxid);
+            match tools::membership_status(
+                c.capacifier_token.clone(),
+                room_member.user_id().to_owned(),
+            )
+            .await
+            {
+                Ok(m) => match m {
+                    Inactive => debtors
+                        .entry(room_name.clone())
+                        .or_insert(vec![])
+                        .push(mxid),
+                    NotAMember => not_members
+                        .entry(room_name.clone())
+                        .or_insert(vec![])
+                        .push(mxid),
+                    _ => continue,
+                },
+                Err(e) => {
+                    error!("error checking membership status: {e}");
+                    continue;
+                }
+            };
+        }
+    }
+
+    let mut response_parts: Vec<String> = vec![];
+
+    if !debtors.is_empty() {
+        response_parts.push("debtors:\n".s());
+    }
+
+    for (room, mxids) in debtors.iter() {
+        response_parts.push(format!("{}:\n{}\n", room, mxids.join(", ")));
+    }
+
+    if !not_members.is_empty() {
+        response_parts.push("mxid not matched with a member:\n".s());
+    }
+
+    for (room, mxids) in not_members.iter() {
+        response_parts.push(format!("{}:\n{}\n", room, mxids.join(", ")));
+    }
+
+    let response = response_parts.join(" ");
 
     event
         .room

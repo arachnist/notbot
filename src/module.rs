@@ -1393,7 +1393,8 @@ pub fn core_starter(
     let (help_wiki_tx, help_wiki_rx) = mpsc::channel::<ConsumerEvent>(1);
     let help_wiki = ModuleInfo {
         name: "help-wiki".s(),
-        help: "render bot documentation page in dokuwiki format. you're likely reading this now".s(),
+        help: "render bot documentation page in dokuwiki format. you're likely reading this now"
+            .s(),
         acl: vec![],
         trigger: TriggerType::Keyword(vec!["help-wiki".s()]),
         channel: help_wiki_tx,

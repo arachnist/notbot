@@ -165,7 +165,8 @@ pub async fn membership_status(
     let response = client.get(url).send().await?;
 
     let membership = match response.status().as_u16() {
-        404 => NotAMember,
+        // FIXME: 402 here is, technically, an error, but there's no known consensus on how to treat such cases
+        404 | 402 => NotAMember,
         410 => Inactive,
         420 => Stoned,
         200 => {
@@ -181,7 +182,7 @@ pub async fn membership_status(
                 _ => NotAMember,
             }
         }
-        _ => bail!("kasownik responded with weird status code",),
+        _ => bail!("kasownik responded with weird status code for: {member}",),
     };
 
     MEMBERSHIPS

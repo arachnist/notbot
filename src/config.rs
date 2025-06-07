@@ -80,7 +80,7 @@ impl TryFrom<String> for ConfigInner {
     type Error = ConfigError;
     fn try_from(path: String) -> Result<Self, Self::Error> {
         let config_content = fs::read_to_string(&path)?;
-        Ok(toml::from_str::<Self>(&config_content)?)
+        toml::from_str::<Self>(&config_content).map_err(|e| e.into())
     }
 }
 
