@@ -29,7 +29,11 @@
 //! * [`nag_processor`] - events not consumed by other modules will trigger a check for fees status, and nag the user if they're late.
 
 use crate::prelude::*;
+use crate::template_filters as filters;
 
+use matrix_sdk::ruma::MatrixToUri;
+
+use askama::Template;
 use tokio_postgres::types::Type as dbtype;
 
 fn default_due_keywords() -> Vec<String> {
@@ -41,6 +45,10 @@ fn default_due_me_keywords() -> Vec<String> {
 }
 
 fn members_only_rooms() -> Vec<String> {
+    vec![]
+}
+
+fn known_bots() -> Vec<String> {
     vec![]
 }
 
@@ -66,6 +74,9 @@ pub struct ModuleConfig {
     /// List of members-only matrix rooms/spaces.
     #[serde(default = "members_only_rooms")]
     pub members_only_rooms: Vec<String>,
+    /// List of known/expected bot mxids in members-only rooms
+    #[serde(default = "known_bots")]
+    pub known_bots: Vec<String>,
 }
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
@@ -118,7 +129,7 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
 /// * checking membership status.
 /// * sending response fails.
 pub async fn due_processor(event: ConsumerEvent, c: ModuleConfig) -> anyhow::Result<()> {
-    use MembershipStatus::{Active, Inactive, NotAMember, Stoned};
+    use MembershipStatus::{Active, Inactive, NotAMember};
     let client = reqwest::ClientBuilder::new()
         .redirect(reqwest::redirect::Policy::none())
         .build()?;
@@ -154,9 +165,8 @@ pub async fn due_processor(event: ConsumerEvent, c: ModuleConfig) -> anyhow::Res
     let member = target.localpart();
     let response = match membership_status(&client, c.capacifier_token, target.clone()).await? {
         NotAMember => "not a member".s(),
-        Stoned => "stoned".s(),
-        Inactive => "not currently a member".s(),
-        Active(months) => match months {
+        Inactive(_) => "not currently a member".s(),
+        Active(_, months) => match months {
             i64::MIN..0 => format!("{member} is {} months ahead. Cool!", 0 - months),
             0 => format!("{member} has paid all their membership fees."),
             1 => format!("{member} needs to pay one membership fee."),
@@ -177,16 +187,15 @@ pub async fn due_processor(event: ConsumerEvent, c: ModuleConfig) -> anyhow::Res
 /// # Errors
 /// Will return error if checking membership status, or sending response fails.
 pub async fn due_me_processor(event: ConsumerEvent, c: ModuleConfig) -> anyhow::Result<()> {
-    use MembershipStatus::{Active, Inactive, NotAMember, Stoned};
+    use MembershipStatus::{Active, Inactive, NotAMember};
     let client = reqwest::ClientBuilder::new()
         .redirect(reqwest::redirect::Policy::none())
         .build()?;
 
     let response = match membership_status(&client, c.capacifier_token, event.sender).await? {
         NotAMember => "not a member".s(),
-        Stoned => "stoned".s(),
-        Inactive => "not currently a member".s(),
-        Active(months) => match months {
+        Inactive(_) => "not currently a member".s(),
+        Active(_, months) => match months {
             i64::MIN..0 => format!("{} months ahead. Cool!", 0 - months),
             0 => "paid all membership fees.".s(),
             1 => "need to pay one membership fee.".s(),
@@ -202,22 +211,40 @@ pub async fn due_me_processor(event: ConsumerEvent, c: ModuleConfig) -> anyhow::
     Ok(())
 }
 
+#[derive(Template)]
+#[template(
+    path = "matrix/kasownik-list-late.html",
+    blocks = ["formatted", "plain"],
+)]
+struct RenderItems {
+    ex_members: HashMap<String, (Option<MatrixToUri>, Vec<(String, OwnedUserId)>)>,
+    not_members: HashMap<String, (Option<MatrixToUri>, Vec<OwnedUserId>)>,
+}
+
 async fn list_late(event: ConsumerEvent, c: ModuleConfig) -> anyhow::Result<()> {
     use MembershipStatus::{Inactive, NotAMember};
     let client = reqwest::ClientBuilder::new()
         .redirect(reqwest::redirect::Policy::none())
         .build()?;
 
-    let mut debtors: HashMap<String, Vec<String>> = HashMap::default();
-    let mut not_members: HashMap<String, Vec<String>> = HashMap::default();
+    let mut ex_members: HashMap<String, (Option<MatrixToUri>, Vec<(String, OwnedUserId)>)> =
+        HashMap::default();
+    let mut not_members: HashMap<String, (Option<MatrixToUri>, Vec<OwnedUserId>)> =
+        HashMap::default();
 
     for room_name in c.members_only_rooms {
         trace!("checking room: {room_name}");
         let room = maybe_get_room(&event.room.client(), &room_name).await?;
+        let maybe_room_url = room.matrix_to_permalink().await.ok();
 
         // `ACTIVE` here means users that are joined or invited
         for room_member in room.members(matrix_sdk::RoomMemberships::ACTIVE).await? {
             let mxid: String = room_member.user_id().to_string();
+            if c.known_bots.contains(&mxid) {
+                trace!("skipping bot: {mxid}");
+                continue;
+            };
+
             trace!("checking member: {}", mxid);
             match membership_status(
                 &client,
@@ -227,14 +254,16 @@ async fn list_late(event: ConsumerEvent, c: ModuleConfig) -> anyhow::Result<()> 
             .await
             {
                 Ok(m) => match m {
-                    Inactive => debtors
+                    Inactive(member) => ex_members
                         .entry(room_name.clone())
-                        .or_insert(vec![])
-                        .push(mxid),
+                        .or_insert((maybe_room_url.clone(), vec![]))
+                        .1
+                        .push((member, room_member.user_id().to_owned())),
                     NotAMember => not_members
                         .entry(room_name.clone())
-                        .or_insert(vec![])
-                        .push(mxid),
+                        .or_insert((maybe_room_url.clone(), vec![]))
+                        .1
+                        .push(room_member.user_id().to_owned()),
                     _ => continue,
                 },
                 Err(e) => {
@@ -245,30 +274,17 @@ async fn list_late(event: ConsumerEvent, c: ModuleConfig) -> anyhow::Result<()> 
         }
     }
 
-    let mut response_parts: Vec<String> = vec![];
+    let response = RenderItems {
+        ex_members,
+        not_members,
+    };
 
-    if !debtors.is_empty() {
-        response_parts.push("debtors:\n".s());
-    }
+    let message = RoomMessageEventContent::text_html(
+        response.as_plain().render()?,
+        response.as_formatted().render()?,
+    );
 
-    for (room, mxids) in debtors.iter() {
-        response_parts.push(format!("{}:\n{}\n", room, mxids.join(", ")));
-    }
-
-    if !not_members.is_empty() {
-        response_parts.push("mxid not matched with a member:\n".s());
-    }
-
-    for (room, mxids) in not_members.iter() {
-        response_parts.push(format!("{}:\n{}\n", room, mxids.join(", ")));
-    }
-
-    let response = response_parts.join(" ");
-
-    event
-        .room
-        .send(RoomMessageEventContent::text_plain(response))
-        .await?;
+    event.room.send(message).await?;
 
     Ok(())
 }
@@ -335,7 +351,7 @@ pub async fn nag_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow
         return Ok(());
     };
 
-    let Ok(Active(months)) =
+    let Ok(Active(_, months)) =
         membership_status(&client, config.capacifier_token, event.sender.clone()).await
     else {
         return Ok(());

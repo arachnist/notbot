@@ -1156,7 +1156,7 @@ pub async fn dispatch_module(
     room: Room,
     consumer_event: ConsumerEvent,
 ) {
-    use crate::tools::MembershipStatus::{Active, Inactive, NotAMember, Stoned};
+    use crate::tools::MembershipStatus::{Active, Inactive, NotAMember};
     use Acl::{
         ActiveHswawMember, Homeserver, KlaczLevel, MaybeInactiveHswawMember, Room, SpecificUsers,
     };
@@ -1197,9 +1197,9 @@ pub async fn dispatch_module(
                         failed = true;
                     }
                     Ok(status) => match status {
-                        Inactive | Stoned | NotAMember => failed = true,
+                        Inactive(_) | NotAMember => failed = true,
                         // kasownik, and - by extension - the board, has authority on who is an active member
-                        Active(_) => (),
+                        Active(_, _) => (),
                     },
                 }
             }
@@ -1210,8 +1210,8 @@ pub async fn dispatch_module(
                         failed = true;
                     }
                     Ok(status) => match status {
-                        Stoned | NotAMember => failed = true,
-                        Inactive | Active(_) => (),
+                        NotAMember => failed = true,
+                        Inactive(_) | Active(_, _) => (),
                     },
                 }
             }

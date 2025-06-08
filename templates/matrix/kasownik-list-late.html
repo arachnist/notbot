@@ -1,0 +1,49 @@
+{%- block formatted -%}
+{%- if !ex_members.is_empty() -%}
+{{ "ex-members: " }}<br/>
+    {%- for (room_name, (url, pair_list)) in ex_members -%}
+        {{ (room_name, url) | maybe_room_url | safe }}
+        {%- for (member, mxid) in pair_list -%}
+            <a href="{{ mxid.matrix_to_uri() }}">{{ member }}</a>{{ ", " }}
+        {%- endfor -%}
+        <br/>
+    {%- endfor -%}
+    {%- if !not_members.is_empty() -%}
+        <br/>
+    {%- endif -%}
+{%- endif -%}
+{%- if !not_members.is_empty() -%}
+{{ "unknown mxids: " }}<br/>
+    {%- for (room_name, (url, mxids)) in not_members -%}
+        {{ (room_name, url) | maybe_room_url | safe }}
+        {%- for mxid in mxids -%}
+            <a href="{{ mxid.matrix_to_uri() }}">{{ mxid.as_str() }}</a>{{ ", " }}
+        {%- endfor -%}
+        <br/>
+    {%- endfor -%}
+{%- endif -%}
+{%- endblock -%}
+
+{%- block plain -%}
+{%- if !ex_members.is_empty() -%}
+{{ "ex-members: " }}
+    {%- for (room_name, (_, pair_list)) in ex_members -%}
+        {{ room_name }}{{ ": " }}
+        {%- for (member, mxid) in pair_list -%}
+            {{ member }} {{ mxid.as_str() }}{{ ", " }}
+        {%- endfor -%}
+        {{ "\n" }}
+    {%- endfor -%}
+{%- endif -%}
+{{ "\n" }}
+{%- if !not_members.is_empty() -%}
+{{ "unknown mxids: " }}
+    {%- for (room_name, (_, mxids)) in not_members -%}
+        {{ room_name }}{{ ": " }}
+        {%- for mxid in mxids -%}
+            {{ mxid.as_str() }}{{ ", " }}
+        {%- endfor -%}
+        {{ "\n" }}
+    {%- endfor -%}
+{%- endif -%}
+{%- endblock -%}

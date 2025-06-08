@@ -25,11 +25,9 @@ static MXID_HSWAW_MEMBER: LazyLock<Mutex<ExpiringMap<String, String>>> =
 #[derive(Clone)]
 pub enum MembershipStatus {
     /// User is active and ahead on membership fees (negative values), or behind (positive values)
-    Active(i64),
+    Active(String, i64),
     /// User is known, but is inactive
-    Inactive,
-    /// Reserved for special cases
-    Stoned,
+    Inactive(String),
     /// User is not known
     NotAMember,
 }
@@ -114,7 +112,7 @@ pub async fn membership_status(
     capacifier_token: String,
     user: OwnedUserId,
 ) -> anyhow::Result<MembershipStatus> {
-    use MembershipStatus::{Active, Inactive, NotAMember, Stoned};
+    use MembershipStatus::{Active, Inactive, NotAMember};
 
     let mut mxid_map = MXID_HSWAW_MEMBER.lock().await;
 
@@ -163,8 +161,7 @@ pub async fn membership_status(
     let membership = match response.status().as_u16() {
         // FIXME: 402 here is, technically, an error, but there's no known consensus on how to treat such cases
         404 | 402 => NotAMember,
-        410 => Inactive,
-        420 => Stoned,
+        410 => Inactive(member.clone()),
         200 => {
             let data = response.json::<Kasownik>().await?;
 
@@ -173,7 +170,7 @@ pub async fn membership_status(
                     None => {
                         bail!("content returned from kasownik doesn't parse as integer: {data:#?}")
                     }
-                    Some(months) => Active(months),
+                    Some(months) => Active(member.clone(), months),
                 },
                 _ => NotAMember,
             }
