@@ -78,6 +78,7 @@ pub fn room_name(room: &Room) -> String {
 /// * querying capacifier fails
 /// * capacifier response doesn't deserialize properly
 pub async fn capacifier_kvl_query(
+    client: &reqwest::Client,
     capacifier_token: String,
     req_type: &str,
     req_attr: &str,
@@ -90,14 +91,10 @@ pub async fn capacifier_kvl_query(
     auth_value.set_sensitive(true);
     headers.insert(header::AUTHORIZATION, auth_value);
 
-    let client = reqwest::ClientBuilder::new()
-        .redirect(reqwest::redirect::Policy::none())
-        .default_headers(headers)
-        .build()?;
     let url = format!(
         "https://capacifier.hackerspace.pl/{req_type}/{req_attr}/{query_attr}/{query_value}"
     );
-    let response = client.get(url).send().await?;
+    let response = client.get(url).headers(headers).send().await?;
     if !response.status().is_success() {
         bail!("wrong capacifier response: {:?}", response.status());
     };
@@ -113,6 +110,7 @@ pub async fn capacifier_kvl_query(
 /// * querying capacifier fails.
 /// * querying kasownik fails.
 pub async fn membership_status(
+    client: &reqwest::Client,
     capacifier_token: String,
     user: OwnedUserId,
 ) -> anyhow::Result<MembershipStatus> {
@@ -123,6 +121,7 @@ pub async fn membership_status(
     let member: String = match mxid_map.get(user.as_str()) {
         None => {
             match capacifier_kvl_query(
+                client,
                 capacifier_token,
                 "kvl",
                 "uid",
@@ -158,9 +157,6 @@ pub async fn membership_status(
     );
     drop(mxid_map);
 
-    let client = reqwest::ClientBuilder::new()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()?;
     let url = format!("https://kasownik.hackerspace.pl/api/months_due/{member}.json");
     let response = client.get(url).send().await?;
 

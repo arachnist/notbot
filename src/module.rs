@@ -1038,9 +1038,21 @@ pub async fn dispatcher(
         }
     }
 
+    let rclient = match reqwest::ClientBuilder::new()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    {
+        Ok(h) => h,
+        Err(e) => {
+            error!("couldn't create a basic http client: {e}");
+            return;
+        }
+    };
+
     trace!("dispatching event to modules");
     for (_, module) in run_modules {
         dispatch_module(
+            &rclient,
             config.clone(),
             true,
             &module,
@@ -1095,6 +1107,7 @@ pub async fn dispatcher(
                 };
 
                 dispatch_module(
+                    &rclient,
                     config.clone(),
                     false,
                     &module,
@@ -1109,6 +1122,7 @@ pub async fn dispatcher(
             if prefix_selected.is_some_and(|e| config.prefixes().contains(&e)) {
                 if let Some(command_not_found) = command_not_found {
                     dispatch_module(
+                        &rclient,
                         config.clone(),
                         false,
                         &command_not_found,
@@ -1133,6 +1147,7 @@ pub async fn dispatcher(
 /// the module, and sends the event.
 #[allow(clippy::too_many_lines)]
 pub async fn dispatch_module(
+    rclient: &reqwest::Client,
     config: Config,
     general: bool,
     module: &ModuleInfo,
@@ -1176,7 +1191,7 @@ pub async fn dispatch_module(
                 }
             }
             ActiveHswawMember => {
-                match membership_status(config.capacifier_token(), sender.clone()).await {
+                match membership_status(rclient, config.capacifier_token(), sender.clone()).await {
                     Err(e) => {
                         error!("checking membership for {sender} failed: {e}");
                         failed = true;
@@ -1189,7 +1204,7 @@ pub async fn dispatch_module(
                 }
             }
             MaybeInactiveHswawMember => {
-                match membership_status(config.capacifier_token(), sender.clone()).await {
+                match membership_status(rclient, config.capacifier_token(), sender.clone()).await {
                     Err(e) => {
                         error!("checking membership for {sender} failed: {e}");
                         failed = true;

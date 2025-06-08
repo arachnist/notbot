@@ -28,7 +28,7 @@
 //! Catch-all:
 //! * [`nag_processor`] - events not consumed by other modules will trigger a check for fees status, and nag the user if they're late.
 
-use crate::{prelude::*, tools};
+use crate::prelude::*;
 
 use tokio_postgres::types::Type as dbtype;
 
@@ -119,6 +119,9 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
 /// * sending response fails.
 pub async fn due_processor(event: ConsumerEvent, c: ModuleConfig) -> anyhow::Result<()> {
     use MembershipStatus::{Active, Inactive, NotAMember, Stoned};
+    let client = reqwest::ClientBuilder::new()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
 
     let Some(arguments) = event.args else {
         bail!("missing argument: member");
@@ -149,7 +152,7 @@ pub async fn due_processor(event: ConsumerEvent, c: ModuleConfig) -> anyhow::Res
     };
 
     let member = target.localpart();
-    let response = match membership_status(c.capacifier_token, target.clone()).await? {
+    let response = match membership_status(&client, c.capacifier_token, target.clone()).await? {
         NotAMember => "not a member".s(),
         Stoned => "stoned".s(),
         Inactive => "not currently a member".s(),
@@ -175,8 +178,11 @@ pub async fn due_processor(event: ConsumerEvent, c: ModuleConfig) -> anyhow::Res
 /// Will return error if checking membership status, or sending response fails.
 pub async fn due_me_processor(event: ConsumerEvent, c: ModuleConfig) -> anyhow::Result<()> {
     use MembershipStatus::{Active, Inactive, NotAMember, Stoned};
+    let client = reqwest::ClientBuilder::new()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
 
-    let response = match membership_status(c.capacifier_token, event.sender).await? {
+    let response = match membership_status(&client, c.capacifier_token, event.sender).await? {
         NotAMember => "not a member".s(),
         Stoned => "stoned".s(),
         Inactive => "not currently a member".s(),
@@ -198,19 +204,23 @@ pub async fn due_me_processor(event: ConsumerEvent, c: ModuleConfig) -> anyhow::
 
 async fn list_late(event: ConsumerEvent, c: ModuleConfig) -> anyhow::Result<()> {
     use MembershipStatus::{Inactive, NotAMember};
+    let client = reqwest::ClientBuilder::new()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
 
     let mut debtors: HashMap<String, Vec<String>> = HashMap::default();
     let mut not_members: HashMap<String, Vec<String>> = HashMap::default();
 
     for room_name in c.members_only_rooms {
         trace!("checking room: {room_name}");
-        let room = tools::maybe_get_room(&event.room.client(), &room_name).await?;
+        let room = maybe_get_room(&event.room.client(), &room_name).await?;
 
         // `ACTIVE` here means users that are joined or invited
         for room_member in room.members(matrix_sdk::RoomMemberships::ACTIVE).await? {
             let mxid: String = room_member.user_id().to_string();
             trace!("checking member: {}", mxid);
-            match tools::membership_status(
+            match membership_status(
+                &client,
                 c.capacifier_token.clone(),
                 room_member.user_id().to_owned(),
             )
@@ -286,11 +296,16 @@ pub(crate) fn passthrough(
 /// # Errors
 /// Will return error if sending nagging notification fails
 pub async fn nag_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
+    let client = reqwest::ClientBuilder::new()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
+
     trace!("in nag_processor");
     use MembershipStatus::Active;
     let sender_str: &str = event.sender.as_str();
     trace!("getting member");
     let maybe_member: Option<Vec<String>> = capacifier_kvl_query(
+        &client,
         config.capacifier_token.clone(),
         "kvl",
         "uid",
@@ -320,7 +335,8 @@ pub async fn nag_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow
         return Ok(());
     };
 
-    let Ok(Active(months)) = membership_status(config.capacifier_token, event.sender.clone()).await
+    let Ok(Active(months)) =
+        membership_status(&client, config.capacifier_token, event.sender.clone()).await
     else {
         return Ok(());
     };
