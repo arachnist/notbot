@@ -4,7 +4,7 @@ use super::metrics::{serve_metrics, track_metrics};
 use super::templates;
 use super::types::{HswawAdditionalClaims, ModuleConfig, WebAppState, WebError};
 
-use crate::alerts::receive_alerts;
+use crate::alerts::grafana;
 
 use crate::prelude::Config;
 
@@ -95,7 +95,7 @@ pub async fn serve(mx: Client, bot_config: Config) -> anyhow::Result<()> {
         .layer(session_layer)
         .nest_service("/static", ServeDir::new("webui/static"))
         .route("/metrics", get(serve_metrics))
-        .route("/hook/alerts", post(receive_alerts))
+        .route("/hook/alerts", post(grafana::receive_alerts))
         .route_layer(middleware::from_fn(track_metrics))
         .with_state(app_state);
 
