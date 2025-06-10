@@ -35,7 +35,7 @@ pub async fn receive_alerts(
 ) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
     use AlertStatus::{Firing, Resolved};
     let module_config: ModuleConfig = {
-        match app_state.config.typed_module_config(module_path!()) {
+        match app_state.config.typed_module_config("notbot::alerts") {
             Err(_) => return Err((StatusCode::INTERNAL_SERVER_ERROR, "no auth configuration")),
             Ok(v) => v,
         }
