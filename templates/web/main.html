@@ -10,18 +10,26 @@
       <div id="welcome">
         <div class="inner">
           <h1>this is Notbot, the bot</h1>
+          {%- if let Some(claims) = claims -%}
           <p>Hello {{ claims.subject().as_str() }}, thanks for dropping by</p>
+          {%- else -%}
+          <p>Hello anon, try <a href="/login">logging in</a></p>
+          {%- endif -%}
         </div>
       </div>
       <div id="services">
         <div class="inner">
+          {%- if let Some(claims) = claims -%}
           Authenthicated services:
           <ul>
-            <li>Inviter to member rooms/spaces for your Matrix account: <a href="/mx/inviter/invite">Invite</a></li>
+            <li>
+              Inviter to member rooms/spaces for your Matrix account: <a href="/mx/inviter/invite">Invite</a>
+            </li>
           </ul>
+          {%- endif -%}
           Public services:
           <ul>
-            <li>Prometheus metrics: <a href="/metrics">Metrics</a></li>
+            <li>Bot prometheus metrics: <a href="/metrics">Metrics</a></li>
           </ul>
         </div>
       </div>

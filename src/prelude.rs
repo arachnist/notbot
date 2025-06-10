@@ -8,7 +8,7 @@ pub use crate::db::DBPools;
 pub use crate::module::{
     Acl, ConsumerEvent, Consumption, ModuleInfo, PassThroughModuleInfo, TriggerType, WorkerInfo,
 };
-pub use crate::webterface::{HswawAdditionalClaims, WebAppState};
+pub use crate::web::types::{AuthBearer, HswawAdditionalClaims, WebAppState};
 
 pub use crate::tools::*;
 
@@ -16,7 +16,7 @@ pub use std::collections::HashMap;
 pub use std::convert::{From, TryFrom};
 pub use std::str::FromStr;
 pub use std::sync::{Arc, LazyLock, Mutex};
-pub use std::time::{Duration, Instant, SystemTime};
+pub use std::time::SystemTime;
 pub use std::{fs, io, path::Path};
 
 pub use core::{error::Error as StdError, fmt};
@@ -35,6 +35,7 @@ pub use matrix_sdk::ruma::{OwnedEventId, OwnedRoomAliasId, OwnedRoomId, OwnedUse
 pub use matrix_sdk::{Client, Room};
 
 pub use tokio::sync::mpsc;
+pub use tokio::time::{Duration, Instant};
 
 pub use tracing::{debug, error, info, trace, warn};
 

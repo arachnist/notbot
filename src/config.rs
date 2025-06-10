@@ -309,18 +309,20 @@ impl Config {
     /// # Errors
     /// Will return `Err` if acquiring mutex on inner configuration structure fails,
     /// or deserialization of requested configuration chunk fails.
-    pub fn typed_module_config<C>(&self, n: &str) -> Result<C, ConfigError>
+    pub fn typed_module_config<C, S>(&self, n: S) -> Result<C, ConfigError>
     where
         C: de::DeserializeOwned + Clone + Send + Sync + 'static,
+        S: std::fmt::Display
     {
+        let n = n.to_string();
         let inner = &self.inner.lock().map_err(|_| ConfigError::InnerLockError)?;
-        if !inner.module.contains_key(n) {
-            return Err(ConfigError::NoModuleConfig(n.to_owned()));
+        if !inner.module.contains_key(&n) {
+            return Err(ConfigError::NoModuleConfig(n));
         };
 
-        inner.module[n].clone().try_into().map_err(|e| {
+        inner.module[&n].clone().try_into().map_err(|e| {
             error!("failed to deserialize {n}: {e}");
-            ConfigError::ModuleConfigDeserialize(n.to_owned())
+            ConfigError::ModuleConfigDeserialize(n)
         })
     }
 }

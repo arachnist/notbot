@@ -49,8 +49,6 @@
 
 use crate::prelude::*;
 
-use crate::webterface::AuthBearer;
-
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use matrix_sdk::ruma::events::MessageLikeEventContent;

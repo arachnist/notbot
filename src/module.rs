@@ -1338,7 +1338,7 @@ pub fn init_modules(
     }
 
     for starter in [
-        crate::webterface::workers,
+        crate::web::workers,
         crate::spaceapi::workers,
         crate::forgejo::workers,
         crate::gerrit::workers,
