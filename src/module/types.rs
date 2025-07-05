@@ -5,14 +5,16 @@ use super::workers::WorkerInfo;
 
 use crate::config::Config;
 
-use matrix_sdk::ruma::events::room::message::{OriginalSyncRoomMessageEvent, RoomMessageEventContent};
-use matrix_sdk::ruma::OwnedUserId;
 use matrix_sdk::Room;
+use matrix_sdk::ruma::OwnedUserId;
+use matrix_sdk::ruma::events::room::message::{
+    OriginalSyncRoomMessageEvent, RoomMessageEventContent,
+};
 
 use tokio::sync::mpsc;
 
-use mlua::Lua;
 use askama::Template;
+use mlua::Lua;
 
 /// An event object passed to modules.
 ///
@@ -247,7 +249,6 @@ impl RenderList {
         rmod
     }
 }
-
 
 #[derive(Template)]
 #[template(

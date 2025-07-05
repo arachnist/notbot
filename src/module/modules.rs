@@ -1,18 +1,18 @@
 //! Bot module structure definitions.
 
-use super::types::{Acl, TriggerType, ConsumerEvent, CatchallDecider, Consumption};
+use super::types::{Acl, CatchallDecider, ConsumerEvent, Consumption, TriggerType};
 
-use crate::tools::{room_name, ToStringExt};
+use crate::tools::{ToStringExt, room_name};
 
 use std::sync::LazyLock;
 
-use tracing::{error, warn};
 use anyhow::bail;
+use mlua::{ExternalResult, Lua};
 use tokio::sync::mpsc;
-use mlua::{Lua, ExternalResult};
+use tracing::{error, warn};
 
-use matrix_sdk::ruma::events::room::message::{RoomMessageEventContent, MessageType};
 use matrix_sdk::Room;
+use matrix_sdk::ruma::events::room::message::{MessageType, RoomMessageEventContent};
 
 use prometheus::{IntGaugeVec, opts, register_int_gauge_vec};
 

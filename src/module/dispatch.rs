@@ -1,12 +1,12 @@
 //! Main dispatcher of events to modules.
 
-use super::types::{Consumption, TriggerType, Acl, ConsumerEvent};
 use super::modules::{ModuleInfo, PassThroughModuleInfo};
+use super::types::{Acl, ConsumerEvent, Consumption, TriggerType};
 use super::workers::WorkerInfo;
 
 use crate::config::Config;
-use crate::tools::{membership_status, room_name};
 use crate::klaczdb::KlaczDB;
+use crate::tools::{membership_status, room_name};
 
 use std::ops::{Add, Deref};
 use std::sync::LazyLock;
@@ -14,18 +14,16 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tracing::{debug, error, trace};
 
+use matrix_sdk::Room;
 use matrix_sdk::event_handler::Ctx;
 use matrix_sdk::ruma::OwnedUserId;
 use matrix_sdk::ruma::events::room::message::{
     MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
 };
-use matrix_sdk::Room;
 
 use mlua::Lua;
 
-use prometheus::{
-    IntCounterVec, opts, register_int_counter_vec,
-};
+use prometheus::{IntCounterVec, opts, register_int_counter_vec};
 
 /// Number of events consumed, grouped by module
 pub static MODULE_EVENTS: LazyLock<IntCounterVec> = LazyLock::new(|| {

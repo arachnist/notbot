@@ -1,13 +1,13 @@
 //! Chat interface for interacting with the alerts module.
 
-use super::types::{GrafanaConfig, ModuleConfig};
 use super::grafana;
+use super::types::{GrafanaConfig, ModuleConfig};
 
 use std::time::UNIX_EPOCH;
 
 use crate::prelude::ConsumerEvent;
 
-use crate::prelude::{trace, anyhow, bail, SystemTime, RoomMessageEventContent};
+use crate::prelude::{RoomMessageEventContent, SystemTime, anyhow, bail, trace};
 
 /// Removes entries from the list of known alerts.
 ///
@@ -82,7 +82,10 @@ pub async fn alerting_processor(event: ConsumerEvent, config: ModuleConfig) -> a
                 if va.is_empty() {
                     continue;
                 };
-                event.room.send(grafana::to_matrix_message(va, name)).await?;
+                event
+                    .room
+                    .send(grafana::to_matrix_message(va, name))
+                    .await?;
                 sent = true;
             }
         };

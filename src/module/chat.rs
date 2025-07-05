@@ -1,15 +1,15 @@
 //! Chat interface to control the bot.
 
-use super::types::{ConsumerEvent, TriggerType, Acl, WeakModuleInfo, RenderHelp, RenderList};
 use super::modules::{ModuleInfo, PassThroughModuleInfo};
+use super::types::{Acl, ConsumerEvent, RenderHelp, RenderList, TriggerType, WeakModuleInfo};
 use super::workers::WorkerInfo;
 
 use crate::config::Config;
 use crate::tools::ToStringExt;
 
-use tracing::{error, info, warn};
 use anyhow::bail;
 use tokio::sync::mpsc;
+use tracing::{error, info, warn};
 
 use matrix_sdk::Room;
 use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;

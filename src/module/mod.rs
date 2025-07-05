@@ -196,11 +196,11 @@
 //! This list is, for now, hardcoded, but the plan is to make a dynamic list that can
 //! be modified at runtime.
 
-pub mod dispatch;
 pub mod chat;
+pub mod dispatch;
+pub mod modules;
 pub mod types;
 pub mod workers;
-pub mod modules;
 
 use crate::config::Config;
 use crate::klaczdb::KlaczDB;
@@ -283,6 +283,7 @@ pub fn init_modules(
         crate::spaceapi::workers,
         crate::forgejo::workers,
         crate::gerrit::workers,
+        crate::prom_query::workers,
     ] {
         match starter(mx, config) {
             Err(e) => {

@@ -312,7 +312,7 @@ impl Config {
     pub fn typed_module_config<C, S>(&self, n: S) -> Result<C, ConfigError>
     where
         C: de::DeserializeOwned + Clone + Send + Sync + 'static,
-        S: std::fmt::Display
+        S: std::fmt::Display,
     {
         let n = n.to_string();
         let inner = &self.inner.lock().map_err(|_| ConfigError::InnerLockError)?;

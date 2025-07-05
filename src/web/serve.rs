@@ -120,7 +120,9 @@ pub async fn serve(mx: Client, bot_config: Config) -> anyhow::Result<()> {
     }
 
     trace!("starting web listener");
-    axum::serve(listener, app.into_make_service()).await.map_err(|e| e.into())
+    axum::serve(listener, app.into_make_service())
+        .await
+        .map_err(|e| e.into())
 }
 
 /// Temporary main response for the web interface. Responds with different strings, depending on whether or not the user is authenthicated.

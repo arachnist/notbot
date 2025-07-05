@@ -10,11 +10,18 @@ use plotters::prelude::*;
 use serde::Deserialize;
 use tempfile::Builder;
 
+use tokio::time::{Duration, interval};
+
 /// Configuration for known VictoriaMetrics/Prometheus instances
 #[derive(Clone, Debug, Deserialize)]
 pub struct PromQueryConfig {
     /// Named queries
     pub queries: HashMap<String, Query>,
+    /// Observed queries
+    pub observed: HashMap<String, ObservedQuery>,
+    /// How often observed queries should be checked, in seconds
+    #[serde(default = "observer_interval")]
+    pub observer_interval: u64,
     /// Named instances and their names
     pub instances: HashMap<String, String>,
     #[serde(default = "keywords")]
@@ -24,6 +31,10 @@ pub struct PromQueryConfig {
     /// Default directory for temporary graph images. Default is `./`
     #[serde(default = "graph_tmp_dir")]
     pub graph_tmp_dir: String,
+}
+
+fn observer_interval() -> u64 {
+    10
 }
 
 fn keywords() -> Vec<String> {
@@ -41,6 +52,13 @@ pub struct Query {
     pub instance: String,
     /// The actual Query
     pub query: String,
+}
+
+/// Named observed queries
+#[derive(Clone, Debug, Deserialize)]
+pub struct ObservedQuery {
+    /// Room name where state changes will be posted to
+    pub room: String,
 }
 
 pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleInfo>> {
@@ -206,8 +224,156 @@ async fn graph(event: ConsumerEvent, config: PromQueryConfig) -> anyhow::Result<
     Ok(())
 }
 
-/// Types of results.
+pub(crate) fn workers(mx: &Client, config: &Config) -> anyhow::Result<Vec<WorkerInfo>> {
+    let module_config: PromQueryConfig = config.typed_module_config(module_path!())?;
+    Ok(vec![WorkerInfo::new(
+        "observer",
+        "observes SpaceAPI endpoints for changes",
+        "spaceapi",
+        mx.clone(),
+        module_config,
+        query_observer,
+    )])
+}
+
+pub async fn query_observer(mx: Client, config: PromQueryConfig) -> anyhow::Result<()> {
+    let mut interval = interval(Duration::from_secs(config.observer_interval));
+    let mut first_loop: HashMap<String, bool> = HashMap::default();
+    let mut state: HashMap<String, (DateTime<Utc>, f64)> = HashMap::default();
+
+    trace!("entering observer loop");
+
+    for (query, _) in config.clone().observed {
+        first_loop.insert(query, true);
+    }
+
+    loop {
+        interval.tick().await;
+
+        for (query_name, query_config) in &config.observed {
+            let Some(query) = config.queries.get(&query_name.clone()) else {
+                error!("couldn't find query definition in configuration");
+                continue;
+            };
+
+            trace!("query: {query_name}");
+
+            let instance = config
+                .instances
+                .get(&query.instance)
+                .map_or(&query.instance, |i| i);
+
+            let client = reqwest::ClientBuilder::new()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .context("building http client:")?;
+
+            let params = [("query", query.query.clone())];
+
+            let data = match client.post(instance).form(&params).send().await {
+                Err(e) => {
+                    error!("error fetching response for query: {e}");
+                    continue;
+                }
+                Ok(r) => match r.json().await {
+                    Err(e) => {
+                        error!("error decoding response: {e}");
+                        continue;
+                    }
+                    Ok(resp) => match resp {
+                        QueryResponse::Success { data, .. } => data,
+                        QueryResponse::Error { error_type, error } => {
+                            error!("query failed: {error_type}: {error}");
+                            continue;
+                        }
+                    },
+                },
+            };
+
+            trace!("data: {data:#?}");
+
+            let normalized = data.normalize();
+
+            let Some((_, newvals)) = normalized.first() else {
+                error!("empty query response");
+                continue;
+            };
+
+            let Some((new_ts, new_value)) = newvals.last() else {
+                error!("empty query response");
+                continue;
+            };
+
+            if first_loop[query_name] {
+                trace!("first run; saving values and skipping");
+                first_loop.insert(query_name.to_owned(), false);
+                state.insert(query_name.to_owned(), (new_ts.clone(), new_value.clone()));
+            }
+
+            let Some((last_ts, last_value)) = state.get(query_name) else {
+                error!("wtf? there should be a value here after first loop");
+                continue;
+            };
+
+            if last_value == new_value {
+                trace!("value unchanged; skipping run");
+                continue;
+            };
+
+            let observed_data = ObservedQueryData {
+                query_name: query_name.to_string(),
+                last_ts: *last_ts,
+                last_value: *last_value,
+                new_ts: *new_ts,
+                new_value: *new_value,
+            };
+
+            state.insert(query_name.to_owned(), (new_ts.clone(), new_value.clone()));
+
+            trace!("observed data: {observed_data:#?}");
+
+            let plain = match observed_data.render() {
+                Err(e) => {
+                    error!("error rendering template: {e}");
+                    continue;
+                }
+                Ok(r) => r,
+            };
+
+            let message = RoomMessageEventContent::text_plain(plain);
+
+            let room = match maybe_get_room(&mx, &query_config.room).await {
+                Ok(r) => r,
+                Err(e) => {
+                    error!("room not found: {e}");
+                    continue;
+                }
+            };
+
+            if let Err(e) = room.send(message).await {
+                error!("couldn't send state update: {e}");
+            }
+        }
+    }
+}
+
+/// Template for rendering observed state changes
+#[derive(Template)]
+#[template(
+    path = "matrix/prom_observer.html",
+    // blocks = ["formatted", "plain"],
+)]
 #[derive(Deserialize, Debug)]
+pub struct ObservedQueryData {
+    pub query_name: String,
+    pub last_ts: DateTime<Utc>,
+    pub last_value: f64,
+    pub new_ts: DateTime<Utc>,
+    pub new_value: f64,
+}
+
+/// Types of results.
+#[derive(Clone, Deserialize, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum QueryResultType {
     /// Results are a vector.
@@ -217,7 +383,7 @@ pub enum QueryResultType {
 }
 
 /// Types of returned series data format, depends on result type.
-#[derive(Deserialize, Debug)]
+#[derive(Clone, Deserialize, Debug)]
 #[serde(untagged)]
 pub enum SeriesVariant {
     /// single timestamp-value pair per returned metric
@@ -285,7 +451,7 @@ impl SeriesVariant {
     path = "matrix/prom_query.html",
     blocks = ["formatted", "plain"],
 )]
-#[derive(Deserialize, Debug)]
+#[derive(Clone, Deserialize, Debug)]
 pub struct QueryData {
     /// Type of results.
     #[serde(rename = "resultType")]

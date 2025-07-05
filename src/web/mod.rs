@@ -49,8 +49,8 @@ pub mod types;
 use serve::serve;
 use types::ModuleConfig;
 
-use crate::prelude::{Config, WorkerInfo};
 use crate::prelude::trace;
+use crate::prelude::{Config, WorkerInfo};
 
 use matrix_sdk::Client;
 

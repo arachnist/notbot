@@ -3,8 +3,8 @@
 use super::types::ModuleConfig;
 
 use crate::prelude::{
-    Arc, AuthBearer, Deserialize, HashMap, LazyLock, Mutex, RoomMessageEventContent, Serialize, ToStringExt,
-    WebAppState, bail, maybe_get_room, trace,
+    Arc, AuthBearer, Deserialize, HashMap, LazyLock, Mutex, RoomMessageEventContent, Serialize,
+    ToStringExt, WebAppState, bail, maybe_get_room, trace,
 };
 
 use std::fmt;

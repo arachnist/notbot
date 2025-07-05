@@ -1,0 +1,20 @@
+{%- match query_name.as_str() -%}
+    {%- when "kibel" -%}
+        {%- match (last_value, new_value) -%}
+            {%- when (1.0, 0.0) -%}Kupa! 💩{%- endwhen -%}
+            {%- when (0.0, 1.0) -%}
+                {%- set elapsed = new_ts.timestamp() - last_ts.timestamp() -%}
+                This one lasted {{ elapsed }} seconds!
+            {%- endwhen -%}
+            {%- when (_,_) -%}{%- endwhen -%}
+        {%- endmatch -%}
+    {%- endwhen -%}
+    {%- when "zmywarka" -%}
+        {%- match (last_value, new_value) -%}
+            {%- when (0.0, 1.0) -%}The dish 📡 washer 🧼 has been turned on {%- endwhen -%}
+            {%- when (1.0, 0.0) -%}Hi, unload the dishwasher, please. 🥺👉👈{%- endwhen -%}
+            {%- when (_,_) -%}{%- endwhen -%}
+        {%- endmatch -%}
+    {%- endwhen -%}
+    {%- when _ -%}{{ query_name }} changed state from {{ last_value }} to {{ new_value }}{%- endwhen -%}
+{%- endmatch -%}

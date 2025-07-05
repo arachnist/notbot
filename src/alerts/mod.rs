@@ -47,14 +47,14 @@
 //! Urls the module will handle:
 //! * `/hook/alerts` - handle incoming webhooks from grafana. [`receive_alerts`]
 
-pub mod types;
-pub mod grafana;
 pub mod chat;
+pub mod grafana;
+pub mod types;
 
 use chat::{alerting_processor, purge_processor};
 use types::ModuleConfig;
 
-use crate::prelude::{Config, ModuleInfo, Acl, TriggerType};
+use crate::prelude::{Acl, Config, ModuleInfo, TriggerType};
 
 use crate::prelude::info;
 

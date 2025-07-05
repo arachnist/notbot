@@ -1,14 +1,14 @@
 //! Bot worker structure definitions.
 
 use super::modules::ModuleInfo;
-use super::types::{TriggerType, ConsumerEvent};
+use super::types::{ConsumerEvent, TriggerType};
 
 use crate::tools::ToStringExt;
 
 use anyhow::bail;
-use tracing::{warn, error};
 use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
+use tracing::{error, warn};
 
 use matrix_sdk::Client;
 use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;

@@ -6,7 +6,9 @@ pub use crate::config::Config;
 pub use crate::db::DBPools;
 
 pub use crate::module::{
-    types::{Acl, ConsumerEvent, Consumption, TriggerType}, modules::{ModuleInfo, PassThroughModuleInfo}, workers::WorkerInfo,
+    modules::{ModuleInfo, PassThroughModuleInfo},
+    types::{Acl, ConsumerEvent, Consumption, TriggerType},
+    workers::WorkerInfo,
 };
 pub use crate::web::types::{AuthBearer, HswawAdditionalClaims, WebAppState};
 
