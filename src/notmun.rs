@@ -21,6 +21,8 @@
 
 use crate::prelude::*;
 
+use std::collections::VecDeque;
+
 use futures::pin_mut;
 use tokio_postgres::{Row, types::Type};
 use tokio_stream::StreamExt;
@@ -432,6 +434,7 @@ async fn lua_db_query(
     trace!("constructing response");
 
     let lua_result = lua.create_table()?;
+    let mut result_deque: VecDeque<Table> = VecDeque::new();
 
     while let Some(result) = results_stream.next().await {
         let row: Row = match result {
@@ -441,7 +444,11 @@ async fn lua_db_query(
 
         let lua_row: Table = lua_db_row_to_table(lua, &row)?;
 
-        lua_result.push(lua_row)?;
+        result_deque.push_back(lua_row);
+    }
+
+    while let Some(row) = result_deque.pop_back() {
+        lua_result.push(row)?;
     }
 
     trace!("#results: {}", lua_result.len()?);
