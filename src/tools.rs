@@ -37,10 +37,17 @@ pub enum MembershipStatus {
 /// Will return `Err` if:
 /// * fetching remote data fails.
 /// * data doesn't deserialize to provided type.
-pub async fn fetch_and_decode_json<D: de::DeserializeOwned>(url: String) -> anyhow::Result<D> {
+pub async fn fetch_and_decode_json<D: de::DeserializeOwned>(url: String, auth: Option<String>) -> anyhow::Result<D> {
     let client = RClient::new();
+    let mut headers = header::HeaderMap::new();
 
-    let data = client.get(url).send().await?;
+    if let Some(token) = auth {
+        let mut auth_value = header::HeaderValue::from_str(format!("Bearer: {token}").as_str())?;
+        auth_value.set_sensitive(true);
+        headers.insert(header::AUTHORIZATION, auth_value);
+    }
+
+    let data = client.get(url).headers(headers).send().await?;
 
     Ok(data.json::<D>().await?)
 }

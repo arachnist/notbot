@@ -75,7 +75,7 @@ pub async fn processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Re
         + config.app_id.as_str()
         + "&output=json";
 
-    let Ok(data) = fetch_and_decode_json::<wolfram_alpha::WolframAlpha>(url).await else {
+    let Ok(data) = fetch_and_decode_json::<wolfram_alpha::WolframAlpha>(url, None).await else {
         bail!("couldn't fetch data from wolfram")
     };
 

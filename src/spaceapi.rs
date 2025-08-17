@@ -74,6 +74,8 @@ pub struct ModuleConfig {
     /// Directory where heatmap temp data will be written to. Default is `./`
     #[serde(default = "heatmap_tmp_dir")]
     pub heatmap_tmp_dir: String,
+    /// Endpoint/token map for SpaceAPI endpoints that require authenthication
+    pub auth_map: HashMap<String, String>,
 }
 
 const fn presence_interval() -> u64 {
@@ -146,7 +148,9 @@ pub async fn at_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow:
         }
     };
 
-    let data = fetch_and_decode_json::<space_api::SpaceAPI>(url.to_owned()).await?;
+    let token = config.auth_map.get(url);
+
+    let data = fetch_and_decode_json::<space_api::SpaceAPI>(url.to_owned(), token.cloned()).await?;
     let present: Vec<String> = names_dehighlighted(data.sensors.people_now_present);
 
     let response = if present.is_empty() {
@@ -325,7 +329,9 @@ pub async fn presence_observer(client: Client, module_config: ModuleConfig) -> a
             };
 
             trace!("fetching spaceapi url: {}", url);
-            let data = match fetch_and_decode_json::<space_api::SpaceAPI>(url.to_owned()).await {
+            let token = module_config.auth_map.get(url);
+
+            let data = match fetch_and_decode_json::<space_api::SpaceAPI>(url.to_owned(), token.cloned()).await {
                 Ok(d) => d,
                 Err(fe) => {
                     error!("error fetching data: {fe}");
