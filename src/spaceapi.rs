@@ -137,11 +137,14 @@ pub(crate) fn starter(_: &Client, config: &Config) -> anyhow::Result<Vec<ModuleI
 /// * sending room response fails.
 pub async fn at_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow::Result<()> {
     let name = room_name(&event.room);
+    let mut using_default = false;
 
+    debug!("room map: {:#?}", config.room_map);
     let url = if let Some(url) = config.room_map.get(&name) {
         url
     } else {
         debug!("no spaceapi url found, using default");
+        using_default = true;
         match config.room_map.get("default") {
             None => bail!("no spaceapi url found"),
             Some(u) => u,
@@ -153,8 +156,11 @@ pub async fn at_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow:
     let data = fetch_and_decode_json::<space_api::SpaceAPI>(url.to_owned(), token.cloned()).await?;
     let present: Vec<String> = names_dehighlighted(data.sensors.people_now_present);
 
+    debug!("room name: {name}, using default: {using_default}");
     let response = if present.is_empty() {
         config.empty_response.clone()
+    } else if using_default {
+        format!("number of known present users: {}", present.len())
     } else {
         present.join(", ")
     };
