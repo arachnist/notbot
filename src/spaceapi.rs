@@ -154,15 +154,70 @@ pub async fn at_processor(event: ConsumerEvent, config: ModuleConfig) -> anyhow:
     let token = config.auth_map.get(url);
 
     let data = fetch_and_decode_json::<space_api::SpaceAPI>(url.to_owned(), token.cloned()).await?;
-    let present: Vec<String> = names_dehighlighted(data.sensors.people_now_present);
 
     debug!("room name: {name}, using default: {using_default}");
-    let response = if present.is_empty() {
+    let response = if data
+        .sensors
+        .people_now_present
+        .iter()
+        .fold(0, |acc, sensor| acc + sensor.value)
+        == 0
+    {
         config.empty_response.clone()
     } else if using_default {
-        format!("number of known present users: {}", present.len())
+        let mut response = String::new();
+        let mut public_present: bool = false;
+        if let Some(public) = data
+            .sensors
+            .people_now_present
+            .iter()
+            .find(|x| x.name == "public")
+        {
+            if public.value > 0 {
+                public_present = true;
+                response = names_dehighlighted(vec![public.clone()]).join(", ");
+            }
+        };
+        if data
+            .sensors
+            .people_now_present
+            .iter()
+            .fold(0, |acc, sensor| {
+                if sensor.name == "public" {
+                    acc
+                } else {
+                    acc + sensor.value
+                }
+            })
+            == 0
+        {
+            response
+        } else {
+            let mut count: u32 = 0;
+            let mut sensors = data
+                .sensors
+                .people_now_present
+                .iter()
+                .filter(|x| x.name != "public");
+            while let Some(sensor) = sensors.next() {
+                count += sensor.value;
+            }
+            if count > 0 {
+                let users = match count {
+                    1 => "user",
+                    _ => "users",
+                };
+                if public_present {
+                    response += format!(", and also {count} other known {users}").as_str();
+                } else {
+                    response += format!("{count} known {users}").as_str();
+                }
+            }
+
+            response
+        }
     } else {
-        present.join(", ")
+        names_dehighlighted(data.sensors.people_now_present).join(", ")
     };
 
     event
@@ -337,16 +392,19 @@ pub async fn presence_observer(client: Client, module_config: ModuleConfig) -> a
             trace!("fetching spaceapi url: {}", url);
             let token = module_config.auth_map.get(url);
 
-            let data = match fetch_and_decode_json::<space_api::SpaceAPI>(url.to_owned(), token.cloned()).await {
-                Ok(d) => d,
-                Err(fe) => {
-                    error!("error fetching data: {fe}");
-                    if let Err(e) = presence.insert(url.clone(), -1).await {
-                        error!("error storing spaceapi persistence data: {e}");
-                    };
-                    continue;
-                }
-            };
+            let data =
+                match fetch_and_decode_json::<space_api::SpaceAPI>(url.to_owned(), token.cloned())
+                    .await
+                {
+                    Ok(d) => d,
+                    Err(fe) => {
+                        error!("error fetching data: {fe}");
+                        if let Err(e) = presence.insert(url.clone(), -1).await {
+                            error!("error storing spaceapi persistence data: {e}");
+                        };
+                        continue;
+                    }
+                };
 
             let current: Vec<String> = names_dehighlighted(data.sensors.people_now_present);
 
@@ -555,6 +613,7 @@ pub mod space_api {
     #[allow(dead_code, missing_docs)]
     #[derive(Clone, Deserialize, Debug)]
     pub struct PeopleNowPresent {
+        pub name: String,
         pub value: u32,
         pub names: Vec<String>,
     }
