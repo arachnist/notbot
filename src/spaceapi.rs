@@ -506,11 +506,13 @@ pub fn names_dehighlighted(present: Vec<space_api::PeopleNowPresent>) -> Vec<Str
     let mut dehighlighted: Vec<String> = vec![];
 
     for sensor in present {
-        for name in sensor.names {
-            let mut chars = name.chars();
-            dehighlighted.push(chars.next().map_or_else(String::new, |first| {
-                first.to_string() + "\u{200B}" + chars.as_str()
-            }));
+        if let Some(names) = sensor.names {
+            for name in names {
+                let mut chars = name.chars();
+                dehighlighted.push(chars.next().map_or_else(String::new, |first| {
+                    first.to_string() + "\u{200B}" + chars.as_str()
+                }));
+            }
         }
     }
 
@@ -615,7 +617,7 @@ pub mod space_api {
     pub struct PeopleNowPresent {
         pub name: String,
         pub value: u32,
-        pub names: Vec<String>,
+        pub names: Option<Vec<String>>,
     }
 }
 
