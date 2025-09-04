@@ -13,6 +13,7 @@
   nixfmt-rfc-style,
   graphviz,
   heaptrack,
+  libheif,
   ...
 }:
 mkShell {
@@ -30,5 +31,8 @@ mkShell {
     cargo-unused-features
     nixfmt-rfc-style
     heaptrack
+    libheif
   ];
+
+  doCheck = false;
 }

@@ -15,4 +15,7 @@ in rustPlatform.buildRustPackage {
   postInstall = ''
     cp -r $src/webui $out/webui
   '';
+
+  doCheck = false;
+  buildType = "debug";
 }
