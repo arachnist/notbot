@@ -19,5 +19,12 @@
             {%- when (_,_) -%}{%- endwhen -%}
         {%- endmatch -%}
     {%- endwhen -%}
+    {%- when "ac" -%}
+        {%- match (last_value, new_value) -%}
+            {%- when (0.0, 1.0) -%}external door lock web interface should be up 😸{%- endwhen -%}
+            {%- when (1.0, 0.0) -%}external door lock web interface is probably down 😿 if noone's present, and you want to enter, ask someone holding a physical key for help: https://wiki.hackerspace.pl/members:freemasonry:klucze{%- endwhen -%}
+            {%- when (_,_) -%}{%- endwhen -%}
+        {%- endmatch -%}
+    {%- endwhen -%}
     {%- when _ -%}{{ query_name }} changed state from {{ last_value }} to {{ new_value }}{%- endwhen -%}
 {%- endmatch -%}
