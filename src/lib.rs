@@ -26,6 +26,7 @@ pub mod kasownik;
 pub mod klaczdb;
 pub mod module;
 pub mod notmun;
+pub mod points;
 pub mod prom_query;
 mod sage;
 pub mod spaceapi;

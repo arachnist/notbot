@@ -257,6 +257,7 @@ pub fn init_modules(
         crate::autojoiner::starter,
         crate::forgejo::starter,
         crate::prom_query::starter,
+        crate::points::starter,
     ] {
         match starter(mx, config) {
             Err(e) => {
@@ -268,7 +269,10 @@ pub fn init_modules(
     }
 
     #[allow(clippy::single_element_loop, reason = "future functionality")]
-    for starter in [crate::kasownik::passthrough] {
+    for starter in [
+            crate::kasownik::passthrough,
+            crate::points::passthrough,
+    ] {
         match starter(mx, config) {
             Err(e) => {
                 error!("module initialization failed fatally: {e}");
