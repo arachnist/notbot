@@ -269,10 +269,7 @@ pub fn init_modules(
     }
 
     #[allow(clippy::single_element_loop, reason = "future functionality")]
-    for starter in [
-            crate::kasownik::passthrough,
-            crate::points::passthrough,
-    ] {
+    for starter in [crate::kasownik::passthrough, crate::points::passthrough] {
         match starter(mx, config) {
             Err(e) => {
                 error!("module initialization failed fatally: {e}");
